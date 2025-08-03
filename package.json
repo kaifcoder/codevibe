@@ -10,6 +10,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@e2b/code-interpreter": "^1.5.1",
     "@hookform/resolvers": "^5.1.1",
     "@langchain/langgraph": "^0.4.2",
     "@prisma/client": "^6.11.0",
