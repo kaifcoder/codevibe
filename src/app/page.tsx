@@ -1,19 +1,45 @@
+"use client";
 
-import {  getQueryClient, trpc } from '@/trpc/server'
-import { dehydrate, HydrationBoundary } from '@tanstack/react-query';
-import React, { Suspense } from 'react'
-import Client from './Client';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useTRPC } from "@/trpc/client";
+import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
+import { toast } from "sonner";
 
-async function Page() {
-  const queryClient = getQueryClient();
-  void queryClient.prefetchQuery(trpc.hello.queryOptions({text: "codevibe"}));
+function Page() {
+  const trpc = useTRPC();
+  const invoke = useMutation(trpc.invoke.mutationOptions({
+    onSuccess: () =>{
+      toast.success("Function invoked successfully!");
+    },
+    onError: (error) => {
+      toast.error(`Error invoking function: ${error.message}`);
+    },
+  }));
+
+  // state for the input message
+  const [message, setMessage] = useState("");
+
+  
+  
   return (
-    <HydrationBoundary state={dehydrate(queryClient)}>
-      <Suspense fallback={<div>Loading...</div>}>
-      <Client />
-      </Suspense>
-    </HydrationBoundary>
     
+    <div className="p-4 flex flex-col mx-auto max-w-2xl">
+      <p> AI Chat using Inngest backgroud jobs</p>
+      {/* ADD INPUT */}
+      <Input 
+        placeholder="enter your message"
+        className="mb-4"
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+      />
+      <Button disabled={invoke.isPending} onClick={() => invoke.mutate({
+        message: message
+      })}>
+        send message
+      </Button>
+    </div>
   )
 }
 
