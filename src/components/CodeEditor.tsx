@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
 import { useRef } from "react";
@@ -14,8 +15,6 @@ interface CodeEditorProps {
 }
 
 export function CodeEditor({ value, onChange, language = "typescript", height = 300, label }: CodeEditorProps) {
-  const editorRef = useRef(null);
-
   return (
     <Card className="w-full h-full flex-1 flex flex-col p-0 overflow-hidden">
       {label && <Label className="px-4 pt-4 pb-2 block">{label}</Label>}

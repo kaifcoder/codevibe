@@ -1,219 +1,139 @@
-"use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+"use client"
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import type React from "react"
+
+import { useState } from "react"
+import { useRouter } from "next/navigation"
+import { motion } from "framer-motion"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
-import { useTRPC } from "@/trpc/client";
-import { useMutation } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
-import { motion, AnimatePresence } from "framer-motion";
-import { CodeEditor } from "@/components/CodeEditor";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileTree } from "@/components/FileTree";
+  ArrowRight,
+  FileText,
+  Calculator,
+  ScanLine,
+} from "lucide-react"
 
-function Page() {
-  const trpc = useTRPC();
-  const invoke = useMutation(
-    trpc.invoke.mutationOptions({
-      onSuccess: ({ success }) => {
-        toast.success("Function invoked successfully!");
-        console.log(success);
-      },
-      onError: (error) => {
-        toast.error(`Error invoking function: ${error.message}`);
-      },
-    })
-  );
 
-  // state for the input message
-  const [message, setMessage] = useState("");
-  // state for toggling the second panel
-  const [showSecondPanel, setShowSecondPanel] = useState(true);
-  // state for the code editor
-  const [code, setCode] = useState("// Write your code here\n");
-  // state for iframe loading
-  const [iframeLoading, setIframeLoading] = useState(true);
 
-  // sample hierarchical file tree state
-  const [fileTree, setFileTree] = useState([
-    {
-      name: "app",
-      path: "app",
-      type: "folder",
-      children: [
-        {
-          name: "page.tsx",
-          path: "app/page.tsx",
-          type: "file",
-          content: "// Home page code\n",
-        },
-      ],
-    },
-    {
-      name: "lib",
-      path: "lib",
-      type: "folder",
-      children: [
-        {
-          name: "utils.ts",
-          path: "lib/utils.ts",
-          type: "file",
-          content: "export function sum(a, b) { return a + b; }\n",
-        },
-      ],
-    },
-    {
-      name: "components",
-      path: "components",
-      type: "folder",
-      children: [
-        {
-          name: "Button.tsx",
-          path: "components/Button.tsx",
-          type: "file",
-          content: "export const Button = () => <button>Click</button>;\n",
-        },
-      ],
-    },
-  ]);
+export default function HomePage() {
+  const [prompt, setPrompt] = useState("")
+  
+  const router = useRouter()
 
-  // flatten file tree to get all files for selection and editing
-  function flattenFiles(nodes) {
-    let files = [];
-    for (const node of nodes) {
-      if (node.type === "file") files.push(node);
-      if (node.type === "folder" && node.children) files = files.concat(flattenFiles(node.children));
-    }
-    return files;
+  const generateChatId = () => {
+    return `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   }
-  const allFiles = flattenFiles(fileTree);
-  const [selectedFile, setSelectedFile] = useState(allFiles[0].path);
 
-  // update code when file changes
-  useEffect(() => {
-    const file = allFiles.find(f => f.path === selectedFile);
-    if (file) setCode(file.content);
-  }, [selectedFile, allFiles]);
+  const handleStartChat = () => {
+    if (!prompt.trim()) return
 
-  // update file content when code changes
-  const handleCodeChange = (val: string | undefined) => {
-    setCode(val ?? "");
-    setFileTree(prev => {
-      function update(nodes) {
-        return nodes.map(n => {
-          if (n.type === "file" && n.path === selectedFile) return { ...n, content: val ?? "" };
-          if (n.type === "folder" && n.children) return { ...n, children: update(n.children) };
-          return n;
-        });
-      }
-      return update(prev);
-    });
-  };
+    const chatId = generateChatId()
+
+    // Store the initial prompt and app type in sessionStorage
+    sessionStorage.setItem(`chat_${chatId}_initial`, prompt)
+
+    // Navigate to the chat page
+    router.push(`/chat/${chatId}`)
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && e.metaKey) {
+      e.preventDefault()
+      handleStartChat()
+    }
+  }
+
+
+  const suggestions = [
+    { icon: <FileText className="w-4 h-4" />, text: "Personal blog" },
+    { icon: <Calculator className="w-4 h-4" />, text: "Statistical significance calculator" },
+    { icon: <ScanLine className="w-4 h-4" />, text: "Book scanner" },
+  ]
 
   return (
-    <div className="flex flex-1 flex-col">
-      <div className="@container/main flex flex-1 flex-col gap-2">
-        <ResizablePanelGroup direction="horizontal">
-          <ResizablePanel defaultSize={30}>
-            <div className="flex h-full w-full flex-col gap-2 p-4">
-              <h1 className="text-lg font-semibold">AI Chat</h1>
-              <p>Chat with AI using Inngest background jobs</p>
-              <Button
-                className="mb-2"
-                variant="secondary"
-                onClick={() => setShowSecondPanel((v) => !v)}
-              >
-                {showSecondPanel ? "Hide" : "Show"} Web View Panel
-              </Button>
-              <Input
-                placeholder="enter your message"
-                className="mb-4"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-              />
-              <Button
-                disabled={invoke.isPending}
-                onClick={() =>
-                  invoke.mutate({
-                    message: message,
-                  })
-                }
-              >
-                send message
-              </Button>
-            </div>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          {showSecondPanel && (
-            <ResizablePanel
-              defaultSize={70}
-              className="animate-in fade-in-0 data-[state=active]:fade-in-100"
+    <div className="flex h-full rounded-b-lg dark:bg-[#0f0f0f] dark:text-white">
+
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Main Content */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          transition={{ duration: 0.6, ease: "easeInOut" }}
+          className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 py-8 lg:py-16"
+        >
+          <div className="w-full max-w-2xl mx-auto">
+            {/* Main Heading */}
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: 0.2, duration: 0.6 }}
+              className="text-center mb-6 lg:mb-8"
             >
-              <AnimatePresence mode="wait">
-                {showSecondPanel && (
-                  <motion.div
-                    key="webview-panel"
-                    initial={{ x: "100%", opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: "100%", opacity: 0 }}
-                    transition={{ type: "tween", duration: 0.35 }}
-                    className="flex h-full w-full flex-col gap-2 p-4"
-                  >
-                    <Tabs defaultValue="code" className="flex flex-col flex-1 h-full">
-                      <TabsList>
-                        <TabsTrigger value="code">Code</TabsTrigger>
-                        <TabsTrigger value="live preview">live preview</TabsTrigger>
-                      </TabsList>
-                      <TabsContent value="code" className="flex flex-row flex-1 h-full gap-2">
-                        <div className="w-48 h-full flex-shrink-0">
-                          <FileTree
-                            nodes={fileTree}
-                            selected={selectedFile}
-                            onSelect={setSelectedFile}
-                          />
-                        </div>
-                        <div className="flex-1 flex flex-col h-full">
-                          <CodeEditor
-                            value={code}
-                            onChange={handleCodeChange}
-                            language="typescript"
-                            height={"100%"}
-                            label={selectedFile}
-                          />
-                        </div>
-                      </TabsContent>
-                      <TabsContent value="live preview" className="flex flex-col flex-1 h-full">
-                        <h1 className="text-lg font-semibold">Live Output</h1>
-                        <div className="flex-1 w-full rounded-lg overflow-hidden border mt-2 mb-4 relative">
-                          {iframeLoading && (
-                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
-                              <span className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-10 w-10 block" />
-                            </div>
-                          )}
-                          <iframe
-                            src="https://3000-imdglwuvc01tdvu7smh1k.e2b.app"
-                            title="ChatGPT"
-                            className="w-full h-full min-h-[200px] border-0"
-                            allow="clipboard-write; clipboard-read; microphone; camera"
-                            onLoad={() => setIframeLoading(false)}
-                          />
-                        </div>
-                      </TabsContent>
-                    </Tabs>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </ResizablePanel>
-          )}
-        </ResizablePanelGroup>
+              <h1 className="text-2xl sm:text-3xl lg:text-3xl font-medium dark:text-white mb-6 lg:mb-8 px-4">
+                Hi Kaif, what do you want to make?
+              </h1>
+            </motion.div>
+
+            {/* Prompt Input Box */}
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.4, duration: 0.6 }}
+              className="mb-4 lg:mb-6"
+            >
+              <div className="relative dark:bg-[#1a1a1a] border dark:border-[#333] rounded-lg overflow-hidden">
+                <Textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder="Describe an app or site you want to create..."
+                  className="w-full min-h-[100px] sm:min-h-[120px] px-3 sm:px-4 py-3 sm:py-4 text-sm sm:text-base dark:bg-transparent border-0 resize-none focus:ring-0 focus:outline-none dark:text-white dark:placeholder-gray-400"
+                  rows={4}
+                />
+
+                {/* Bottom Bar */}
+                <div className="flex items-center justify-end px-3 sm:px-4 py-2 sm:py-3 border-t dark:border-[#333] dark:bg-[#1a1a1a]">
+                  <div className="flex items-center space-x-2 flex-shrink-0">
+                 
+                    <Button
+                      onClick={handleStartChat}
+                      disabled={!prompt.trim()}
+                      className="bg-blue-600 hover:bg-blue-700 dark:text-white px-3 sm:px-4 py-1 text-xs sm:text-sm rounded disabled:opacity-50 disabled:cursor-not-allowed h-6 sm:h-8"
+                    >
+                      Start chat
+                    <ArrowRight className="w-3 h-3 sm:w-4 sm:h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Suggestions */}
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.6, duration: 0.6 }}
+              className="flex flex-wrap gap-2 sm:gap-3 justify-center mb-8 lg:mb-12"
+            >
+              {suggestions.map((suggestion, index) => (
+                <Button
+                  key={index}
+                  variant="ghost"
+                  onClick={() => setPrompt(suggestion.text)}
+                  className="flex items-center space-x-1 sm:space-x-2 px-2 sm:px-4 py-1.5 sm:py-2 dark:bg-[#1a1a1a] border dark:border-[#333] rounded-lg dark:hover:bg-[#2a2a2a] dark:text-gray-300 dark:hover:text-white transition-colors text-xs sm:text-sm"
+                >
+                  {suggestion.icon}
+                  <span className="truncate max-w-[120px] sm:max-w-none">{suggestion.text}</span>
+                </Button>
+              ))}
+            </motion.div>
+          </div>
+        </motion.div>
+        
       </div>
     </div>
-  );
+  )
 }
-
-export default Page;
