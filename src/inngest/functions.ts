@@ -25,13 +25,23 @@ export const codingAgent = inngest.createFunction(
   {event: "test/coding.agent"},
   async ({ event, step }) => {
 
+    const sbxId =  await step.run("get-sandbox-id", async () => {
+       const sbx = await Sandbox.create('codevibe-test');
+       return sbx.sandboxId;
+     })
+
+     const sbxUrl = await step.run("get-sandbox-url", async () => {
+      const sbx =  await getSandbox(sbxId);
+      const host = sbx.getHost(3000);
+      console.log('Sandbox host:', host);
+      return `https://${host}`;
+    })
+
     const res = await step.run("Invoke-agent", async () => {
       const userPrompt = event.data?.message || "How do I create a Next.js page?";
       try {
-        const agentResult = await invokeNextJsAgent(userPrompt);
-        return { 
-          aiResponse: agentResult.response
-        };
+        const agentResult = await invokeNextJsAgent(userPrompt, sbxId);
+        return agentResult
       } catch (err) {
         return { 
           aiResponse: "An error occurred while processing your request.",
@@ -39,19 +49,11 @@ export const codingAgent = inngest.createFunction(
         };
       }
     })
-   const sbxId =  await step.run("get-sandbox-id", async () => {
-      const sbx = await Sandbox.create('codevibe-test');
-      return sbx.sandboxId;
-    })
 
-    const sbxUrl = await step.run("get-sandbox-url", async () => {
-      const sbx =  await getSandbox(sbxId);
-      const host = sbx.getHost(3000);
-      return `https://${host}`;
-    })
+    
 
     return { 
-      message: res.aiResponse,
+      message: res,
       sandboxUrl: sbxUrl,
     };
   }
