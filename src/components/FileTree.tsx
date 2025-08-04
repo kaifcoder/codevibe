@@ -1,7 +1,6 @@
-import { Card } from "./ui/card";
-import { cn } from "@/lib/utils";
 import { useState } from "react";
-import { FolderIcon, FolderOpenIcon, FileIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { FolderIcon, FileIcon } from "lucide-react";
 
 export type FileNode = {
   name: string;
@@ -21,52 +20,59 @@ export function FileTree({ nodes, selected, onSelect, level = 0 }: FileTreeProps
   const [open, setOpen] = useState<{ [key: string]: boolean }>({});
 
   return (
-    <Card className="w-full flex flex-col p-2 gap-1 h-full overflow-y-auto bg-muted/40 border border-border">
+    <div className="w-full flex flex-col gap-0.5 h-full overflow-y-auto">
       {nodes.map((node) => (
-        <div key={node.path} className="w-full">
-          {node.type === "folder" ? (
-            <>
-              <button
+        <div key={node.path} className="select-none flex">
+          {/* Indentation lines */}
+          {Array.from({ length: level }).map((_, i) => (
+            <div key={i} className="w-4 border-l border-border h-full" />
+          ))}
+          <div className="flex-1">
+            {node.type === "folder" ? (
+              <>
+                <div
+                  className={cn(
+                    "flex items-center gap-2 py-1 rounded text-sm cursor-pointer transition w-full font-semibold hover:bg-muted/40",
+                    open[node.path] && "bg-muted/60"
+                  )}
+                  onClick={() => setOpen((prev) => ({ ...prev, [node.path]: !prev[node.path] }))}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <span className="w-4 flex items-center justify-center">
+                    <span className={cn("inline-block transition-transform", open[node.path] && "rotate-90")}>▶</span>
+                  </span>
+                  <FolderIcon className={cn("w-4 h-4", open[node.path] ? "text-primary" : "text-muted-foreground")} />
+                  <span className="text-base font-medium text-foreground">{node.name}</span>
+                </div>
+                {open[node.path] && node.children && (
+                  <FileTree
+                    nodes={node.children}
+                    selected={selected}
+                    onSelect={onSelect}
+                    level={level + 1}
+                  />
+                )}
+              </>
+            ) : (
+              <div
                 className={cn(
-                  "flex items-center gap-2 px-2 py-1 rounded text-sm cursor-pointer transition w-full group",
-                  open[node.path] ? "font-semibold bg-muted/60" : "font-normal hover:bg-muted/40"
+                  "flex items-center gap-2 text-left py-1 rounded text-sm cursor-pointer transition w-full",
+                  selected === node.path
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "hover:bg-muted/40"
                 )}
-                onClick={() => setOpen((prev) => ({ ...prev, [node.path]: !prev[node.path] }))}
+                onClick={() => onSelect(node.path)}
+                role="button"
+                tabIndex={0}
               >
-                <span style={{ width: level * 16 }} className="shrink-0" />
-                {open[node.path] ? (
-                  <FolderOpenIcon className="w-4 h-4 text-primary" />
-                ) : (
-                  <FolderIcon className="w-4 h-4 text-muted-foreground" />
-                )}
-                <span className="text-base font-medium text-foreground">{node.name}</span>
-              </button>
-              {open[node.path] && node.children && (
-                <FileTree
-                  nodes={node.children}
-                  selected={selected}
-                  onSelect={onSelect}
-                  level={level + 1}
-                />
-              )}
-            </>
-          ) : (
-            <button
-              className={cn(
-                "flex items-center gap-2 text-left px-2 py-1 rounded text-sm cursor-pointer transition w-full group",
-                selected === node.path
-                  ? "bg-primary/10 text-primary font-semibold"
-                  : "hover:bg-muted/40"
-              )}
-              onClick={() => onSelect(node.path)}
-            >
-              <span style={{ width: 20 + level * 16 }} className="shrink-0" />
-              <FileIcon className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
-              <span className="truncate">{node.name}</span>
-            </button>
-          )}
+                <FileIcon className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="truncate">{node.name}</span>
+              </div>
+            )}
+          </div>
         </div>
       ))}
-    </Card>
+    </div>
   );
 }

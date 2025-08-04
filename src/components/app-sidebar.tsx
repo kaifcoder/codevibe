@@ -1,4 +1,4 @@
-import { BotIcon, Home, Inbox } from "lucide-react"
+import { BotIcon, MessagesSquareIcon } from "lucide-react"
 
 import {
   Sidebar,
@@ -15,14 +15,9 @@ import Link from "next/link"
 // Menu items.
 const items = [
   {
-    title: "Home",
-    url: "#",
-    icon: Home,
-  },
-  {
-    title: "Inbox",
-    url: "/experiment",
-    icon: Inbox,
+    title: "Mock Application",
+    url: "/chat/1",
+    icon: MessagesSquareIcon,
   }
 ]
 
@@ -36,10 +31,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               asChild
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
-              <Link href="/">
+             <Link href="/">
                 <BotIcon className="!size-5" />
-                <span className="text-base font-semibold">Acme Inc.</span>
-              </Link>
+                <span className="text-base font-semibold">CodeVibe</span>
+             </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
