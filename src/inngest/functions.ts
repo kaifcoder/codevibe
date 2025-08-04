@@ -1,24 +1,9 @@
 import { inngest } from "./client";
-import { chatWithAI } from "../lib/ai-core-chat";
 import { invokeNextJsAgent } from "@/lib/nextjs-coding-agent";
 import { Sandbox } from '@e2b/code-interpreter'
 import { getSandbox } from "./utils";
 
-export const helloWorld = inngest.createFunction(
-  { id: "hello-world" },
-  { event: "test/hello.world" },
-  async ({ event, step }) => {
-    const res = await step.run("Invoke-ai", async () => {
-      const answer = await chatWithAI( event.data.message);
-      console.log("answer", answer.text);
-      return answer.text;
-    });
-    console.log("Inngest response:", res);
-    return { 
-      message: `answer: ${res}!`
-    };
-  },
-);
+
 
 export const codingAgent = inngest.createFunction(
   {id: "coding-agent" },
