@@ -32,7 +32,7 @@ export default function RootLayout({
     <TRPCReactProvider>
       <html lang="en" suppressHydrationWarning>
         <body
-          className={`${geistSans.variable} ${geistMono.variable} antialiased h-full w-full`}
+          className={`${geistSans.variable} ${geistMono.variable} antialiased h-screen w-full overflow-hidden`}
         >
           <ThemeProvider
             attribute="class"
@@ -47,12 +47,15 @@ export default function RootLayout({
                   "--header-height": "calc(var(--spacing) * 12)",
                 } as React.CSSProperties
               }
+              className="h-screen"
             >
               <AppSidebar variant="inset" />
-              <SidebarInset>
+              <SidebarInset className="flex flex-col overflow-hidden">
                 <SiteHeader />
-                <Toaster />
-                {children}
+                <div className="flex-1 overflow-hidden">
+                  <Toaster />
+                  {children}
+                </div>
               </SidebarInset>
             </SidebarProvider>
           </ThemeProvider>

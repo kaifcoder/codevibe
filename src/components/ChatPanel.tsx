@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Dispatch, SetStateAction, useRef, useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LucideSend } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,6 +15,7 @@ interface ChatPanelProps {
   setMessage: Dispatch<SetStateAction<string>>;
   onSend: () => void;
   isLoading?: boolean;
+  isStreaming?: boolean; // whether the last AI message is actively streaming
 }
 
 export function ChatPanel({
@@ -23,36 +24,13 @@ export function ChatPanel({
   setMessage,
   onSend,
   isLoading,
-}: ChatPanelProps) {
+  isStreaming,
+}: Readonly<ChatPanelProps>) {
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const [streamingIdx, setStreamingIdx] = useState<number | null>(null);
-  const [streamedText, setStreamedText] = useState("");
 
+  // Always scroll to bottom when messages change (or streaming updates replace last content)
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamedText]);
-
-  // Streaming effect for last AI message
-  useEffect(() => {
-    if (
-      messages.length > 0 &&
-      messages[messages.length - 1].role === "ai" &&
-      streamingIdx !== messages.length - 1
-    ) {
-      setStreamingIdx(messages.length - 1);
-      setStreamedText("");
-      const content = messages[messages.length - 1].content;
-      let i = 0;
-      const interval = setInterval(() => {
-        setStreamedText(content.slice(0, i + 1));
-        i++;
-        if (i >= content.length) {
-          clearInterval(interval);
-          setStreamingIdx(null);
-        }
-      }, 18);
-      return () => clearInterval(interval);
-    }
   }, [messages]);
 
   return (
@@ -63,12 +41,25 @@ export function ChatPanel({
           <div className="text-muted-foreground text-center mt-8">Start a conversation with Copilot!</div>
         )}
         <AnimatePresence initial={false}>
-          {messages.map((msg, i) => (
+          {messages.map((msg, i) => {
+            const key = `${msg.role}-${msg.content.slice(0,12)}-${i}`;
+            // Style variants
+            const isUser = msg.role === 'user';
+            const isAI = msg.role === 'ai';
+            let baseBubble: string;
+            if (isUser) {
+              baseBubble = 'bg-primary text-primary-foreground';
+            } else if (isAI) {
+              baseBubble = 'bg-muted text-foreground';
+            } else {
+              baseBubble = 'bg-muted text-foreground';
+            }
+            return (
             <motion.div
-              key={i}
+              key={key}
               initial={{
                 opacity: 0,
-                x: msg.role === "user" ? 40 : -40,
+                x: isUser ? 40 : -40,
               }}
               animate={{
                 opacity: 1,
@@ -77,30 +68,23 @@ export function ChatPanel({
               }}
               exit={{
                 opacity: 0,
-                x: msg.role === "user" ? 40 : -40,
+                x: isUser ? 40 : -40,
                 transition: { type: "tween", duration: 0.2 }
               }}
               className={
-                msg.role === "user"
-                  ? "flex justify-end"
-                  : "flex justify-start"
+                isUser ? 'flex justify-end' : 'flex justify-start'
               }
             >
               <div
-                className={
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground rounded-lg px-4 py-2 max-w-[70%] shadow"
-                    : "bg-muted text-foreground rounded-lg px-4 py-2 max-w-[70%] shadow"
-                }
+                className={`${baseBubble} rounded-lg px-4 py-2 max-w-[70%] shadow relative`}
               >
-                {msg.role === "ai" && i === streamingIdx ? (
-                  <span className="whitespace-pre-line animate-pulse">{streamedText}</span>
-                ) : (
-                  <span className="whitespace-pre-line">{msg.content}</span>
+                <span className="whitespace-pre-line text-sm leading-relaxed">{msg.content}</span>
+                {isAI && i === messages.length - 1 && isStreaming && (
+                  <span className="inline-block w-1 h-4 bg-foreground/70 animate-pulse ml-1 align-baseline" />
                 )}
               </div>
             </motion.div>
-          ))}
+          )})}
         </AnimatePresence>
         <div ref={chatEndRef} />
       </div>
@@ -113,7 +97,6 @@ export function ChatPanel({
         }}
       >
         <Textarea
-         
           placeholder="Send a message to Copilot..."
           value={message}
           onChange={e => setMessage(e.target.value)}
