@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // LangChain tools for executing commands in e2b sandboxes
-import { getSandbox } from '@/inngest/utils';
+import { getSandbox } from '@/lib/sandbox-utils';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 

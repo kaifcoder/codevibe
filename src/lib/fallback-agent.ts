@@ -1,6 +1,6 @@
 import { streamNextJsAgent } from "./nextjs-coding-agent";
 import { Sandbox } from '@e2b/code-interpreter';
-import { getSandbox } from "@/inngest/utils";
+import { getSandbox } from "@/lib/sandbox-utils";
 
 // Type definitions for agent response
 export interface AgentResponse {
@@ -11,7 +11,7 @@ export interface AgentResponse {
   error?: string;
 }
 
-// Fallback agent that runs directly without Inngest
+// Direct agent implementation with streaming support
 export class FallbackAgent {
   private async analyzeSandboxNeed(prompt: string, providedSandboxId?: string) {
     // If user provided a sandboxId, they want to use it

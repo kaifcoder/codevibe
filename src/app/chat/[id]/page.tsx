@@ -39,14 +39,6 @@ function Page() {
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  // Auto fallback mode: attempt Inngest first, fall back automatically if no stream starts or errors.
-  const [autoFallbackEnabled, setAutoFallbackEnabled] = useState(true);
-  const attemptedFallbackRef = useRef(false);
-  const hasStreamingStartedRef = useRef(false);
-  const pendingUserMessageRef = useRef<string | null>(null);
-  const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const FALLBACK_TIMEOUT_MS = 8000; // time to wait for first streaming token before falling back
-  const [agentMethod, setAgentMethod] = useState<'inngest' | 'fallback' | null>(null);
   
   // Real-time updates
   const [agentUpdates, setAgentUpdates] = useState<AgentUpdate[]>([]);
@@ -54,14 +46,12 @@ function Page() {
 
   const invoke = useMutation(
     trpc.invoke.mutationOptions({
-      onSuccess: ({ sessionId: newSessionId, method }) => {
-        toast.success(`Agent started successfully via ${method}!`);
-        setAgentMethod(method as 'inngest' | 'fallback');
+      onSuccess: ({ sessionId: newSessionId }) => {
+        toast.success('Agent started successfully!');
         console.log("Session ID:", newSessionId);
         if (newSessionId && newSessionId !== sessionId) {
           setSessionId(newSessionId);
         }
-        // Always subscribe (fallback also emits SSE)
         startRealtimeSubscription(newSessionId);
       },
       onError: (error) => {
@@ -72,18 +62,6 @@ function Page() {
         setIsStreaming(true);
         setAgentUpdates([]);
         toast.loading("Starting AI agent...");
-        attemptedFallbackRef.current = false;
-        hasStreamingStartedRef.current = false;
-        if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-        if (autoFallbackEnabled) {
-          fallbackTimerRef.current = setTimeout(() => {
-            if (!hasStreamingStartedRef.current && !attemptedFallbackRef.current && pendingUserMessageRef.current) {
-              console.log('[AutoFallback] No streaming detected, invoking fallback agent.');
-              attemptedFallbackRef.current = true;
-              invoke.mutate({ message: pendingUserMessageRef.current, sessionId, useFallback: true });
-            }
-          }, FALLBACK_TIMEOUT_MS);
-        }
       },
       onSettled: () => {
         toast.dismiss();
@@ -93,9 +71,8 @@ function Page() {
 
   const invokeWithSandbox = useMutation(
     trpc.invokeWithSandbox.mutationOptions({
-      onSuccess: ({ sessionId: newSessionId, method }) => {
-        toast.success(`Agent started with sandbox via ${method}!`);
-        setAgentMethod(method as 'inngest' | 'fallback');
+      onSuccess: ({ sessionId: newSessionId }) => {
+        toast.success('Agent started with sandbox!');
         if (newSessionId && newSessionId !== sessionId) {
           setSessionId(newSessionId);
         }
@@ -109,18 +86,6 @@ function Page() {
         setIsStreaming(true);
         setAgentUpdates([]);
         toast.loading("Starting AI agent with sandbox...");
-        attemptedFallbackRef.current = false;
-        hasStreamingStartedRef.current = false;
-        if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-        if (autoFallbackEnabled) {
-          fallbackTimerRef.current = setTimeout(() => {
-            if (!hasStreamingStartedRef.current && !attemptedFallbackRef.current && pendingUserMessageRef.current) {
-              console.log('[AutoFallback] No streaming (sandbox) detected, invoking fallback agent.');
-              attemptedFallbackRef.current = true;
-              invokeWithSandbox.mutate({ message: pendingUserMessageRef.current, sandboxId: sandboxId!, sessionId, useFallback: true });
-            }
-          }, FALLBACK_TIMEOUT_MS);
-        }
       },
       onSettled: () => {
         toast.dismiss();
@@ -226,27 +191,12 @@ function Page() {
           ifMounted(() => setIsStreaming(status === 'started' || status === 'processing'));
         } else if (parsed.type === 'partial') {
           ifMounted(() => setIsStreaming(true));
-          hasStreamingStartedRef.current = true;
-          if (fallbackTimerRef.current) {
-            clearTimeout(fallbackTimerRef.current);
-            fallbackTimerRef.current = null;
-          }
         } else if (parsed.type === 'sandbox') {
           if (parsed.data?.sandboxId) ifMounted(() => setSandboxId(parsed.data!.sandboxId!));
           if (parsed.data?.sandboxUrl) ifMounted(() => setSandboxUrl(parsed.data!.sandboxUrl!));
         } else if (parsed.type === 'complete' || parsed.type === 'error') {
           ifMounted(() => setIsStreaming(false));
           if (parsed.data?.sandboxUrl) ifMounted(() => setSandboxUrl(parsed.data!.sandboxUrl!));
-          if (parsed.type === 'error' && autoFallbackEnabled && !attemptedFallbackRef.current && pendingUserMessageRef.current) {
-            console.log('[AutoFallback] Error event received, invoking fallback agent.');
-            attemptedFallbackRef.current = true;
-            // Decide which mutation to call based on sandbox presence request
-            if (sandboxId) {
-              invokeWithSandbox.mutate({ message: pendingUserMessageRef.current, sandboxId, sessionId, useFallback: true });
-            } else {
-              invoke.mutate({ message: pendingUserMessageRef.current, sessionId, useFallback: true });
-            }
-          }
         }
       };
 
@@ -269,7 +219,7 @@ function Page() {
       console.error('Failed to start subscription:', error);
       toast.error('Failed to start real-time updates');
     }
-  }, [getContentFromData, autoFallbackEnabled, sandboxId, sessionId, invoke, invokeWithSandbox]);
+  }, [getContentFromData]);
 
   // Start real-time subscription on mount
   useEffect(() => {
@@ -426,9 +376,19 @@ function Page() {
     } else if (latestUpdate.type === 'complete') {
       setMessages((prev) => {
         const newMessages = [...prev];
+        // Find the last AI message and keep its existing content (from partial updates)
+        // Only update if we have a full response in the data
         for (let i = newMessages.length - 1; i >= 0; i--) {
           if (newMessages[i].role === 'ai') {
-            newMessages[i] = { ...newMessages[i], content: (latestUpdate.data?.response as string) || latestUpdate.content };
+            // If there's a response in data, use it; otherwise keep the accumulated content
+            const responseContent = latestUpdate.data?.response as string | undefined;
+            if (responseContent && responseContent.trim()) {
+              newMessages[i] = { ...newMessages[i], content: responseContent };
+            }
+            // If content is still just processing message, update it
+            if (newMessages[i].content === '🔄 Processing...') {
+              newMessages[i] = { ...newMessages[i], content: responseContent || 'Task completed' };
+            }
             break;
           }
         }
@@ -457,20 +417,16 @@ function Page() {
     const userMessage = message;
     setMessage("");
     
-    // Add user message to chat
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-    
-    // Only add an AI processing stub if last message isn't already AI
+    // Add user message to chat and ensure AI response placeholder
     setMessages((prev) => {
-      if (prev.length === 0 || prev[prev.length - 1].role !== 'ai') {
-        return [...prev, { role: 'ai', content: '🔄 Processing...' }];
-      }
-      return prev;
+      const newMessages: ChatMessage[] = [...prev, { role: "user", content: userMessage }];
+      // Always add an AI processing stub for the new response
+      newMessages.push({ role: 'ai', content: '🔄 Processing...' });
+      return newMessages;
     });
 
-    // Start streaming mode and add debugging
-  setIsStreaming(true);
-  pendingUserMessageRef.current = userMessage;
+    // Start streaming mode
+    setIsStreaming(true);
     console.log('Started streaming mode for session:', sessionId);
 
     // Determine if we should use sandbox based on user request
@@ -485,14 +441,12 @@ function Page() {
       invokeWithSandbox.mutate({ 
         message: userMessage, 
         sandboxId,
-        sessionId,
-        useFallback: attemptedFallbackRef.current // if fallback path triggered manually
+        sessionId
       });
     } else {
       invoke.mutate({ 
         message: userMessage, 
-        sessionId,
-        useFallback: attemptedFallbackRef.current
+        sessionId
       });
     }
   };
@@ -505,11 +459,6 @@ function Page() {
           <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
           <span className="text-sm font-medium">
             {isStreaming ? 'Agent Active' : 'Ready'}
-            {agentMethod && (
-              <span className="ml-1 text-xs text-muted-foreground">
-                ({agentMethod})
-              </span>
-            )}
           </span>
         </div>
         
@@ -522,16 +471,6 @@ function Page() {
               🏗️ View Sandbox
             </button>
           )}
-          
-          <label className="flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={autoFallbackEnabled}
-              onChange={(e) => setAutoFallbackEnabled(e.target.checked)}
-              className="w-3 h-3"
-            />
-            <span>Auto Fallback</span>
-          </label>
         </div>
       </div>
 
