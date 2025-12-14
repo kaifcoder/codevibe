@@ -17,15 +17,12 @@ export const appRouter = createTRPCRouter({
 
               // Append current user message early (optimistic)
               appendSessionMessages(sessionId, [{ role: 'user', content: input.message, ts: Date.now() }]);
-              
-              console.log('Using agent...');
-              
+            
               // Start agent in background (updates handled via SSE)
-              fallbackAgent.invoke(input.message, undefined, (update) => {
+              fallbackAgent.invoke(input.message, undefined, () => {
                 // SSE endpoint at /api/stream handles real-time updates
-                console.log(`Agent update: ${update.type}`, update.data);
               }, sessionId).catch(error => {
-                console.error('Agent error:', error);
+                console.error('[TRPC] Agent error:', error);
               });
               
               return {
@@ -53,9 +50,8 @@ export const appRouter = createTRPCRouter({
               console.log('Using agent with sandbox...');
               
               // Start agent in background (updates handled via SSE)
-              fallbackAgent.invoke(input.message, input.sandboxId, (update) => {
+              fallbackAgent.invoke(input.message, input.sandboxId, () => {
                 // SSE endpoint at /api/stream handles real-time updates
-                console.log(`Agent update: ${update.type}`, update.data);
               }, sessionId).catch(error => {
                 console.error('Agent error:', error);
               });
