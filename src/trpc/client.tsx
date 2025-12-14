@@ -11,7 +11,7 @@ import type { AppRouter } from './routers/_app';
 export const { TRPCProvider, useTRPC } = createTRPCContext<AppRouter>();
 let browserQueryClient: QueryClient;
 function getQueryClient() {
-  if (typeof window === 'undefined') {
+  if (typeof globalThis === 'undefined') {
     // Server: always make a new query client
     return makeQueryClient();
   }
@@ -24,7 +24,7 @@ function getQueryClient() {
 }
 function getUrl() {
   const base = (() => {
-    if (typeof window !== 'undefined') return '';
+    if (typeof globalThis !== 'undefined') return '';
     return process.env.NEXT_PUBLIC_VERCEL_URL;
   })();
   return `${base}/api/trpc`;

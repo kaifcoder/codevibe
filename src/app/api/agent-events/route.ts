@@ -21,8 +21,6 @@ export async function POST(request: NextRequest) {
       // Emit the event to all subscribed clients
       globalEventEmitter.emit(mappedEventName, data);
       
-      console.log(`📡 Forwarded event: ${name} -> ${mappedEventName}`, data);
-      
       return NextResponse.json({ success: true, forwarded: mappedEventName });
     }
 

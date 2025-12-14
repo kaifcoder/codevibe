@@ -93,7 +93,7 @@ export class FallbackAgent {
     const emitSSEEvent = async (type: string, data: Record<string, unknown>) => {
       if (sessionId) {
         try {
-          const { globalEventEmitter } = await import('@/app/api/stream/route');
+          const { globalEventEmitter } = await import('@/lib/event-emitter');
           globalEventEmitter.emit(`agent:${type}`, {
             sessionId,
             ...data
@@ -105,6 +105,12 @@ export class FallbackAgent {
     };
 
     try {
+      // Emit initial status
+      await emitSSEEvent('status', {
+        status: 'started',
+        message: 'Agent started processing your request...'
+      });
+      
       // Analyze if sandbox is needed
       const analysisResult = await this.analyzeSandboxNeed(prompt, sandboxId);
       
@@ -164,7 +170,6 @@ export class FallbackAgent {
             break;
             
           case 'tool_call':
-            console.log(`\n🔧 ${chunk.content}`);
             onUpdate?.({
               type: 'tool',
               content: `🔧 ${chunk.content}`,
@@ -196,7 +201,6 @@ export class FallbackAgent {
             };
             
           case 'complete':
-            console.log('\n✅ Agent response complete');
             isComplete = true;
             onUpdate?.({
               type: 'complete',

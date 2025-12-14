@@ -294,7 +294,6 @@ async function* processAgentMessages(messages: any): AsyncGenerator<StreamRespon
   for (const message of messageArray) {
     if (message instanceof AIMessage) {
       // Check if it's a tool call
-      console.log('Processing AI message:', message);
       if (message.tool_calls && message.tool_calls.length > 0) {
         yield { 
           content: `Using tool: ${message.tool_calls[0].name}`, 

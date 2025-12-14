@@ -1,9 +1,6 @@
 import { NextRequest } from 'next/server';
-import { EventEmitter } from 'events';
 import { appendSessionMessages } from '@/lib/session-memory';
-
-// Create a global event emitter for real-time updates
-const globalEventEmitter = new EventEmitter();
+import { globalEventEmitter } from '@/lib/event-emitter';
 
 // Type definitions for streaming events
 interface AgentEventData {
@@ -35,8 +32,18 @@ export async function GET(request: NextRequest) {
       // Send headers to establish SSE connection
       const encoder = new TextEncoder();
       
+      let isClosed = false;
+      
       const send = (data: string) => {
-        controller.enqueue(encoder.encode(data));
+        if (isClosed) {
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(data));
+        } catch (error) {
+          console.error('[SSE Stream] Error sending data:', error);
+          isClosed = true;
+        }
       };
 
       // Initial connection message
@@ -156,6 +163,7 @@ export async function GET(request: NextRequest) {
 
       // Cleanup when client disconnects
       request.signal.addEventListener('abort', () => {
+        isClosed = true;
         clearInterval(heartbeat);
         globalEventEmitter.off('agent:status', handleAgentUpdate);
         globalEventEmitter.off('agent:partial', handlePartialContent);
@@ -163,7 +171,11 @@ export async function GET(request: NextRequest) {
         globalEventEmitter.off('agent:sandbox', handleSandboxStatus);
         globalEventEmitter.off('agent:complete', handleComplete);
         globalEventEmitter.off('agent:error', handleError);
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          // Controller already closed
+        }
       });
     },
   });
@@ -178,6 +190,3 @@ export async function GET(request: NextRequest) {
     },
   });
 }
-
-// Export the event emitter for use in other parts of the application
-export { globalEventEmitter };
