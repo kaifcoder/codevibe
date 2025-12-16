@@ -63,6 +63,7 @@ function Page({ params }: PageProps) {
   // Session management (allow dynamic updates from backend)
   const [sessionId, setSessionId] = useState(() => `session-${Date.now()}`);
   const [sandboxId, setSandboxId] = useState<string | null>(null);
+  const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   
   // Load sandbox data when sessionId changes
   useEffect(() => {
@@ -72,21 +73,11 @@ function Page({ params }: PageProps) {
       if (stored) {
         const parsed = JSON.parse(stored);
         setSandboxId(parsed.sandboxId || null);
-      }
-    } catch (error) {
-      console.error('Failed to load sandbox data:', error);
-    }
-  }, [sessionId]);
-  const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
-  
-  // Load sandbox URL when sessionId changes
-  useEffect(() => {
-    if (typeof globalThis.globalThis === 'undefined') return;
-    try {
-      const stored = localStorage.getItem(`chat-${sessionId}`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
         setSandboxUrl(parsed.sandboxUrl || null);
+        // Show panel if sandbox exists
+        if (parsed.sandboxId || parsed.sandboxUrl) {
+          setShowSecondPanel(true);
+        }
       }
     } catch (error) {
       console.error('Failed to load sandbox data:', error);
@@ -319,11 +310,63 @@ function Page({ params }: PageProps) {
         } else if (parsed.type === 'partial') {
           ifMounted(() => setIsStreaming(true));
         } else if (parsed.type === 'sandbox') {
-          if (parsed.data?.sandboxId) ifMounted(() => setSandboxId(parsed.data!.sandboxId!));
-          if (parsed.data?.sandboxUrl) ifMounted(() => setSandboxUrl(parsed.data!.sandboxUrl!));
+          if (parsed.data?.sandboxId) {
+            const newSandboxId = parsed.data.sandboxId;
+            ifMounted(() => {
+              setSandboxId(newSandboxId);
+              // Immediately persist to localStorage
+              try {
+                const stored = localStorage.getItem(`chat-${sess}`);
+                const existing = stored ? JSON.parse(stored) : {};
+                localStorage.setItem(`chat-${sess}`, JSON.stringify({
+                  ...existing,
+                  sandboxId: newSandboxId,
+                  lastUpdated: Date.now()
+                }));
+              } catch (error) {
+                console.error('Failed to save sandbox ID:', error);
+              }
+            });
+          }
+          if (parsed.data?.sandboxUrl) {
+            const newSandboxUrl = parsed.data.sandboxUrl;
+            ifMounted(() => {
+              setSandboxUrl(newSandboxUrl);
+              setShowSecondPanel(true);
+              // Immediately persist to localStorage
+              try {
+                const stored = localStorage.getItem(`chat-${sess}`);
+                const existing = stored ? JSON.parse(stored) : {};
+                localStorage.setItem(`chat-${sess}`, JSON.stringify({
+                  ...existing,
+                  sandboxUrl: newSandboxUrl,
+                  lastUpdated: Date.now()
+                }));
+              } catch (error) {
+                console.error('Failed to save sandbox URL:', error);
+              }
+            });
+          }
         } else if (parsed.type === 'complete' || parsed.type === 'error') {
           ifMounted(() => setIsStreaming(false));
-          if (parsed.data?.sandboxUrl) ifMounted(() => setSandboxUrl(parsed.data!.sandboxUrl!));
+          if (parsed.data?.sandboxUrl) {
+            const newSandboxUrl = parsed.data.sandboxUrl;
+            ifMounted(() => {
+              setSandboxUrl(newSandboxUrl);
+              // Persist to localStorage
+              try {
+                const stored = localStorage.getItem(`chat-${sess}`);
+                const existing = stored ? JSON.parse(stored) : {};
+                localStorage.setItem(`chat-${sess}`, JSON.stringify({
+                  ...existing,
+                  sandboxUrl: newSandboxUrl,
+                  lastUpdated: Date.now()
+                }));
+              } catch (error) {
+                console.error('Failed to save sandbox URL:', error);
+              }
+            });
+          }
         }
       };
 
@@ -364,8 +407,8 @@ function Page({ params }: PageProps) {
 
   // state for the input message
   const [message, setMessage] = useState("");
-  // state for toggling the second panel
-  const [showSecondPanel] = useState(true);
+  // state for toggling the second panel - show when sandbox exists or code-related activity
+  const [showSecondPanel, setShowSecondPanel] = useState(false);
   // state for the code editor
   const [code, setCode] = useState("// Write your code here\n");
   // state for iframe loading
@@ -636,21 +679,46 @@ function Page({ params }: PageProps) {
     // This ensures we don't miss any events from the agent
     startRealtimeSubscription(sessionId);
 
-    // Determine if we should use sandbox based on user request
-    const needsSandbox = sandboxId || 
+    // Determine if we should use sandbox based on user request or existing sandbox
+    const isCodeRelatedRequest = 
       userMessage.toLowerCase().includes("create") ||
       userMessage.toLowerCase().includes("build") ||
-      userMessage.toLowerCase().includes("generate code") ||
-      userMessage.toLowerCase().includes("component");
+      userMessage.toLowerCase().includes("generate") ||
+      userMessage.toLowerCase().includes("component") ||
+      userMessage.toLowerCase().includes("app") ||
+      userMessage.toLowerCase().includes("page") ||
+      userMessage.toLowerCase().includes("add") ||
+      userMessage.toLowerCase().includes("update") ||
+      userMessage.toLowerCase().includes("change") ||
+      userMessage.toLowerCase().includes("modify") ||
+      userMessage.toLowerCase().includes("fix");
 
-    // Choose the appropriate mutation based on whether we have a sandbox
-    if (needsSandbox && sandboxId) {
+    // Always use sandbox if it exists (to maintain context), or create one for code requests
+    const shouldUseSandbox = sandboxId || isCodeRelatedRequest;
+
+    // Show preview panel for code-related requests or when sandbox exists
+    if (shouldUseSandbox) {
+      setShowSecondPanel(true);
+    }
+
+    // Always use sandbox endpoint if sandbox exists to maintain context
+    // This prevents creating multiple sandboxes and losing context
+    if (sandboxId) {
+      // Use existing sandbox to maintain context
+      console.log('Reusing existing sandbox:', sandboxId);
       invokeWithSandbox.mutate({ 
         message: userMessage, 
         sandboxId,
         sessionId
       });
+    } else if (isCodeRelatedRequest) {
+      // Create new sandbox for code-related requests (don't pass sandboxId to create new one)
+      invokeWithSandbox.mutate({ 
+        message: userMessage,
+        sessionId
+      });
     } else {
+      // Use regular invoke for non-code questions
       invoke.mutate({ 
         message: userMessage, 
         sessionId
@@ -685,6 +753,13 @@ function Page({ params }: PageProps) {
               {messages.length} messages
             </span>
           )}
+          {sandboxUrl && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+              {' '}
+              Sandbox Active
+            </span>
+          )}
         </div>
         
         <div className="flex items-center gap-2">
@@ -693,9 +768,9 @@ function Page({ params }: PageProps) {
               variant="outline"
               size="sm"
               onClick={() => globalThis.globalThis.open(sandboxUrl, '_blank')}
-              className="text-xs"
+              className="text-xs h-8"
             >
-              🏗️ View Sandbox
+              🏗️ Open in Browser
             </Button>
           )}
           {messages.length > 1 && (
@@ -722,9 +797,105 @@ function Page({ params }: PageProps) {
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        <ResizablePanelGroup direction="horizontal" className="h-full">
-          <ResizablePanel defaultSize={30}>
-            <div className="h-full flex flex-col">
+        {showSecondPanel ? (
+          <ResizablePanelGroup direction="horizontal" className="h-full">
+            <ResizablePanel defaultSize={30}>
+              <div className="h-full flex flex-col w-full">
+                <ChatPanel
+                  messages={messages}
+                  message={message}
+                  setMessage={setMessage}
+                  onSend={handleSend}
+                  isLoading={invoke.isPending || invokeWithSandbox.isPending}
+                  isStreaming={isStreaming}
+                />
+              </div>
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel
+              defaultSize={70}
+              className="animate-in fade-in-0 data-[state=active]:fade-in-100"
+            >
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key="webview-panel"
+                  initial={{ x: "100%", opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: "100%", opacity: 0 }}
+                  transition={{ type: "tween", duration: 0.35 }}
+                  className="flex h-full w-full flex-col p-4 overflow-hidden"
+                >
+                  <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full overflow-hidden">
+                    <TabsList className="shrink-0">
+                      <TabsTrigger value="live preview">live preview</TabsTrigger>
+                      <TabsTrigger value="code">Code</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="code" className="flex flex-row flex-1 min-h-0 gap-2 mt-2 overflow-hidden">
+                      <div className="w-48 h-full flex-shrink-0 overflow-hidden">
+                        <FileTree
+                          nodes={fileTree}
+                          selected={selectedFile}
+                          onSelect={setSelectedFile}
+                        />
+                      </div>
+                      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
+                        <CodeEditor
+                          value={code}
+                          onChange={handleCodeChange}
+                          language="typescript"
+                          height={"100%"}
+                          label={selectedFile}
+                          autoScroll={false}
+                        />
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="live preview" className="flex flex-col flex-1 min-h-0 mt-2 overflow-hidden">
+                      <h1 className="text-lg font-semibold shrink-0">Live Output</h1>
+                      <div className="flex-1 w-full rounded-lg overflow-hidden border mt-2 relative min-h-0">
+                        {iframeLoading && (
+                          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
+                            <span className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-10 w-10 block" />
+                          </div>
+                        )}
+                        {sandboxUrl ? (
+                          <iframe
+                            key={sandboxUrl}
+                            src={sandboxUrl}
+                            className="w-full h-full min-h-[200px] border-0"
+                            onLoad={() => setIframeLoading(false)}
+                            title="Sandbox Preview"
+                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                            allow="clipboard-write; clipboard-read; microphone; camera; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">
+                            <div className="text-4xl">🚀</div>
+                            <div className="space-y-2">
+                              <h3 className="text-lg font-semibold">No Sandbox Yet</h3>
+                              <p className="text-sm text-muted-foreground max-w-md">
+                                Ask me to create something to see the live preview!
+                              </p>
+                            </div>
+                            <div className="flex flex-col gap-2 text-xs text-muted-foreground">
+                              <p>Try asking:</p>
+                              <div className="flex flex-wrap gap-2 justify-center">
+                                <code className="px-2 py-1 bg-muted rounded">&quot;Create a todo app&quot;</code>
+                                <code className="px-2 py-1 bg-muted rounded">&quot;Build a calculator&quot;</code>
+                                <code className="px-2 py-1 bg-muted rounded">&quot;Generate a form component&quot;</code>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+                </motion.div>
+              </AnimatePresence>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        ) : (
+          <div className="h-full flex items-center justify-center">
+            <div className="max-w-4xl w-full px-4 sm:px-6 lg:px-8 h-full flex flex-col">
               <ChatPanel
                 messages={messages}
                 message={message}
@@ -733,81 +904,9 @@ function Page({ params }: PageProps) {
                 isLoading={invoke.isPending || invokeWithSandbox.isPending}
                 isStreaming={isStreaming}
               />
-              
             </div>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          {showSecondPanel && (
-            <ResizablePanel
-              defaultSize={70}
-              className="animate-in fade-in-0 data-[state=active]:fade-in-100"
-            >
-              <AnimatePresence mode="wait">
-                {showSecondPanel && (
-                  <motion.div
-                    key="webview-panel"
-                    initial={{ x: "100%", opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: "100%", opacity: 0 }}
-                    transition={{ type: "tween", duration: 0.35 }}
-                    className="flex h-full w-full flex-col p-4 overflow-hidden"
-                  >
-                    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full overflow-hidden">
-                      <TabsList className="shrink-0">
-                        <TabsTrigger value="live preview">live preview</TabsTrigger>
-                        <TabsTrigger value="code">Code</TabsTrigger>
-                      </TabsList>
-                      <TabsContent value="code" className="flex flex-row flex-1 min-h-0 gap-2 mt-2 overflow-hidden">
-                        <div className="w-48 h-full flex-shrink-0 overflow-hidden">
-                          <FileTree
-                            nodes={fileTree}
-                            selected={selectedFile}
-                            onSelect={setSelectedFile}
-                          />
-                        </div>
-                        <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
-                          <CodeEditor
-                            value={code}
-                            onChange={handleCodeChange}
-                            language="typescript"
-                            height={"100%"}
-                            label={selectedFile}
-                            autoScroll={false}
-                          />
-                        </div>
-                      </TabsContent>
-                      <TabsContent value="live preview" className="flex flex-col flex-1 min-h-0 mt-2 overflow-hidden">
-                        <h1 className="text-lg font-semibold shrink-0">Live Output</h1>
-                        <div className="flex-1 w-full rounded-lg overflow-hidden border mt-2 relative min-h-0">
-                          {iframeLoading && (
-                            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
-                              <span className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-10 w-10 block" />
-                            </div>
-                          )}
-                          {sandboxUrl ? (
-                            <iframe
-                              key={sandboxUrl}
-                              src={sandboxUrl}
-                              className="w-full h-full min-h-[200px] border-0"
-                              onLoad={() => setIframeLoading(false)}
-                              title="Sandbox Preview"
-                              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                              allow="clipboard-write; clipboard-read; microphone; camera; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-sm text-muted-foreground">
-                              No sandbox yet. Ask the agent to create or generate code (e.g. &quot;create a component&quot;) to spin one up.
-                            </div>
-                          )}
-                        </div>
-                      </TabsContent>
-                    </Tabs>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </ResizablePanel>
-          )}
-        </ResizablePanelGroup>
+          </div>
+        )}
       </div>
     </div>
   );

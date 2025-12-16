@@ -1,6 +1,8 @@
 import { streamNextJsAgent } from "./nextjs-coding-agent";
 import { Sandbox } from '@e2b/code-interpreter';
 import { getSandbox } from "@/lib/sandbox-utils";
+import { getSessionMessages } from "@/lib/session-memory";
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
 
 // Type definitions for agent response
 export interface AgentResponse {
@@ -152,8 +154,26 @@ export class FallbackAgent {
       let fullResponse = '';
       let isComplete = false;
 
-      // Process the streaming response
-      for await (const chunk of streamNextJsAgent(prompt, sbxId)) {
+      // Load previous conversation history from session memory
+      const sessionHistory = sessionId ? getSessionMessages(sessionId) : [];
+      const previousMessages = sessionHistory.map(msg => {
+        if (msg.role === 'user') {
+          return new HumanMessage(msg.content);
+        } else {
+          return new AIMessage(msg.content);
+        }
+      });
+
+      if (previousMessages.length > 0) {
+        console.log(`📚 Loading ${previousMessages.length} previous messages for context preservation`);
+        console.log(`   First message: "${sessionHistory[0].content.substring(0, 50)}..."`);
+        console.log(`   Last message: "${sessionHistory.at(-1)?.content.substring(0, 50)}..."`);
+      } else {
+        console.log('📚 No previous messages - starting fresh conversation');
+      }
+
+      // Process the streaming response with conversation history
+      for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages)) {
         switch (chunk.type) {
           case 'partial':
             fullResponse += chunk.content;

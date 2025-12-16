@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { globalEventEmitter } from '@/app/api/stream/route';
+import { globalEventEmitter } from '@/lib/event-emitter';
 
 export async function POST(request: NextRequest) {
   try {
