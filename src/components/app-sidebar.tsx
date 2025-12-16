@@ -34,7 +34,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Button } from "@/components/ui/button"
 
 interface ChatSession {
   id: string
@@ -238,14 +237,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <Button
+            <SidebarMenuButton
               onClick={handleClearAll}
-              variant="ghost"
-              className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              tooltip="Clear All Chats"
             >
-              <Trash className="h-4 w-4 mr-2" />
-              Clear All Chats
-            </Button>
+              <Trash />
+              <span>Clear All Chats</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
