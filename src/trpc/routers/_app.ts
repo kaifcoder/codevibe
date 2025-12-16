@@ -37,7 +37,7 @@ export const appRouter = createTRPCRouter({
         .input(
             z.object({
                 message: z.string(),
-                sandboxId: z.string(),
+                sandboxId: z.string().optional(),
                 sessionId: z.string().optional(),
             })
         )

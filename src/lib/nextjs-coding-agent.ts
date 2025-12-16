@@ -28,21 +28,27 @@ const NEXT_DOCS_INDEX: Array<{
   title: string;
   summary?: string;
 }> = [
-  { keywords: ['app router', 'app directory', 'routing', 'route segment'], url: 'https://nextjs.org/docs/app', title: 'App Router' },
-  { keywords: ['pages router', 'pages directory'], url: 'https://nextjs.org/docs/pages', title: 'Pages Router' },
-  { keywords: ['data fetching', 'fetch', 'fetching'], url: 'https://nextjs.org/docs/app/building-your-application/data-fetching/fetching', title: 'Data Fetching (fetch API)' },
-  { keywords: ['server actions', 'actions'], url: 'https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions', title: 'Server Actions' },
-  { keywords: ['api routes', 'api route', 'route handlers', 'route handler'], url: 'https://nextjs.org/docs/app/building-your-application/routing/route-handlers', title: 'Route Handlers (API)' },
-  { keywords: ['middleware'], url: 'https://nextjs.org/docs/app/building-your-application/routing/middleware', title: 'Middleware' },
-  { keywords: ['metadata', 'head'], url: 'https://nextjs.org/docs/app/building-your-application/optimizing/metadata', title: 'Metadata API' },
-  { keywords: ['image', 'next/image'], url: 'https://nextjs.org/docs/app/building-your-application/optimizing/images', title: 'Image Optimization' },
-  { keywords: ['link', 'next/link'], url: 'https://nextjs.org/docs/app/building-your-application/routing/linking-and-navigating', title: 'Linking & Navigating' },
-  { keywords: ['static generation', 'ssg'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/static-and-dynamic-rendering', title: 'Static & Dynamic Rendering' },
-  { keywords: ['incremental static regeneration', 'isr'], url: 'https://nextjs.org/docs/app/building-your-application/caching#revalidating-data', title: 'Revalidation (ISR)' },
-  { keywords: ['dynamic rendering', 'streaming', 'rsc'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/server-components', title: 'React Server Components' },
-  { keywords: ['env', 'environment variables'], url: 'https://nextjs.org/docs/app/building-your-application/configuring/environment-variables', title: 'Environment Variables' },
-  { keywords: ['next config', 'next.config.js', 'configuration'], url: 'https://nextjs.org/docs/app/api-reference/next-config-js', title: 'next.config.js' },
-  { keywords: ['deployment', 'vercel deploy'], url: 'https://nextjs.org/docs/app/building-your-application/deploying', title: 'Deployment' },
+  { keywords: ['app router', 'app directory', 'routing', 'route segment', 'app'], url: 'https://nextjs.org/docs/app', title: 'App Router' },
+  { keywords: ['pages router', 'pages directory', 'pages'], url: 'https://nextjs.org/docs/pages', title: 'Pages Router' },
+  { keywords: ['data fetching', 'fetch', 'fetching', 'get data', 'load data'], url: 'https://nextjs.org/docs/app/building-your-application/data-fetching/fetching', title: 'Data Fetching (fetch API)' },
+  { keywords: ['server actions', 'actions', 'form actions', 'mutations'], url: 'https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions', title: 'Server Actions' },
+  { keywords: ['api routes', 'api route', 'route handlers', 'route handler', 'api', 'endpoint'], url: 'https://nextjs.org/docs/app/building-your-application/routing/route-handlers', title: 'Route Handlers (API)' },
+  { keywords: ['middleware', 'request middleware'], url: 'https://nextjs.org/docs/app/building-your-application/routing/middleware', title: 'Middleware' },
+  { keywords: ['metadata', 'head', 'seo', 'meta tags'], url: 'https://nextjs.org/docs/app/building-your-application/optimizing/metadata', title: 'Metadata API' },
+  { keywords: ['image', 'next/image', 'image optimization', 'images'], url: 'https://nextjs.org/docs/app/building-your-application/optimizing/images', title: 'Image Optimization' },
+  { keywords: ['link', 'next/link', 'navigation', 'navigate'], url: 'https://nextjs.org/docs/app/building-your-application/routing/linking-and-navigating', title: 'Linking & Navigating' },
+  { keywords: ['static generation', 'ssg', 'static site', 'static rendering'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/static-and-dynamic-rendering', title: 'Static & Dynamic Rendering' },
+  { keywords: ['incremental static regeneration', 'isr', 'revalidation', 'revalidate'], url: 'https://nextjs.org/docs/app/building-your-application/caching#revalidating-data', title: 'Revalidation (ISR)' },
+  { keywords: ['dynamic rendering', 'streaming', 'rsc', 'server components', 'react server components'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/server-components', title: 'React Server Components' },
+  { keywords: ['client components', 'use client', 'client side'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/client-components', title: 'Client Components' },
+  { keywords: ['env', 'environment variables', 'environment', '.env'], url: 'https://nextjs.org/docs/app/building-your-application/configuring/environment-variables', title: 'Environment Variables' },
+  { keywords: ['next config', 'next.config.js', 'next.config.ts', 'configuration', 'config'], url: 'https://nextjs.org/docs/app/api-reference/next-config-js', title: 'next.config.js' },
+  { keywords: ['deployment', 'vercel deploy', 'deploy', 'production'], url: 'https://nextjs.org/docs/app/building-your-application/deploying', title: 'Deployment' },
+  { keywords: ['layout', 'layouts', 'root layout'], url: 'https://nextjs.org/docs/app/building-your-application/routing/layouts-and-templates', title: 'Layouts and Templates' },
+  { keywords: ['loading', 'loading ui', 'suspense'], url: 'https://nextjs.org/docs/app/building-your-application/routing/loading-ui-and-streaming', title: 'Loading UI and Streaming' },
+  { keywords: ['error handling', 'error', 'error.tsx'], url: 'https://nextjs.org/docs/app/building-your-application/routing/error-handling', title: 'Error Handling' },
+  { keywords: ['parallel routes', 'parallel'], url: 'https://nextjs.org/docs/app/building-your-application/routing/parallel-routes', title: 'Parallel Routes' },
+  { keywords: ['intercepting routes', 'intercepting'], url: 'https://nextjs.org/docs/app/building-your-application/routing/intercepting-routes', title: 'Intercepting Routes' },
 ];
 
 function resolveNextDocsTopic(raw: string): { url: string; title: string } | null {
@@ -101,12 +107,33 @@ const getNextJsDocsTool = tool(
     if (!topic) throw new Error('Topic cannot be empty');
     const resolved = resolveNextDocsTopic(topic);
     if (!resolved) {
-      return `No direct match found for "${topic}". Try a more specific Next.js concept (e.g. "app router", "middleware", "server actions").`;
+      return `No direct match found for "${topic}". 
+
+Available topics:
+- "app router" - App Router routing and layouts
+- "pages router" - Pages Router (legacy)
+- "data fetching" - Data fetching with fetch API
+- "server actions" - Server Actions for mutations
+- "api routes" or "route handlers" - API endpoints
+- "middleware" - Middleware for request handling
+- "metadata" - SEO and metadata
+- "next/image" - Image optimization
+- "next/link" - Client-side navigation
+- "static generation" or "ssg" - Static site generation
+- "isr" - Incremental Static Regeneration
+- "rsc" or "server components" - React Server Components
+- "environment variables" or "env" - Environment config
+- "next.config.js" or "configuration" - Next.js config
+- "deployment" - Deployment guides
+
+Try one of these specific topics.`;
     }
     let content: string;
     try {
+      console.log(`📚 Fetching Next.js docs: ${resolved.title} from ${resolved.url}`);
       content = await fetchNextDocsPage(resolved.url);
     } catch (err) {
+      console.error(`Failed to fetch Next.js docs: ${(err as Error).message}`);
       return `Failed retrieving Next.js docs for ${resolved.title} (${resolved.url}): ${(err as Error).message}`;
     }
     // Optional simple query filter: highlight lines containing query
@@ -115,18 +142,33 @@ const getNextJsDocsTool = tool(
       const q = query.toLowerCase();
       const matched = lines.filter(l => l.toLowerCase().includes(q));
       if (matched.length) {
-        const preview = matched.slice(0, 8).join('\n');
-        return `Next.js Docs: ${resolved.title}\nSource: ${resolved.url}\nQuery: ${query}\n--- Filtered Matches ---\n${preview}`;
+        const preview = matched.slice(0, 10).join('\n');
+        return `📚 Next.js Official Documentation: ${resolved.title}
+Source: ${resolved.url}
+Query Filter: "${query}"
+
+--- Relevant Excerpts ---
+${preview}
+
+--- End of Documentation ---`;
       }
     }
-    return `Next.js Docs: ${resolved.title}\nSource: ${resolved.url}\n--- Excerpt ---\n${content}`;
+    return `📚 Next.js Official Documentation: ${resolved.title}
+Source: ${resolved.url}
+
+--- Documentation Content ---
+${content}
+
+--- End of Documentation ---
+
+Use this information to provide accurate, up-to-date guidance. Do not add information not present in these docs.`;
   },
   {
     name: 'get_nextjs_docs',
-    description: 'Fetch and summarize official Next.js documentation for a topic; optional query filters lines containing a term.',
+    description: 'CRITICAL TOOL: Fetch official Next.js documentation before answering ANY Next.js questions. This prevents hallucination and ensures accuracy. Use this for questions about Next.js features, APIs, routing, data fetching, components, or configuration. Always call this tool BEFORE providing Next.js-specific advice.',
     schema: z.object({
-      topic: z.string().min(1).describe('The Next.js topic or API (e.g. "app router", "middleware", "next/image")'),
-      query: z.string().min(2).optional().describe('Optional term to filter relevant lines within the doc excerpt'),
+      topic: z.string().min(1).describe('The Next.js topic or API to look up (e.g., "app router", "server actions", "middleware", "next/image", "data fetching", "route handlers")'),
+      query: z.string().min(2).optional().describe('Optional search term to filter relevant lines within the documentation'),
     }),
   }
 );
@@ -135,8 +177,8 @@ const getNextJsDocsTool = tool(
 const baseTools = [getNextJsDocsTool];
 
 const model = new AzureOpenAiChatClient({
-  modelName: 'gpt-4.1',
-  temperature: 0.3
+  modelName: 'gpt-5',
+  temperature: 0.1  // Lower temperature for more reliable tool calling and less hallucination
 });
 
 // Create a factory function to build the workflow with dynamic tools
@@ -351,7 +393,7 @@ export async function invokeNextJsAgent(
       response: lastAIMessage && typeof lastAIMessage.content === 'string' 
         ? lastAIMessage.content 
         : 'No response content',
-      messages: filteredMessages,
+      messages: filteredMessages as MessageArray,
     };
   } catch (error) {
     console.error('Error in invokeNextJsAgent:', error);
