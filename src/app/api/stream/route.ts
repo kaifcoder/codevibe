@@ -163,6 +163,52 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      const handleFileUpdate = (data: AgentEventData & { filePath?: string; content?: string; action?: 'start' | 'update' | 'complete' }) => {
+        if (data.sessionId === sessionId) {
+          send(`data: ${JSON.stringify({
+            type: 'file_update',
+            data: {
+              sessionId: data.sessionId,
+              filePath: data.filePath,
+              content: data.content,
+              action: data.action,
+            }
+          })}
+
+`);
+        }
+      };
+
+      const handleCodePatch = (data: AgentEventData & { filePath?: string; content?: string; action?: 'start' | 'patch' | 'complete' }) => {
+        if (data.sessionId === sessionId) {
+          send(`data: ${JSON.stringify({
+            type: 'code_patch',
+            data: {
+              sessionId: data.sessionId,
+              filePath: data.filePath,
+              content: data.content,
+              action: data.action,
+            }
+          })}
+
+`);
+        }
+      };
+
+      const handleFileTreeSync = (data: AgentEventData & { fileTree?: unknown }) => {
+        if (data.sessionId === sessionId) {
+          send(`data: ${JSON.stringify({
+            type: 'file_tree_sync',
+            data: {
+              sessionId: data.sessionId,
+              fileTree: data.fileTree,
+            }
+          })}
+
+`);
+        }
+      };
+
       // Listen for different types of events
       globalEventEmitter.on('agent:status', handleAgentUpdate);
       globalEventEmitter.on('agent:partial', handlePartialContent);
@@ -171,6 +217,9 @@ export async function GET(request: NextRequest) {
       globalEventEmitter.on('agent:complete', handleComplete);
       globalEventEmitter.on('agent:error', handleError);
       globalEventEmitter.on('agent:reasoning', handleReasoning);
+      globalEventEmitter.on('agent:fileUpdate', handleFileUpdate);
+      globalEventEmitter.on('agent:codePatch', handleCodePatch);
+      globalEventEmitter.on('agent:fileTreeSync', handleFileTreeSync);
 
       // Keep connection alive with periodic heartbeat
       const heartbeat = setInterval(() => {
@@ -190,6 +239,9 @@ export async function GET(request: NextRequest) {
         globalEventEmitter.off('agent:complete', handleComplete);
         globalEventEmitter.off('agent:error', handleError);
         globalEventEmitter.off('agent:reasoning', handleReasoning);
+        globalEventEmitter.off('agent:fileUpdate', handleFileUpdate);
+        globalEventEmitter.off('agent:codePatch', handleCodePatch);
+        globalEventEmitter.off('agent:fileTreeSync', handleFileTreeSync);
         try {
           controller.close();
         } catch {

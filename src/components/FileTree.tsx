@@ -1,6 +1,15 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { FolderIcon, FileIcon } from "lucide-react";
+import { 
+  ChevronRight, 
+  ChevronDown,
+  Folder,
+  FolderOpen,
+  FileCode,
+  FileJson,
+  FileText,
+  File
+} from "lucide-react";
 
 export type FileNode = {
   name: string;
@@ -8,6 +17,24 @@ export type FileNode = {
   type: "file" | "folder";
   children?: FileNode[];
 };
+
+function getFileIcon(fileName: string) {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'ts':
+    case 'tsx':
+    case 'js':
+    case 'jsx':
+      return FileCode;
+    case 'json':
+      return FileJson;
+    case 'md':
+    case 'txt':
+      return FileText;
+    default:
+      return File;
+  }
+}
 
 export interface FileTreeProps {
   nodes: FileNode[];
@@ -57,30 +84,34 @@ export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }
   }, [streamingFile, selected]);
 
   return (
-    <div className="w-full flex flex-col gap-0.5 h-full overflow-y-auto">
-      {nodes.map((node) => (
-        <div key={node.path} className="select-none flex">
-          {/* Indentation lines */}
-          {Array.from({ length: level }).map((_, i) => (
-            <div key={`indent-${level}-${i}`} className="w-4 border-l border-border h-full" />
-          ))}
-          <div className="flex-1">
+    <div className="w-full flex flex-col h-full overflow-y-auto text-sm bg-muted/20">
+      {nodes.map((node) => {
+        const FileIconComponent = node.type === "file" ? getFileIcon(node.name) : null;
+        return (
+        <div key={node.path} className="select-none">
+          <div style={{ paddingLeft: `${level * 12}px` }}>
             {node.type === "folder" ? (
               <>
                 <button
                   type="button"
                   className={cn(
-                    "flex items-center gap-2 py-1 rounded text-sm cursor-pointer transition w-full font-semibold hover:bg-muted/40",
-                    open[node.path] && "bg-muted/60"
+                    "flex items-center gap-1.5 px-2 py-0.5 text-sm cursor-pointer transition w-full hover:bg-accent/50",
+                    selected.startsWith(node.path) && "bg-accent/30"
                   )}
                   onClick={() => setOpen((prev) => ({ ...prev, [node.path]: !prev[node.path] }))}
                   aria-expanded={open[node.path] ? "true" : "false"}
                 >
-                  <span className="w-4 flex items-center justify-center">
-                    <span className={cn("inline-block transition-transform", open[node.path] && "rotate-90")}>▶</span>
-                  </span>
-                  <FolderIcon className={cn("w-4 h-4", open[node.path] ? "text-primary" : "text-muted-foreground")} />
-                  <span className="text-base font-medium text-foreground">{node.name}</span>
+                  {open[node.path] ? (
+                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  )}
+                  {open[node.path] ? (
+                    <FolderOpen className="w-4 h-4 text-blue-500 shrink-0" />
+                  ) : (
+                    <Folder className="w-4 h-4 text-blue-500 shrink-0" />
+                  )}
+                  <span className="font-medium truncate">{node.name}</span>
                 </button>
                 {open[node.path] && node.children && (
                   <FileTree
@@ -96,26 +127,28 @@ export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }
               <button
                 type="button"
                 className={cn(
-                  "flex items-center gap-2 text-left py-1 rounded text-sm cursor-pointer transition w-full",
+                  "flex items-center gap-1.5 text-left px-2 py-0.5 text-sm transition w-full cursor-pointer",
                   selected === node.path
-                    ? "bg-primary/10 text-primary font-semibold"
-                    : "hover:bg-muted/40",
-                  streamingFile === node.path && "bg-yellow-100 dark:bg-yellow-900/20 animate-pulse"
+                    ? "bg-accent text-accent-foreground"
+                    : "hover:bg-accent/50",
+                  streamingFile === node.path && "bg-blue-500/10 animate-pulse"
                 )}
                 onClick={() => onSelect(node.path)}
               >
-                <FileIcon className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <div className="w-3.5 h-3.5 shrink-0" />
+                {FileIconComponent && <FileIconComponent className="w-4 h-4 text-muted-foreground shrink-0" />}
                 <span className="truncate">{node.name}</span>
                 {streamingFile === node.path && (
-                  <div className="ml-auto">
-                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+                  <div className="ml-auto shrink-0">
+                    <div className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse" />
                   </div>
                 )}
               </button>
             )}
           </div>
         </div>
-      ))}
+      );
+      })}
     </div>
   );
 }

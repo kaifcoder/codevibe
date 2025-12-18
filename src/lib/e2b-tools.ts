@@ -3,15 +3,23 @@
 import { getSandbox } from '@/lib/sandbox-utils';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
+import { globalEventEmitter } from '@/lib/event-emitter';
 
 // Factory to create tools bound to a specific sbxId
-export function makeE2BTools(sbxId: string) {
+export function makeE2BTools(sbxId: string, sessionId?: string) {
   
   // Helper function to get sandbox with error handling
   async function getSandboxSafe() {
     const sbx = await getSandbox(sbxId);
     if (!sbx) {
-      throw new Error(`Sandbox with ID ${sbxId} not found or failed to initialize`);
+      // Emit sandbox deleted event so agent can recreate
+      if (sessionId) {
+        globalEventEmitter.emit('agent:sandboxDeleted', {
+          sessionId,
+          oldSandboxId: sbxId
+        });
+      }
+      throw new Error(`Sandbox ${sbxId} was deleted or expired. Please create a new sandbox.`);
     }
     return sbx;
   }
@@ -54,30 +62,50 @@ export function makeE2BTools(sbxId: string) {
   const writeFile = tool(
     async ({ path, content }: { path: string; content: string }) => {
       try {
-        const sbx = await getSandboxSafe();
-        
         if (!content && content !== '') {
           throw new Error('Content cannot be null or undefined. Use empty string for empty files.');
         }
 
-        // Create directory structure if it doesn't exist
-        const dirPath = path.substring(0, path.lastIndexOf('/'));
-        if (dirPath && dirPath !== path) {
-          try {
-            await sbx.files.makeDir(dirPath);
-          } catch (error) {
-            // Directory might already exist, that's fine
-            console.log(`Directory ${dirPath} might already exist:`, error);
-          }
+        // Emit code patch start event
+        if (sessionId) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            action: 'start'
+          });
         }
 
-        await sbx.files.write(path, content);
+        // Emit code patch with content - editor will handle writing to e2b
+        if (sessionId) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            content,
+            action: 'patch'
+          });
+          
+          // Emit complete event
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            content,
+            action: 'complete'
+          });
+        }
         
         const stats = content.length;
-        return `✅ Successfully wrote ${stats} characters to ${path} in sandbox ${sbxId}`;
+        return `✅ Successfully wrote ${stats} characters to ${path}. Content will be synced to sandbox.`;
       } catch (error) {
-        console.error('Error writing file in sandbox:', error);
-        throw new Error(`Failed to write file ${path} in sandbox ${sbxId}: ${error instanceof Error ? error.message : String(error)}`);
+        // Emit unlock on error
+        if (sessionId) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            action: 'complete'
+          });
+        }
+        console.error('Error emitting code patch:', error);
+        throw new Error(`Failed to write file ${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
     {
@@ -127,7 +155,7 @@ export function makeE2BTools(sbxId: string) {
       try {
         const sbx = await getSandboxSafe();
         
-        // Read existing content
+        // Read existing content first
         let existingContent = '';
         try {
           existingContent = await sbx.files.read(path);
@@ -136,8 +164,26 @@ export function makeE2BTools(sbxId: string) {
           if (operation === 'append' || operation === 'prepend') {
             existingContent = '';
           } else {
+            // Unlock on error
+            if (sessionId) {
+              globalEventEmitter.emit('agent:fileUpdate', {
+                sessionId,
+                filePath: path,
+                action: 'complete'
+              });
+            }
             throw new Error(`File ${path} does not exist. Use e2b_write_file to create it first.`);
           }
+        }
+
+        // Emit code patch start event
+        if (sessionId) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            content: existingContent,
+            action: 'start'
+          });
         }
 
         let newContent = existingContent;
@@ -169,7 +215,17 @@ export function makeE2BTools(sbxId: string) {
               throw new Error('searchText and replaceText are required for replace_text operation');
             }
             if (!existingContent.includes(searchText)) {
-              throw new Error(`Search text "${searchText}" not found in file ${path}`);
+              // Unlock on error
+              if (sessionId) {
+                globalEventEmitter.emit('agent:codePatch', {
+                  sessionId,
+                  filePath: path,
+                  action: 'complete'
+                });
+              }
+              // Provide helpful error message with file preview
+              const contentPreview = existingContent.substring(0, 500);
+              throw new Error(`Search text not found in file ${path}. The file may have been modified or the search text doesn't match exactly. File starts with: ${contentPreview}... Consider using e2b_read_file to see current content, or use e2b_write_file to replace the entire file instead.`);
             }
             newContent = existingContent.replace(new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), replaceText);
             const replacements = (existingContent.match(new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
@@ -193,9 +249,35 @@ export function makeE2BTools(sbxId: string) {
             throw new Error(`Unknown operation: ${operation}`);
         }
 
-        await sbx.files.write(path, newContent);
+        // Don't write to e2b yet - let the editor sync handle it
+        // Emit code patch events for streaming updates
+        if (sessionId) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            content: newContent,
+            action: 'patch'
+          });
+          
+          // Emit complete event
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            content: newContent,
+            action: 'complete'
+          });
+        }
+        
         return `✏️ ${operationDescription} in ${path}. File now has ${newContent.length} characters.`;
       } catch (error) {
+        // Unlock on error
+        if (sessionId) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId,
+            filePath: path,
+            action: 'complete'
+          });
+        }
         console.error('Error editing file in sandbox:', error);
         throw new Error(`Failed to edit file ${path} in sandbox ${sbxId}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -294,7 +376,146 @@ export function makeE2BTools(sbxId: string) {
     }
   );
 
-  return [runCommand, writeFile, readFile, editFile, listFiles, deleteFile, createDirectory];
+  // Recursively list all files in sandbox filesystem (excluding node_modules)
+  const listFilesRecursive = tool(
+    async ({ rootPath = '/home/user', excludePaths }: { 
+      rootPath?: string; 
+      excludePaths?: string[];
+    }) => {
+      try {
+        const sbx = await getSandboxSafe();
+        const defaultExcludes = ['node_modules', '.git', '.next', 'dist', 'build', '.cache', 'components/ui', 'nextjs-app'];
+        const excludes = new Set([...defaultExcludes, ...(excludePaths || [])]);
+        
+        // Binary file extensions to exclude
+        const binaryExtensions = new Set([
+          '.ico', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp',
+          '.mp4', '.mov', '.avi', '.mp3', '.wav',
+          '.zip', '.tar', '.gz', '.rar',
+          '.exe', '.dll', '.so', '.dylib',
+          '.pdf', '.doc', '.docx',
+          '.woff', '.woff2', '.ttf', '.otf', '.eot'
+        ]);
+        
+        const lockFiles = new Set(['.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
+        
+        function isBinaryFile(fileName: string): boolean {
+          const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+          return binaryExtensions.has(ext) || lockFiles.has(fileName);
+        }
+
+        interface FileInfo {
+          name: string;
+          path: string;
+          type: 'file' | 'folder';
+          children?: FileInfo[];
+          content?: string;
+        }
+
+        async function processFile(file: any, fullPath: string, relativePath: string): Promise<FileInfo | null> {
+          const isDirectory = file.type === 'dir';
+          
+          if (isDirectory) {
+            const children = await listRecursive(fullPath);
+            if (children.length > 0) {
+              return {
+                name: file.name,
+                path: relativePath,
+                type: 'folder',
+                children
+              };
+            }
+            return null;
+          }
+          
+          // Handle file
+          // Skip binary files
+          if (isBinaryFile(file.name)) {
+            return null;
+          }
+          
+          let content = '';
+          try {
+            if (file.size < 100000) {
+              const rawContent = await sbx.files.read(fullPath);
+              // Remove null bytes that PostgreSQL can't handle
+              content = rawContent.replaceAll('\x00', '');
+            }
+          } catch (err) {
+            console.warn(`Could not read file ${fullPath}:`, err);
+          }
+          
+          return {
+            name: file.name,
+            path: relativePath,
+            type: 'file',
+            content
+          };
+        }
+
+        async function listRecursive(dirPath: string): Promise<FileInfo[]> {
+          try {
+            const files = await sbx.files.list(dirPath);
+            const result: FileInfo[] = [];
+
+            for (const file of files) {
+              if (excludes.has(file.name)) {
+                continue;
+              }
+
+              const fullPath = dirPath === '/' ? `/${file.name}` : `${dirPath}/${file.name}`;
+              const relativePath = fullPath.startsWith('/home/user/') 
+                ? fullPath.substring('/home/user/'.length)
+                : fullPath;
+              
+              // Skip if path contains any excluded directory
+              if (Array.from(excludes).some(exc => relativePath.includes(exc + '/'))) {
+                continue;
+              }
+
+              const processedFile = await processFile(file, fullPath, relativePath);
+              if (processedFile) {
+                result.push(processedFile);
+              }
+            }
+
+            return result.sort((a, b) => {
+              if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            });
+          } catch (error) {
+            console.error(`Error listing directory ${dirPath}:`, error);
+            return [];
+          }
+        }
+
+        const fileTree = await listRecursive(rootPath);
+        
+        // Emit file tree sync event
+        if (sessionId && fileTree.length > 0) {
+          globalEventEmitter.emit('agent:fileTreeSync', {
+            sessionId,
+            fileTree
+          });
+        }
+
+        return JSON.stringify(fileTree, null, 2);
+      } catch (error) {
+        console.error('Error listing files recursively:', error);
+        throw new Error(`Failed to list files in sandbox ${sbxId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+    {
+      name: 'e2b_list_files_recursive',
+      description: 'Recursively list all files and folders in the sandbox filesystem, excluding node_modules and other build artifacts. Returns a complete file tree structure with file contents for files under 100KB.',
+      schema: z.object({
+        rootPath: z.string().optional().describe('Root path to start listing from (defaults to /home/user)'),
+        excludePaths: z.array(z.string()).optional().describe('Additional paths to exclude (node_modules, .git, .next, dist, build, .cache are excluded by default)')
+      }),
+    }
+  );
+
+  return [runCommand, writeFile, readFile, editFile, listFiles, deleteFile, createDirectory, listFilesRecursive];
 }
 
 // Helper function to format file sizes

@@ -237,37 +237,37 @@ export function ChatPanel({
             className="flex items-end gap-2 bg-background rounded-lg border border-border p-2 focus-within:ring-2 focus-within:ring-primary/20 transition-all"
             onSubmit={e => {
               e.preventDefault();
-              if (!isLoading && message.trim()) onSend();
+              if (!isLoading && !isStreaming && message.trim()) onSend();
             }}
           >
             <Textarea
-              placeholder="Type a message... (Shift+Enter for new line)"
+              placeholder={isStreaming ? "Agent is working..." : "Type a message... (Shift+Enter for new line)"}
               value={message}
               onChange={e => setMessage(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  if (!isLoading && message.trim()) onSend();
+                  if (!isLoading && !isStreaming && message.trim()) onSend();
                 }
               }}
-              disabled={isLoading}
+              disabled={isLoading || isStreaming}
               className="flex-1 min-h-[60px] max-h-[200px] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent"
               rows={1}
             />
             <Button
               type="submit"
               size="icon"
-              disabled={isLoading || !message.trim()}
+              disabled={isLoading || isStreaming || !message.trim()}
               className={cn(
                 "transition-all",
-                !message.trim() && "opacity-50"
+                (!message.trim() || isStreaming) && "opacity-50"
               )}
             >
               <LucideSend className="w-4 h-4" />
             </Button>
           </form>
           <p className="text-xs text-muted-foreground mt-2 text-center">
-            Press Enter to send, Shift+Enter for new line
+            {isStreaming ? "⏳ Agent is working on your request..." : "Press Enter to send, Shift+Enter for new line"}
           </p>
         </div>
       )}

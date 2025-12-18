@@ -5,8 +5,7 @@ import * as monaco from "monaco-editor";
 import { useRef, useEffect, useState } from "react";
 import MonacoEditor from "@monaco-editor/react";
 import { Card } from "./ui/card";
-import { Label } from "./ui/label";
-import { Badge } from "./ui/badge";
+import { useTheme } from "next-themes";
 import { initCollaboration } from "@/lib/collaboration/initCollaboration";
 import { bindMonaco } from "@/lib/collaboration/bindMonaco";
 
@@ -22,13 +21,13 @@ interface CodeEditorProps {
   username?: string;
   userId?: string;
   onUsersChange?: (users: Array<{ id: string; name: string; color: string }>) => void;
+  onConnectionStatusChange?: (status: 'connected' | 'disconnected' | 'connecting') => void;
 }
 
 export function CodeEditor({ 
   value, 
   onChange, 
   language = "typescript", 
-  height = 300, 
   label, 
   autoScroll = false,
   collaborative = false,
@@ -36,6 +35,7 @@ export function CodeEditor({
   username,
   userId,
   onUsersChange,
+  onConnectionStatusChange,
 }: Readonly<CodeEditorProps>) {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const bindingRef = useRef<{ destroy: () => void } | null>(null);
@@ -43,6 +43,8 @@ export function CodeEditor({
   const [activeUsers, setActiveUsers] = useState(0);
   const [editorMounted, setEditorMounted] = useState(false);
   const setupInProgressRef = useRef(false);
+  const currentRoomRef = useRef<string>('');
+  const { resolvedTheme } = useTheme();
 
   // Auto-scroll to bottom when content changes and autoScroll is enabled
   useEffect(() => {
@@ -66,26 +68,29 @@ export function CodeEditor({
       return;
     }
 
-    // Prevent duplicate setup
-    if (setupInProgressRef.current) {
-      console.log('[CodeEditor] Setup already in progress, skipping...');
+    // Prevent duplicate setup for the same room
+    if (setupInProgressRef.current && currentRoomRef.current === roomId) {
+      console.log('[CodeEditor] Setup already in progress for this room, skipping...');
       return;
     }
 
-    console.log('[CodeEditor] Starting collaborative setup...');
+    console.log('[CodeEditor] Starting collaborative setup for room:', roomId);
     setupInProgressRef.current = true;
+    currentRoomRef.current = roomId;
     setConnectionStatus('connecting');
+    if (onConnectionStatusChange) {
+      onConnectionStatusChange('connecting');
+    }
     
     const editor = editorRef.current;
     const model = editor.getModel();
     
     if (!model) {
+      setupInProgressRef.current = false;
       return;
     }
 
     try {
-      console.log('[CodeEditor] Initializing collaboration for room:', roomId);
-      
       // Step 1: Initialize collaboration infrastructure
       const { yText, provider } = initCollaboration({
         roomId,
@@ -93,23 +98,39 @@ export function CodeEditor({
         userId,
       });
 
-      console.log('[CodeEditor] Collaboration initialized, awaiting sync...');
+      console.log('[CodeEditor] Collaboration initialized for room:', roomId);
+      console.log('[CodeEditor] Initial state - Value length:', value?.length || 0, 'Yjs length:', yText.length, 'Provider synced:', provider.synced);
       
-      // Set initial content after sync
-      let initialContentSet = false;
-      const setSyncedContent = () => {
-        if (!initialContentSet && yText.length === 0 && value) {
-          console.log('[CodeEditor] Setting initial content');
-          yText.insert(0, value);
-          initialContentSet = true;
+      // Wait for provider to sync before setting content
+      const handleSync = () => {
+        const yjsContent = yText.toJSON();
+        console.log('[CodeEditor] Provider synced - Yjs length:', yText.length, 'Value length:', value?.length || 0);
+        
+        if (yText.length === 0) {
+          // Empty Yjs document - initialize with value from props
+          if (value && value.length > 0) {
+            console.log('[CodeEditor] Initializing empty Yjs document with content from props');
+            yText.insert(0, value);
+            onChange(value); // Notify parent immediately
+          }
+        } else {
+          // Yjs document has content - this is the source of truth
+          console.log('[CodeEditor] Using existing Yjs content as source of truth');
+          if (model.getValue() !== yjsContent) {
+            model.setValue(yjsContent);
+          }
+          // Always notify parent of current Yjs content
+          onChange(yjsContent);
         }
       };
 
       if (provider.synced) {
-        setSyncedContent();
+        console.log('[CodeEditor] Provider already synced, applying content immediately');
+        handleSync();
       } else {
+        console.log('[CodeEditor] Waiting for provider to sync...');
         const onSynced = () => {
-          setSyncedContent();
+          handleSync();
           provider.off('synced', onSynced);
         };
         provider.on('synced', onSynced);
@@ -128,12 +149,19 @@ export function CodeEditor({
       // Handle connection status
       provider.on('status', (event: { status: string }) => {
         console.log('[CodeEditor] Connection status:', event.status);
-        setConnectionStatus(event.status === 'connected' ? 'connected' : 'disconnected');
+        const newStatus = event.status === 'connected' ? 'connected' : 'disconnected';
+        setConnectionStatus(newStatus);
+        if (onConnectionStatusChange) {
+          onConnectionStatusChange(newStatus);
+        }
       });
 
       provider.on('connection-error', (error: Error) => {
         console.error('[CodeEditor] Connection error:', error);
         setConnectionStatus('disconnected');
+        if (onConnectionStatusChange) {
+          onConnectionStatusChange('disconnected');
+        }
       });
 
       // Track active users with debouncing to prevent excessive updates
@@ -183,76 +211,103 @@ export function CodeEditor({
         }
         changeTimeout = setTimeout(() => {
           const textContent = yText.toJSON();
+          console.log('[CodeEditor] Yjs content changed, notifying parent. Length:', textContent.length);
           onChange(textContent);
         }, 200); // Wait 200ms after last change
       });
 
       setConnectionStatus('connected');
+      if (onConnectionStatusChange) {
+        onConnectionStatusChange('connected');
+      }
 
-      // Cleanup on unmount
+      // Cleanup on unmount or when roomId changes
       return () => {
-        console.log('[CodeEditor] Cleaning up collaborative editing...');
+        console.log('[CodeEditor] Cleaning up collaborative editing for room:', roomId);
         
         if (updateTimeout) clearTimeout(updateTimeout);
         if (changeTimeout) clearTimeout(changeTimeout);
         
         if (bindingRef.current) {
+          console.log('[CodeEditor] Destroying binding...');
           bindingRef.current.destroy();
           bindingRef.current = null;
         }
         
+        if (provider) {
+          console.log('[CodeEditor] Disconnecting provider...');
+          provider.disconnect();
+          provider.destroy();
+        }
+        
         setupInProgressRef.current = false;
         setConnectionStatus('disconnected');
+        if (onConnectionStatusChange) {
+          onConnectionStatusChange('disconnected');
+        }
       };
     } catch (error) {
       console.error('[Yjs] Failed to setup collaborative editing:', error);
       setupInProgressRef.current = false;
       setConnectionStatus('disconnected');
+      if (onConnectionStatusChange) {
+        onConnectionStatusChange('disconnected');
+      }
     }
+    // Only re-run when roomId or collaborative flag changes, not on every prop update
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collaborative, roomId, username, userId, editorMounted]);
+  }, [collaborative, roomId, editorMounted]);
 
   const handleEditorDidMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
     console.log('[CodeEditor] Editor mounted, collaborative:', collaborative, 'roomId:', roomId);
     editorRef.current = editor;
     setEditorMounted(true);
   };
+  
+  // Update editor read-only state dynamically when agentEditing changes
+  useEffect(() => {
+    if (editorRef.current && collaborative) {
+      // In collaborative mode, only disable editing when not connected
+      editorRef.current.updateOptions({
+        readOnly: connectionStatus !== 'connected',
+      });
+    }
+  }, [collaborative, connectionStatus]);
   return (
-    <Card className="w-full h-full flex-1 flex flex-col p-0 overflow-hidden">
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        {label && <Label className="block">{label}</Label>}
-        {collaborative && (
+    <Card className="w-full h-full flex-1 flex flex-col p-0 overflow-hidden border-0 shadow-none rounded-none">
+      {label && (
+        <div className="flex items-center justify-between px-3 py-1.5 border-b text-xs bg-muted/30">
           <div className="flex items-center gap-2">
-            <Badge 
-              variant={connectionStatus === 'connected' ? 'default' : 'secondary'}
-              className="text-xs"
-            >
-              {connectionStatus === 'connected' && (
-                <span className="w-2 h-2 rounded-full bg-green-500 mr-1.5 animate-pulse" />
-              )}
-              {connectionStatus === 'connecting' && (
-                <span className="w-2 h-2 rounded-full bg-yellow-500 mr-1.5 animate-pulse" />
-              )}
-              {connectionStatus === 'disconnected' && (
-                <span className="w-2 h-2 rounded-full bg-gray-500 mr-1.5" />
-              )}
-              {connectionStatus}
-            </Badge>
-            {connectionStatus === 'connected' && activeUsers > 0 && (
-              <Badge variant="outline" className="text-xs">
-                {activeUsers} {activeUsers === 1 ? 'user' : 'users'}
-              </Badge>
-            )}
+            <span className="font-medium text-muted-foreground">{label}</span>
           </div>
-        )}
-      </div>
+          {collaborative && (
+            <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  connectionStatus === 'connected' ? 'bg-green-500' : 
+                  connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' : 
+                  'bg-gray-400'
+                }`} />
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                  {connectionStatus === 'connected' ? 'Live' : connectionStatus}
+                </span>
+              </div>
+              {connectionStatus === 'connected' && activeUsers > 0 && (
+                <span className="text-[10px] text-muted-foreground">
+                  • {activeUsers} {activeUsers === 1 ? 'user' : 'users'}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 h-full">
         <MonacoEditor
           value={collaborative ? undefined : value}
           onChange={collaborative ? undefined : onChange}
           language={language}
           height="100%"
-          theme="vs-dark"
+          theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
           onMount={handleEditorDidMount}
           options={{
             fontSize: 14,
@@ -260,7 +315,8 @@ export function CodeEditor({
             scrollBeyondLastLine: false,
             wordWrap: "on",
             automaticLayout: true,
-            readOnly: collaborative && connectionStatus !== 'connected',
+            readOnly: collaborative ? connectionStatus !== 'connected' : false,
+            cursorStyle: 'line',
           }}
         />
       </div>

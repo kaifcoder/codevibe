@@ -114,7 +114,7 @@ export const saveSessionMemoryTool = tool(
     description: 'Save information about the current session for future reference. Use this to remember user preferences, conversation topics, files being worked on, or completed tasks.',
     schema: z.object({
       category: z.enum(['preferences', 'context', 'tasks']).describe('The category of memory to save'),
-      data: z.record(z.any()).describe('The data to save as a JSON object'),
+      data: z.union([z.record(z.string(), z.any()), z.object({}).passthrough()]).describe('The data to save as a JSON object with key-value pairs'),
     }),
   }
 );
