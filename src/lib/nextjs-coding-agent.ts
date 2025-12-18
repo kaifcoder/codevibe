@@ -28,7 +28,7 @@ const model = new AzureOpenAiChatClient({
   temperature: 1  // GPT-5 only supports temperature=1
 });
 // Create a factory function to build the workflow with dynamic tools
-async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true) {
+async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, sessionId?: string) {
   // Start with base tools
   let allTools = [...baseTools];
   
@@ -43,7 +43,7 @@ async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true) {
   
   // Add E2B tools if sbxId is provided
   if (sbxId) {
-    allTools = [...allTools, ...makeE2BTools(sbxId)];
+    allTools = [...allTools, ...makeE2BTools(sbxId, sessionId)];
   }
   
   // Add additional MCP tools if enabled
@@ -233,7 +233,8 @@ export async function invokeNextJsAgent(
   userPrompt: string,
   sbxId?: string,
   prevMessages: MessageArray = [],
-  enableMCP: boolean = false
+  enableMCP: boolean = false,
+  sandboxUrl?: string
 ): Promise<{ response: string; messages: MessageArray }> {
   if (!userPrompt) {
     throw new Error('User prompt cannot be empty');
@@ -249,7 +250,7 @@ export async function invokeNextJsAgent(
   };
 
   // Create system prompt with appropriate tool descriptions
-  const systemPrompt = createSystemPrompt(sbxId);
+  const systemPrompt = createSystemPrompt(sbxId, sandboxUrl);
   const compactedPrev = compactPrevMessages(prevMessages);
   const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
 
@@ -290,7 +291,9 @@ export async function* streamNextJsAgent(
   userPrompt: string,
   sbxId?: string,
   prevMessages: MessageArray = [],
-  enableMCP: boolean = false
+  enableMCP: boolean = false,
+  sessionId?: string,
+  sandboxUrl?: string
 ): AsyncGenerator<StreamResponse, void, unknown> {
   if (!userPrompt) {
     yield { content: 'User prompt cannot be empty', type: 'error' };
@@ -299,7 +302,7 @@ export async function* streamNextJsAgent(
 
   try {
     // Create workflow with dynamic tools based on sbxId
-    const app = await createAgentWorkflow(sbxId, enableMCP);
+    const app = await createAgentWorkflow(sbxId, enableMCP, sessionId);
     const config = { 
       configurable: { 
         thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session' 
@@ -308,7 +311,7 @@ export async function* streamNextJsAgent(
     };
 
     // Create system prompt with appropriate tool descriptions
-    const systemPrompt = createSystemPrompt(sbxId);
+    const systemPrompt = createSystemPrompt(sbxId, sandboxUrl);
     const compactedPrev = compactPrevMessages(prevMessages);
     const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
 

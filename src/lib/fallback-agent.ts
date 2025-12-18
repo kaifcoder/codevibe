@@ -79,6 +79,9 @@ export class FallbackAgent {
 
   private async getSandboxUrl(sandboxId: string): Promise<string> {
     const sbx = await getSandbox(sandboxId);
+    if (!sbx) {
+      throw new Error(`Sandbox ${sandboxId} not found or expired`);
+    }
     const host = sbx.getHost(3000);
     return `https://${host}`;
   }
@@ -124,20 +127,75 @@ export class FallbackAgent {
       // Handle existing sandbox
       if (analysisResult.useExistingSandbox && 'sandboxId' in analysisResult && analysisResult.sandboxId) {
         sbxId = analysisResult.sandboxId;
-        sbxUrl = await this.getSandboxUrl(sbxId);
         
-        // Emit sandbox event immediately
-        await emitSSEEvent('sandbox', {
-          sandboxId: sbxId,
-          sandboxUrl: sbxUrl,
-          isNew: false
-        });
-        
-        onUpdate?.({
-          type: 'sandbox',
-          content: `🔗 Connected to existing sandbox: ${sbxId}`,
-          data: { sandboxId: sbxId, sandboxUrl: sbxUrl, isNew: false }
-        });
+        // Verify sandbox still exists
+        try {
+          const existingSandbox = await getSandbox(sbxId);
+          
+          if (existingSandbox === null) {
+            // Sandbox was deleted, create a new one
+            console.log(`⚠️ Sandbox ${sbxId} was deleted. Creating new sandbox...`);
+            
+            onUpdate?.({
+              type: 'status',
+              content: `⚠️ Previous sandbox expired. Creating new sandbox...`,
+              data: { oldSandboxId: sbxId }
+            });
+            
+            const sandbox = await this.createSandbox();
+            sbxId = sandbox.sandboxId;
+            sbxUrl = sandbox.sandboxUrl;
+            
+            // Emit event to update session with new sandbox
+            await emitSSEEvent('sandbox', {
+              sandboxId: sbxId,
+              sandboxUrl: sbxUrl,
+              isNew: true,
+              replacedOld: analysisResult.sandboxId
+            });
+            
+            onUpdate?.({
+              type: 'sandbox',
+              content: `✅ New sandbox created: ${sbxId}`,
+              data: { sandboxId: sbxId, sandboxUrl: sbxUrl, isNew: true, replacedOld: analysisResult.sandboxId }
+            });
+          } else {
+            // Sandbox exists, get URL
+            sbxUrl = await this.getSandboxUrl(sbxId);
+            
+            // Emit sandbox event immediately
+            await emitSSEEvent('sandbox', {
+              sandboxId: sbxId,
+              sandboxUrl: sbxUrl,
+              isNew: false
+            });
+            
+            onUpdate?.({
+              type: 'sandbox',
+              content: `🔗 Connected to existing sandbox: ${sbxId}`,
+              data: { sandboxId: sbxId, sandboxUrl: sbxUrl, isNew: false }
+            });
+          }
+        } catch (error) {
+          console.error('Error verifying sandbox:', error);
+          // On error, create new sandbox
+          const sandbox = await this.createSandbox();
+          sbxId = sandbox.sandboxId;
+          sbxUrl = sandbox.sandboxUrl;
+          
+          await emitSSEEvent('sandbox', {
+            sandboxId: sbxId,
+            sandboxUrl: sbxUrl,
+            isNew: true,
+            replacedOld: analysisResult.sandboxId
+          });
+          
+          onUpdate?.({
+            type: 'sandbox',
+            content: `✅ New sandbox created: ${sbxId}`,
+            data: { sandboxId: sbxId, sandboxUrl: sbxUrl, isNew: true }
+          });
+        }
       }
 
       // Create new sandbox only if needed
@@ -206,7 +264,7 @@ export class FallbackAgent {
       }
 
       // Process the streaming response with conversation history
-      for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages)) {
+      for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages, true, sessionId, sbxUrl)) {
         switch (chunk.type) {
           case 'partial': {
             // Check if this chunk contains reasoning

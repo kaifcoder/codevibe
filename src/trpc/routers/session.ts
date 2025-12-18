@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, baseProcedure } from "../init";
+import { getSandbox } from "@/lib/sandbox-utils";
 
 export const sessionRouter = createTRPCRouter({
   // Create a new session
@@ -57,9 +58,11 @@ export const sessionRouter = createTRPCRouter({
         code: z.string().optional(),
         language: z.string().optional(),
         messages: z.array(z.any()).optional(),
+        fileTree: z.array(z.any()).optional(),
         isPublic: z.boolean().optional(),
         sandboxId: z.string().optional(),
         sandboxUrl: z.string().optional(),
+        sandboxCreatedAt: z.date().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -83,6 +86,35 @@ export const sessionRouter = createTRPCRouter({
         shareToken: session.shareToken,
         shareUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/chat/${input.id}?token=${session.shareToken}`,
       };
+    }),
+
+  // Delete a session
+  deleteSession: baseProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      // Get session to retrieve sandboxId
+      const session = await ctx.prisma.session.findUnique({
+        where: { id: input.id },
+      });
+      
+      // Kill sandbox if it exists
+      if (session?.sandboxId) {
+        try {
+          const sandbox = await getSandbox(session.sandboxId);
+          if (sandbox) {
+            await sandbox.kill();
+            console.log(`✅ Killed sandbox ${session.sandboxId} for session ${input.id}`);
+          }
+        } catch (error) {
+          console.error(`Failed to kill sandbox ${session.sandboxId}:`, error);
+          // Continue with session deletion even if sandbox kill fails
+        }
+      }
+      
+      await ctx.prisma.session.delete({
+        where: { id: input.id },
+      });
+      return { success: true };
     }),
 
   // List user's sessions

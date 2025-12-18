@@ -18,4 +18,7 @@ export { attachCursorTracking } from './cursorAwareness';
 export type { CursorTrackingCleanup } from './cursorAwareness';
 
 export { attachCursorLabels } from './cursorLabels';
+
+export { updateYjsDocument } from './updateYjsDocument';
+export { getYjsDocument } from './getYjsDocument';
 export type { CursorLabelsCleanup } from './cursorLabels';

@@ -41,6 +41,7 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <SidebarProvider
+              defaultOpen={false}
               style={
                 {
                   "--sidebar-width": "calc(var(--spacing) * 72)",

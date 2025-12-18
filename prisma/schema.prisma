@@ -27,12 +27,14 @@ model Session {
   code        String   @default("")
   language    String   @default("typescript")
   messages    Json     @default("[]")
+  fileTree    Json     @default("[]")
   shareToken  String   @unique @default(cuid())
-  isPublic    Boolean  @default(false)
-  sandboxId   String?
-  sandboxUrl  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isPublic          Boolean   @default(false)
+  sandboxId         String?
+  sandboxUrl        String?
+  sandboxCreatedAt  DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
   userId      Int?
   user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   
