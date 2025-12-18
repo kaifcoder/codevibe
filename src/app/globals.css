@@ -120,3 +120,119 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Yjs Monaco Collaborative Cursor Styles */
+/* These styles are CRITICAL for cursor awareness to be visible */
+
+/* Remote user cursor selection highlight */
+.yRemoteSelection {
+  background-color: rgba(250, 129, 0, 0.3) !important;
+  margin-right: -1px;
+  pointer-events: none;
+  position: absolute;
+  z-index: 10;
+}
+
+/* The cursor line indicator - VERTICAL LINE */
+.yRemoteSelectionHead {
+  position: absolute;
+  border-left: 2px solid !important;
+  border-top: 2px solid !important;
+  border-bottom: 2px solid !important;
+  border-color: inherit !important;
+  height: 100%;
+  width: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 20;
+  opacity: 1 !important;
+}
+
+/* The cursor dot/handle at the top */
+.yRemoteSelectionHead::after {
+  position: absolute;
+  content: " ";
+  border: 3px solid !important;
+  border-color: inherit !important;
+  border-radius: 4px;
+  left: -4px;
+  top: -5px;
+  pointer-events: none;
+  background-color: inherit;
+  opacity: 1 !important;
+}
+
+/* Fallback for when color isn't set properly */
+.yRemoteSelectionHead:not([style*="border-color"]) {
+  border-color: #FF6B6B !important;
+}
+
+.yRemoteSelectionHead:not([style*="border-color"])::after {
+  border-color: #FF6B6B !important;
+}
+
+/* Custom cursor label styles (used by CodeEditor component) */
+.yjs-cursor-label {
+  position: absolute;
+  z-index: 1000;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  pointer-events: none;
+  animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes cursorBlink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0.3;
+  }
+}
+
+/* Ensure Monaco editor allows overlays to show */
+.monaco-editor .overflow-guard,
+.monaco-editor .lines-content {
+  position: relative;
+}
+
+/* Use y-monaco's built-in cursor decorations */
+.monaco-editor .yRemoteSelection,
+.monaco-editor .yRemoteSelectionHead {
+  visibility: visible !important;
+  display: block !important;
+}
+
+/* Custom remote cursor line decoration */
+.monaco-editor .remote-cursor-line {
+  border-left: 2px solid;
+  position: absolute;
+  width: 0;
+  height: 100%;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.monaco-editor .remote-cursor-line::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: inherit;
+  border: inherit;
+}

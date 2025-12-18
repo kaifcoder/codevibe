@@ -1,7 +1,7 @@
 import { streamNextJsAgent } from "./nextjs-coding-agent";
 import { Sandbox } from '@e2b/code-interpreter';
 import { getSandbox } from "@/lib/sandbox-utils";
-import { getSessionMessages } from "@/lib/session-memory";
+import { getSessionMessages, getWorkSummary, getWorkSummaryText } from "@/lib/agent-memory";
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 
 // Type definitions for agent response
@@ -62,7 +62,9 @@ export class FallbackAgent {
 
   private async createSandbox(): Promise<{ sandboxId: string; sandboxUrl: string }> {
     console.log('🏗️ Creating new sandbox for code execution...');
-    const sbx = await Sandbox.create('codevibe-test');
+    const sbx = await Sandbox.create('codevibe-test', {
+      timeoutMs: 25 * 60 * 1000, // 25 minutes instead of default 5 minutes
+    });
     const host = sbx.getHost(3000);
     const sandboxUrl = `https://${host}`;
     
@@ -124,6 +126,13 @@ export class FallbackAgent {
         sbxId = analysisResult.sandboxId;
         sbxUrl = await this.getSandboxUrl(sbxId);
         
+        // Emit sandbox event immediately
+        await emitSSEEvent('sandbox', {
+          sandboxId: sbxId,
+          sandboxUrl: sbxUrl,
+          isNew: false
+        });
+        
         onUpdate?.({
           type: 'sandbox',
           content: `🔗 Connected to existing sandbox: ${sbxId}`,
@@ -136,6 +145,13 @@ export class FallbackAgent {
         const sandbox = await this.createSandbox();
         sbxId = sandbox.sandboxId;
         sbxUrl = sandbox.sandboxUrl;
+        
+        // Emit sandbox event immediately
+        await emitSSEEvent('sandbox', {
+          sandboxId: sbxId,
+          sandboxUrl: sbxUrl,
+          isNew: true
+        });
         
         onUpdate?.({
           type: 'sandbox',
@@ -155,14 +171,21 @@ export class FallbackAgent {
       let isComplete = false;
 
       // Load previous conversation history from session memory
-      const sessionHistory = sessionId ? getSessionMessages(sessionId) : [];
-      const previousMessages = sessionHistory.map(msg => {
+      const sessionHistory = sessionId ? await getSessionMessages(sessionId) : [];
+      let previousMessages = sessionHistory.map(msg => {
         if (msg.role === 'user') {
           return new HumanMessage(msg.content);
         } else {
           return new AIMessage(msg.content);
         }
       });
+
+      // Trim history to the most recent messages to reduce memory usage
+      const MAX_PREV_MESSAGES = 12;
+      if (previousMessages.length > MAX_PREV_MESSAGES) {
+        previousMessages = previousMessages.slice(-MAX_PREV_MESSAGES);
+        console.log(`✂️ Trimmed previous messages to last ${MAX_PREV_MESSAGES}`);
+      }
 
       if (previousMessages.length > 0) {
         console.log(`📚 Loading ${previousMessages.length} previous messages for context preservation`);
@@ -172,34 +195,59 @@ export class FallbackAgent {
         console.log('📚 No previous messages - starting fresh conversation');
       }
 
+      // Add work summary to the context if available
+      const workSummary = sessionId ? await getWorkSummary(sessionId) : null;
+      const workSummaryText = getWorkSummaryText(workSummary);
+      if (workSummaryText && workSummaryText !== 'No previous work in this session.') {
+        console.log(`📝 Work summary: ${workSummaryText}`);
+        // Prepend work summary to the current prompt
+        const enhancedPrompt = `${workSummaryText}\n\nCurrent request: ${prompt}`;
+        prompt = enhancedPrompt;
+      }
+
       // Process the streaming response with conversation history
       for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages)) {
         switch (chunk.type) {
-          case 'partial':
-            fullResponse += chunk.content;
-            onUpdate?.({
-              type: 'partial',
-              content: chunk.content,
-              data: { fullContent: fullResponse }
-            });
-            // Emit to SSE
-            await emitSSEEvent('partial', {
-              content: chunk.content,
-              fullContent: fullResponse
-            });
+          case 'partial': {
+            // Check if this chunk contains reasoning
+            if (chunk.tool_call_output?.reasoning) {
+              // Emit reasoning separately
+              await emitSSEEvent('reasoning', {
+                reasoning: chunk.content
+              });
+            } else {
+              // Regular content
+              fullResponse += chunk.content;
+              onUpdate?.({
+                type: 'partial',
+                content: chunk.content,
+                data: { fullContent: fullResponse }
+              });
+              // Emit to SSE
+              await emitSSEEvent('partial', {
+                content: chunk.content,
+                fullContent: fullResponse
+              });
+            }
             break;
+          }
             
-          case 'tool_call':
+          case 'tool_call': {
+            const toolCallData = chunk.tool_call_output || { tool: chunk.content };
             onUpdate?.({
               type: 'tool',
               content: `🔧 ${chunk.content}`,
-              data: { tool: chunk.content }
+              data: toolCallData
             });
-            // Emit to SSE
+            // Emit to SSE with full tool call details
             await emitSSEEvent('tool', {
-              tool: chunk.content
+              tool: chunk.content,
+              args: toolCallData.args,
+              result: toolCallData.result,
+              status: toolCallData.status || 'running'
             });
             break;
+          }
             
           case 'error':
             console.error(`❌ Error: ${chunk.content}`);

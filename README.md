@@ -39,12 +39,34 @@ CodeVibe is built with a modular, scalable architecture using the latest web tec
 - **tRPC** (end-to-end typesafe APIs)
 - **Inngest** (event-driven serverless workflows)
 - **E2B** (sandboxed code execution)
+- **LangGraph** (AI agent orchestration with memory)
+- **MCP** (Model Context Protocol for tool integration)
 
-### 3. **Inngest Integration**
+### 3. **Agent Memory System**
+
+The AI coding agent features long-term memory powered by LangGraph persistence:
+- **Session Isolation**: Each user/project maintains separate memory
+- **Context Retention**: Remembers preferences, completed tasks, and project context
+- **Automatic Learning**: Recalls user preferences across conversations
+- **Smart Recall**: Searches past interactions to answer questions
+
+See the [Agent Memory Guide](docs/AGENT_MEMORY.md) for detailed usage.
+
+### 4. **MCP Integration**
+
+CodeVibe integrates the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) to extend the AI coding agent with powerful tools. MCP enables standardized connections to:
+- **Next.js Docs** - Official documentation access
+- **Playwright** - Browser automation and testing
+- **Kubernetes** - Cluster management and monitoring
+- **Git** - Version control operations
+
+See the [MCP Integration Guide](docs/MCP_INTEGRATION.md) for setup and usage.
+
+### 4. **Inngest Integration**
 
 CodeVibe uses [Inngest](https://www.inngest.com/) to power event-driven workflows and serverless functions. Inngest enables scalable, reliable background jobs and automation. Learn more about Inngest at [inngest.com](https://www.inngest.com/) or their [GitHub](https://github.com/inngest/inngest-js).
 
-### 4. **Getting Started**
+### 6. **Getting Started**
 
 1. **Clone the repository:**
    ```bash

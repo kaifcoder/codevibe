@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { appendSessionMessages } from '@/lib/session-memory';
+import { appendSessionMessages } from '@/lib/agent-memory';
 import { globalEventEmitter } from '@/lib/event-emitter';
 
 // Type definitions for streaming events
@@ -83,13 +83,16 @@ export async function GET(request: NextRequest) {
         }
       };
 
-      const handleToolUsed = (data: AgentEventData) => {
+      const handleToolUsed = (data: AgentEventData & { args?: Record<string, unknown>; result?: string; status?: string }) => {
         if (data.sessionId === sessionId) {
           send(`data: ${JSON.stringify({
             type: 'tool',
             data: {
               sessionId: data.sessionId,
               tool: data.tool,
+              args: data.args,
+              result: data.result,
+              status: data.status,
             }
           })}
 
@@ -146,6 +149,20 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      const handleReasoning = (data: AgentEventData & { reasoning?: string }) => {
+        if (data.sessionId === sessionId) {
+          send(`data: ${JSON.stringify({
+            type: 'reasoning',
+            data: {
+              sessionId: data.sessionId,
+              reasoning: data.reasoning,
+            }
+          })}
+
+`);
+        }
+      };
+
       // Listen for different types of events
       globalEventEmitter.on('agent:status', handleAgentUpdate);
       globalEventEmitter.on('agent:partial', handlePartialContent);
@@ -153,6 +170,7 @@ export async function GET(request: NextRequest) {
       globalEventEmitter.on('agent:sandbox', handleSandboxStatus);
       globalEventEmitter.on('agent:complete', handleComplete);
       globalEventEmitter.on('agent:error', handleError);
+      globalEventEmitter.on('agent:reasoning', handleReasoning);
 
       // Keep connection alive with periodic heartbeat
       const heartbeat = setInterval(() => {
@@ -171,6 +189,7 @@ export async function GET(request: NextRequest) {
         globalEventEmitter.off('agent:sandbox', handleSandboxStatus);
         globalEventEmitter.off('agent:complete', handleComplete);
         globalEventEmitter.off('agent:error', handleError);
+        globalEventEmitter.off('agent:reasoning', handleReasoning);
         try {
           controller.close();
         } catch {

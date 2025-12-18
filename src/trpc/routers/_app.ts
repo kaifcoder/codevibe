@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { baseProcedure, createTRPCRouter } from '../init';
 import { fallbackAgent } from '@/lib/fallback-agent';
-import { appendSessionMessages } from '@/lib/session-memory';
+import { appendSessionMessages } from '@/lib/agent-memory';
+import { sessionRouter } from './session';
 
 export const appRouter = createTRPCRouter({
+    session: sessionRouter,
     invoke: baseProcedure
         .input(
             z.object({

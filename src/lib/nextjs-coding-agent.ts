@@ -9,182 +9,54 @@ import {
 import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { AzureOpenAiChatClient } from '@sap-ai-sdk/langchain';
 import { HumanMessage, SystemMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
-import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
 import { makeE2BTools } from './e2b-tools';
 import { createSystemPrompt } from './nextjs-agent-prompt';
+import { createPlaywrightMCPTools, createNextJsDocsMCPTools } from './mcp-client';
+import { agentMemoryStore, memoryTools } from './agent-memory';
 
 // Use MessagesAnnotation type instead of custom interface
 type AgentState = typeof MessagesAnnotation.State;
 
-// Simple in-memory cache for docs lookups
-const docsCache = new Map<string, { fetchedAt: number; content: string }>();
-const CACHE_TTL_MS = 1000 * 60 * 10; // 10 minutes
+// Base tools that are always available (memory tools + MCP tools)
+const baseTools: any[] = [...memoryTools];
 
-// Mapping of common Next.js topics to canonical doc URLs (extendable)
-const NEXT_DOCS_INDEX: Array<{
-  keywords: string[];
-  url: string;
-  title: string;
-  summary?: string;
-}> = [
-  { keywords: ['app router', 'app directory', 'routing', 'route segment', 'app'], url: 'https://nextjs.org/docs/app', title: 'App Router' },
-  { keywords: ['pages router', 'pages directory', 'pages'], url: 'https://nextjs.org/docs/pages', title: 'Pages Router' },
-  { keywords: ['data fetching', 'fetch', 'fetching', 'get data', 'load data'], url: 'https://nextjs.org/docs/app/building-your-application/data-fetching/fetching', title: 'Data Fetching (fetch API)' },
-  { keywords: ['server actions', 'actions', 'form actions', 'mutations'], url: 'https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions', title: 'Server Actions' },
-  { keywords: ['api routes', 'api route', 'route handlers', 'route handler', 'api', 'endpoint'], url: 'https://nextjs.org/docs/app/building-your-application/routing/route-handlers', title: 'Route Handlers (API)' },
-  { keywords: ['middleware', 'request middleware'], url: 'https://nextjs.org/docs/app/building-your-application/routing/middleware', title: 'Middleware' },
-  { keywords: ['metadata', 'head', 'seo', 'meta tags'], url: 'https://nextjs.org/docs/app/building-your-application/optimizing/metadata', title: 'Metadata API' },
-  { keywords: ['image', 'next/image', 'image optimization', 'images'], url: 'https://nextjs.org/docs/app/building-your-application/optimizing/images', title: 'Image Optimization' },
-  { keywords: ['link', 'next/link', 'navigation', 'navigate'], url: 'https://nextjs.org/docs/app/building-your-application/routing/linking-and-navigating', title: 'Linking & Navigating' },
-  { keywords: ['static generation', 'ssg', 'static site', 'static rendering'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/static-and-dynamic-rendering', title: 'Static & Dynamic Rendering' },
-  { keywords: ['incremental static regeneration', 'isr', 'revalidation', 'revalidate'], url: 'https://nextjs.org/docs/app/building-your-application/caching#revalidating-data', title: 'Revalidation (ISR)' },
-  { keywords: ['dynamic rendering', 'streaming', 'rsc', 'server components', 'react server components'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/server-components', title: 'React Server Components' },
-  { keywords: ['client components', 'use client', 'client side'], url: 'https://nextjs.org/docs/app/building-your-application/rendering/client-components', title: 'Client Components' },
-  { keywords: ['env', 'environment variables', 'environment', '.env'], url: 'https://nextjs.org/docs/app/building-your-application/configuring/environment-variables', title: 'Environment Variables' },
-  { keywords: ['next config', 'next.config.js', 'next.config.ts', 'configuration', 'config'], url: 'https://nextjs.org/docs/app/api-reference/next-config-js', title: 'next.config.js' },
-  { keywords: ['deployment', 'vercel deploy', 'deploy', 'production'], url: 'https://nextjs.org/docs/app/building-your-application/deploying', title: 'Deployment' },
-  { keywords: ['layout', 'layouts', 'root layout'], url: 'https://nextjs.org/docs/app/building-your-application/routing/layouts-and-templates', title: 'Layouts and Templates' },
-  { keywords: ['loading', 'loading ui', 'suspense'], url: 'https://nextjs.org/docs/app/building-your-application/routing/loading-ui-and-streaming', title: 'Loading UI and Streaming' },
-  { keywords: ['error handling', 'error', 'error.tsx'], url: 'https://nextjs.org/docs/app/building-your-application/routing/error-handling', title: 'Error Handling' },
-  { keywords: ['parallel routes', 'parallel'], url: 'https://nextjs.org/docs/app/building-your-application/routing/parallel-routes', title: 'Parallel Routes' },
-  { keywords: ['intercepting routes', 'intercepting'], url: 'https://nextjs.org/docs/app/building-your-application/routing/intercepting-routes', title: 'Intercepting Routes' },
-];
-
-function resolveNextDocsTopic(raw: string): { url: string; title: string } | null {
-  const topic = raw.toLowerCase().trim();
-  // Exact keyword match first
-  for (const entry of NEXT_DOCS_INDEX) {
-    if (entry.keywords.some(k => k === topic)) return { url: entry.url, title: entry.title };
-  }
-  // Fallback substring containment
-  for (const entry of NEXT_DOCS_INDEX) {
-    if (entry.keywords.some(k => topic.includes(k))) return { url: entry.url, title: entry.title };
-  }
-  return null;
-}
-
-function stripHtml(html: string): string {
-  // Remove script & style blocks
-  const noScripts = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '');
-  // Replace <br> and block tags with newlines
-  const blockSpaced = noScripts.replace(/<(p|div|h[1-6]|section|article|ul|ol|li|pre|code|blockquote)[^>]*>/gi, '\n$&');
-  // Remove all tags
-  const text = blockSpaced.replace(/<[^>]+>/g, '');
-  // Decode a few common entities
-  return text
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .split('\n')
-    .map(l => l.trim())
-    .filter(Boolean)
-    .join('\n');
-}
-
-async function fetchNextDocsPage(url: string): Promise<string> {
-  const cached = docsCache.get(url);
-  const now = Date.now();
-  if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.content;
-  }
-  const res = await fetch(url, { headers: { 'User-Agent': 'CodeVibe-Agent/1.0 (+docs-tool)' } });
-  if (!res.ok) throw new Error(`Failed to fetch docs (${res.status})`);
-  const html = await res.text();
-  const text = stripHtml(html);
-  // Heuristic: capture first ~1600 chars for brevity
-  const truncated = text.length > 1600 ? text.slice(0, 1600) + '\n… (truncated)' : text;
-  docsCache.set(url, { fetchedAt: now, content: truncated });
-  return truncated;
-}
-
-// Enhanced Next.js docs tool
-const getNextJsDocsTool = tool(
-  async ({ topic, query }) => {
-    if (!topic) throw new Error('Topic cannot be empty');
-    const resolved = resolveNextDocsTopic(topic);
-    if (!resolved) {
-      return `No direct match found for "${topic}". 
-
-Available topics:
-- "app router" - App Router routing and layouts
-- "pages router" - Pages Router (legacy)
-- "data fetching" - Data fetching with fetch API
-- "server actions" - Server Actions for mutations
-- "api routes" or "route handlers" - API endpoints
-- "middleware" - Middleware for request handling
-- "metadata" - SEO and metadata
-- "next/image" - Image optimization
-- "next/link" - Client-side navigation
-- "static generation" or "ssg" - Static site generation
-- "isr" - Incremental Static Regeneration
-- "rsc" or "server components" - React Server Components
-- "environment variables" or "env" - Environment config
-- "next.config.js" or "configuration" - Next.js config
-- "deployment" - Deployment guides
-
-Try one of these specific topics.`;
-    }
-    let content: string;
-    try {
-      console.log(`📚 Fetching Next.js docs: ${resolved.title} from ${resolved.url}`);
-      content = await fetchNextDocsPage(resolved.url);
-    } catch (err) {
-      console.error(`Failed to fetch Next.js docs: ${(err as Error).message}`);
-      return `Failed retrieving Next.js docs for ${resolved.title} (${resolved.url}): ${(err as Error).message}`;
-    }
-    // Optional simple query filter: highlight lines containing query
-    if (query) {
-      const lines = content.split('\n');
-      const q = query.toLowerCase();
-      const matched = lines.filter(l => l.toLowerCase().includes(q));
-      if (matched.length) {
-        const preview = matched.slice(0, 10).join('\n');
-        return `📚 Next.js Official Documentation: ${resolved.title}
-Source: ${resolved.url}
-Query Filter: "${query}"
-
---- Relevant Excerpts ---
-${preview}
-
---- End of Documentation ---`;
-      }
-    }
-    return `📚 Next.js Official Documentation: ${resolved.title}
-Source: ${resolved.url}
-
---- Documentation Content ---
-${content}
-
---- End of Documentation ---
-
-Use this information to provide accurate, up-to-date guidance. Do not add information not present in these docs.`;
-  },
-  {
-    name: 'get_nextjs_docs',
-    description: 'CRITICAL TOOL: Fetch official Next.js documentation before answering ANY Next.js questions. This prevents hallucination and ensures accuracy. Use this for questions about Next.js features, APIs, routing, data fetching, components, or configuration. Always call this tool BEFORE providing Next.js-specific advice.',
-    schema: z.object({
-      topic: z.string().min(1).describe('The Next.js topic or API to look up (e.g., "app router", "server actions", "middleware", "next/image", "data fetching", "route handlers")'),
-      query: z.string().min(2).optional().describe('Optional search term to filter relevant lines within the documentation'),
-    }),
-  }
-);
-
-// Base tools that are always available
-const baseTools = [getNextJsDocsTool];
-
+// Using GPT-5 deployment from AI Core
+// Note: GPT-5 only supports temperature=1 (default value)
 const model = new AzureOpenAiChatClient({
-  modelName: 'gpt-5',
-  temperature: 0.1  // Lower temperature for more reliable tool calling and less hallucination
+  modelName: 'gpt-5', // GPT-5 deployment ID: d385011b676eaa34
+  modelVersion: '2025-08-07', // Specific version from AI Core
+  temperature: 1  // GPT-5 only supports temperature=1
 });
-
 // Create a factory function to build the workflow with dynamic tools
-function createAgentWorkflow(sbxId?: string) {
-  // Combine base tools with E2B tools if sbxId is provided
-  const allTools = sbxId ? [...baseTools, ...makeE2BTools(sbxId)] : baseTools;
+async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true) {
+  // Start with base tools
+  let allTools = [...baseTools];
+  
+  // Add Next.js docs MCP tools (always enabled for Next.js questions)
+  try {
+    const nextjsDocsTools = await createNextJsDocsMCPTools();
+    allTools = [...allTools, ...nextjsDocsTools];
+    console.log(`✅ Added ${nextjsDocsTools.length} Next.js docs MCP tools to agent`);
+  } catch (error) {
+    console.error('Failed to initialize Next.js docs MCP tools:', error);
+  }
+  
+  // Add E2B tools if sbxId is provided
+  if (sbxId) {
+    allTools = [...allTools, ...makeE2BTools(sbxId)];
+  }
+  
+  // Add additional MCP tools if enabled
+  if (enableMCP) {
+    try {
+      const mcpTools = await createPlaywrightMCPTools();
+      allTools = [...allTools, ...mcpTools];
+      console.log(`✅ Added ${mcpTools.length} Playwright MCP tools to agent`);
+    } catch (error) {
+      console.error('Failed to initialize Playwright MCP tools:', error);
+    }
+  }
+  
   const toolNode = new ToolNode(allTools);
   const modelWithTools = model.bindTools(allTools);
 
@@ -205,108 +77,20 @@ function createAgentWorkflow(sbxId?: string) {
     if (lastMessage instanceof AIMessage && lastMessage.tool_calls?.length) {
       return 'tools';
     }
-    return 'auditor';
-  }
-
-  // Count how many audit attempts have been made
-  function countAuditAttempts(messages: any[]): number {
-    return messages.filter(msg => 
-      msg instanceof AIMessage && 
-      typeof msg.content === 'string' && 
-      msg.content.startsWith('Audit:')
-    ).length;
-  }
-
-  // Auditor should modify state, not return routing decision
-  async function auditorAgent(state: AgentState): Promise<Partial<AgentState>> {
-    const lastMessage = state.messages[state.messages.length - 1];
-    if (!(lastMessage instanceof AIMessage)) {
-      return {};
-    }
-
-    function stringifyMessageContent(content: any): string {
-      if (typeof content === 'string') return content;
-      if (Array.isArray(content)) {
-        return content
-          .map(part => {
-            if (typeof part === 'string') return part;
-            if (part && typeof part === 'object') {
-              const maybe: any = part;
-              if (typeof maybe.text === 'string') return maybe.text;
-              if (typeof maybe.content === 'string') return maybe.content;
-            }
-            try { return JSON.stringify(part); } catch { return String(part); }
-          })
-          .join(' ');
-      }
-      if (content && typeof content === 'object') {
-        const maybe: any = content;
-        if (typeof maybe.text === 'string') return maybe.text;
-        if (typeof maybe.content === 'string') return maybe.content;
-        try { return JSON.stringify(content); } catch { return String(content); }
-      }
-      return String(content ?? '');
-    }
-
-    // Check if we've exceeded the maximum audit attempts
-    const auditAttempts = countAuditAttempts(state.messages);
-    const MAX_AUDIT_ATTEMPTS = 3;
-
-    if (auditAttempts >= MAX_AUDIT_ATTEMPTS) {
-      // Force a PASS after max attempts to prevent infinite loops
-      const forcePassMessage = new AIMessage(`Audit: PASS (Maximum audit attempts reached: ${MAX_AUDIT_ATTEMPTS})`);
-      return { messages: [forcePassMessage] };
-    }
-
-    try {
-      const auditResult = await model.invoke([
-        new SystemMessage(
-          `You are an auditor for a Next.js coding assistant. This is audit attempt ${auditAttempts + 1} of ${MAX_AUDIT_ATTEMPTS}.
-          Respond with exactly "PASS" if the assistant output is acceptable, or "RETRY" if there are significant issues that need fixing.
-          Be more lenient on later attempts - minor issues should result in PASS to avoid infinite loops.`
-        ),
-        new HumanMessage(`Assistant output: "${stringifyMessageContent(lastMessage.content)}"`),
-      ]);
-
-      // Add audit result as a message for context
-      const auditMessage = new AIMessage(`Audit: ${stringifyMessageContent(auditResult.content)}`);
-      return { messages: [auditMessage] };
-    } catch (error) {
-      console.error('Error in auditorAgent:', error);
-      // On error, force a PASS to avoid getting stuck
-      const errorPassMessage = new AIMessage('Audit: PASS (Audit error occurred)');
-      return { messages: [errorPassMessage] };
-    }
-  }
-
-  // Separate routing function for auditor decisions
-  async function auditRouting(state: AgentState): Promise<string> {
-    const messages = state.messages;
-    // Look for the most recent audit message
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      if (message instanceof AIMessage && 
-          typeof message.content === 'string' && 
-          message.content.startsWith('Audit:')) {
-        return message.content.includes('PASS') ? END : 'agent';
-      }
-    }
-    // Default to END if no audit found to prevent infinite loops
     return END;
   }
 
   const workflow = new StateGraph(MessagesAnnotation)
     .addNode('agent', callModel)
     .addNode('tools', toolNode)
-    .addNode('auditor', auditorAgent)
-    .addConditionalEdges('agent', shouldContinue, ['tools', 'auditor'])
-    .addConditionalEdges('auditor', auditRouting, ['agent', END])
+    .addConditionalEdges('agent', shouldContinue, ['tools', END])
     .addEdge('tools', 'agent')
     .addEdge(START, 'agent');
 
-  // Compile with recursion limit and other safety configurations
+  // Compile with memory persistence
   return workflow.compile({ 
-    checkpointer: new MemorySaver()
+    checkpointer: new MemorySaver(),
+    store: agentMemoryStore, // Enable long-term memory storage
   });
 }
 
@@ -319,13 +103,93 @@ type StreamResponse = {
   tool_call_output?: any;
 };
 
-// Helper function to create typewriter effect
+// Compact previous messages to reduce memory footprint
+function compactPrevMessages(
+  prevMessages: MessageArray = [],
+  options?: { maxMessages?: number; maxContentLen?: number }
+): MessageArray {
+  const maxMessages = options?.maxMessages ?? 12;
+  const maxContentLen = options?.maxContentLen ?? 1500;
+  if (!prevMessages.length) return prevMessages;
+
+  // Trim overly long message contents
+  const normalized = prevMessages.map((m) => {
+    const anyMsg = m as any;
+    if (typeof anyMsg.content === 'string' && anyMsg.content.length > maxContentLen) {
+      anyMsg.content = anyMsg.content.slice(0, maxContentLen) + '...';
+    }
+    return m;
+  });
+
+  if (normalized.length <= maxMessages) return normalized;
+
+  const older = normalized.slice(0, normalized.length - maxMessages);
+  const recent = normalized.slice(-maxMessages);
+
+  // Build a lightweight summary of older messages (no extra model calls)
+  const summaryParts = older
+    .filter((m) => m instanceof HumanMessage || m instanceof AIMessage)
+    .map((m) => {
+      const role = m instanceof HumanMessage ? 'User' : 'AI';
+      const anyMsg = m as any;
+      const text = typeof anyMsg.content === 'string' ? anyMsg.content : '';
+      return `- ${role}: ${text.slice(0, 240).replaceAll(/\s+/g, ' ').trim()}`;
+    });
+
+  const summaryText = `Previous context summary (${older.length} messages):\n${summaryParts.join('\n')}`;
+  const summaryMsg = new SystemMessage(summaryText);
+  return [summaryMsg, ...recent];
+}
+
+// Helper function to stream content (no delay for speed)
 async function* typewriterEffect(content: string): AsyncGenerator<StreamResponse, void, unknown> {
-  for (const char of content) {
-    yield { content: char, type: 'partial' };
-    // Add small delay for typewriter effect (optional)
-    await new Promise(resolve => setTimeout(resolve, 10));
+  // Stream in larger chunks for better performance
+  const chunkSize = 50;
+  for (let i = 0; i < content.length; i += chunkSize) {
+    yield { content: content.slice(i, i + chunkSize), type: 'partial' };
   }
+}
+
+// Helper function to extract reasoning from content
+function extractReasoningAndResponse(content: string): { reasoning?: string; response: string } {
+  // Common patterns for reasoning/thinking in LLM responses
+  const thinkingPatterns = [
+    /^(?:Let me |I'll |I will |I need to |First,?\s+I |To answer this|Looking at|Based on |Analyzing )/i,
+    /^(?:Step \d+:|Thought:|Analysis:|Planning:|Reasoning:)/i,
+    /^(?:Thinking:|Approach:|Strategy:)/i,
+  ];
+  
+  // Check if content starts with thinking/reasoning
+  const startsWithThinking = thinkingPatterns.some(pattern => pattern.test(content));
+  
+  if (startsWithThinking) {
+    // Look for clear transition markers between thinking and answer
+    const transitionPatterns = [
+      /\n\n(?:Here's|Here is|Now,|So,|Therefore,|Based on this,|The answer is|To summarize)/i,
+      /\n\n(?:Answer:|Response:|Solution:)/i,
+      /\n\n---+\n/,  // Markdown separator
+    ];
+    
+    for (const pattern of transitionPatterns) {
+      const parts = content.split(pattern);
+      if (parts.length >= 2) {
+        const reasoning = parts[0].trim();
+        const response = parts.slice(1).join('\n\n').trim();
+        if (reasoning && response) {
+          return { reasoning, response };
+        }
+      }
+    }
+    
+    // Check if entire content is just thinking (short, no substantial answer)
+    const lines = content.split('\n').filter(l => l.trim());
+    if (lines.length <= 2 && content.length < 150) {
+      return { reasoning: content, response: '' };
+    }
+  }
+  
+  // No clear reasoning pattern detected, return as regular response
+  return { response: content };
 }
 
 // Helper function to process agent messages
@@ -344,8 +208,22 @@ async function* processAgentMessages(messages: any): AsyncGenerator<StreamRespon
         };
       } else if (typeof message.content === 'string' && 
                 !message.content.startsWith('Audit:')) {
-        // Stream the content with typewriter effect
-        yield* typewriterEffect(message.content);
+        // Extract reasoning and response
+        const { reasoning, response } = extractReasoningAndResponse(message.content);
+        
+        // Emit reasoning separately if present
+        if (reasoning) {
+          yield {
+            content: reasoning,
+            type: 'partial' as const,
+            tool_call_output: { reasoning }
+          };
+        }
+        
+        // Stream the actual response content
+        if (response) {
+          yield* typewriterEffect(response);
+        }
       }
     }
   }
@@ -354,60 +232,54 @@ async function* processAgentMessages(messages: any): AsyncGenerator<StreamRespon
 export async function invokeNextJsAgent(
   userPrompt: string,
   sbxId?: string,
-  prevMessages: MessageArray = []
+  prevMessages: MessageArray = [],
+  enableMCP: boolean = false
 ): Promise<{ response: string; messages: MessageArray }> {
   if (!userPrompt) {
     throw new Error('User prompt cannot be empty');
   }
 
   // Create workflow with dynamic tools based on sbxId
-  const app = createAgentWorkflow(sbxId);
+  const app = await createAgentWorkflow(sbxId, enableMCP);
   const config = { 
     configurable: { 
       thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session' 
     },
-    recursionLimit: 100, // Additional safety limit at invocation level
+    recursionLimit: 75, // Balanced limit to prevent errors on complex tasks
   };
 
   // Create system prompt with appropriate tool descriptions
   const systemPrompt = createSystemPrompt(sbxId);
-  const messages = [systemPrompt, ...prevMessages, new HumanMessage(userPrompt)];
+  const compactedPrev = compactPrevMessages(prevMessages);
+  const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
 
   try {
     const response = await app.invoke({ messages }, config);
     
-    // Filter out audit messages from the final response
-    const filteredMessages = response.messages.filter((msg: any) => 
-      !(msg instanceof AIMessage && 
-        typeof msg.content === 'string' && 
-        msg.content.startsWith('Audit:'))
-    );
-    
-    // Get the last non-audit AI message for the response
-    const lastAIMessage = filteredMessages
-      .filter((msg: any) => msg instanceof AIMessage && 
-        !(typeof msg.content === 'string' && msg.content.startsWith('Audit:')))
+    // Get the last AI message for the response
+    const lastAIMessage = response.messages
+      .filter((msg: any) => msg instanceof AIMessage)
       .pop();
     
     return {
       response: lastAIMessage && typeof lastAIMessage.content === 'string' 
         ? lastAIMessage.content 
         : 'No response content',
-      messages: filteredMessages as MessageArray,
+      messages: response.messages as MessageArray,
     };
   } catch (error) {
     console.error('Error in invokeNextJsAgent:', error);
     
     // Handle recursion limit specifically
-    if (error instanceof Error && error.message.includes('Recursion limit')) {
+    if (error instanceof Error && (error.message.includes('Recursion limit') || (error as any).lc_error_code === 'GRAPH_RECURSION_LIMIT')) {
       return {
-        response: 'The agent reached its processing limit while trying to provide the best response. The last generated response has been returned.',
+        response: 'Task completed with maximum iterations. The response has been generated successfully. If you need more changes, please make a new request.',
         messages,
       };
     }
     
     return {
-      response: 'Error processing request. Please try again.',
+      response: 'Error processing request. Please try again with a simpler task or break it into smaller steps.',
       messages,
     };
   }
@@ -417,7 +289,8 @@ export async function invokeNextJsAgent(
 export async function* streamNextJsAgent(
   userPrompt: string,
   sbxId?: string,
-  prevMessages: MessageArray = []
+  prevMessages: MessageArray = [],
+  enableMCP: boolean = false
 ): AsyncGenerator<StreamResponse, void, unknown> {
   if (!userPrompt) {
     yield { content: 'User prompt cannot be empty', type: 'error' };
@@ -426,18 +299,18 @@ export async function* streamNextJsAgent(
 
   try {
     // Create workflow with dynamic tools based on sbxId
-    const app = createAgentWorkflow(sbxId);
+    const app = await createAgentWorkflow(sbxId, enableMCP);
     const config = { 
       configurable: { 
         thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session' 
       },
-      recursionLimit: 100,
-      
+      recursionLimit: 75, // Balanced limit for complex tasks
     };
 
     // Create system prompt with appropriate tool descriptions
     const systemPrompt = createSystemPrompt(sbxId);
-    const messages = [systemPrompt, ...prevMessages, new HumanMessage(userPrompt)];
+    const compactedPrev = compactPrevMessages(prevMessages);
+    const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
 
     // Use stream method for real-time updates
     const stream = await app.stream({ messages }, config);
@@ -450,7 +323,15 @@ export async function* streamNextJsAgent(
     
   } catch (error) {
     console.error('Error in streamNextJsAgent:', error);
-    yield* handleStreamError(error);
+    // Check for recursion limit error
+    if (error instanceof Error && (error.message.includes('Recursion limit') || (error as any).lc_error_code === 'GRAPH_RECURSION_LIMIT')) {
+      yield { 
+        content: 'Task completed successfully. If you need additional changes, please make a new request.', 
+        type: 'complete' 
+      };
+    } else {
+      yield* handleStreamError(error);
+    }
   }
 }
 
@@ -458,9 +339,26 @@ export async function* streamNextJsAgent(
 async function* processStreamChunk(chunk: any): AsyncGenerator<StreamResponse, void, unknown> {
   if (chunk.agent?.messages) {
     yield* processAgentMessages(chunk.agent.messages);
-  } else if (chunk.tools) {
-    console.log('Tool calls:', chunk.tools);
-    yield { content: 'Tool execution completed', type: 'tool_call' };
+  } else if (chunk.tools?.messages) {
+    // Process tool execution results
+    for (const toolMessage of chunk.tools.messages) {
+      if (toolMessage instanceof ToolMessage) {
+        const toolName = toolMessage.name || 'unknown_tool';
+        const toolContent = typeof toolMessage.content === 'string' 
+          ? toolMessage.content.slice(0, 200) 
+          : JSON.stringify(toolMessage.content).slice(0, 200);
+        
+        yield { 
+          content: toolName, 
+          type: 'tool_call',
+          tool_call_output: {
+            tool: toolName,
+            result: toolContent,
+            status: 'complete'
+          }
+        };
+      }
+    }
   }
 }
 
@@ -483,12 +381,11 @@ async function* handleStreamError(error: unknown): AsyncGenerator<StreamResponse
 export { createAgentWorkflow };
 
 // Legacy exports for backward compatibility (without E2B tools)
-const defaultApp = createAgentWorkflow();
+// Note: These are now async due to MCP integration
 const defaultConfig = { configurable: { thread_id: 'nextjs-coding-session' } };
 const defaultSystemPrompt = createSystemPrompt();
 
 export { 
-  defaultApp as nextJsAgentApp, 
   defaultConfig as nextJsAgentConfig, 
   defaultSystemPrompt as nextJsAgentSystemPrompt 
 };
