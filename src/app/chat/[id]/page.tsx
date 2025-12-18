@@ -5,15 +5,21 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTRPC } from "@/trpc/client";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { CodeEditor } from "@/components/CodeEditor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileTree } from "@/components/FileTree";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
+import { ShareButton } from "@/components/ShareButton";
+import { Users } from "lucide-react";
 
 // Define FileNode type for file tree structure
 type FileNode = {
@@ -38,14 +44,67 @@ interface PageProps {
 
 function Page({ params }: PageProps) {
   const trpc = useTRPC();
-  const [chatId, setChatId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const shareToken = searchParams.get('token');
+  const isSharedAccess = !!shareToken;
+  
   const [shouldAutoSend, setShouldAutoSend] = useState(false);
+  const [connectedUsers, setConnectedUsers] = useState<Array<{ id: string; name: string; color: string }>>([]);
+
+  // Generate stable guest credentials for shared sessions
+  const guestCredentials = useMemo(() => {
+    if (!isSharedAccess) return null;
+    const randomId = Math.floor(Math.random() * 10000);
+    return {
+      username: `Guest-${randomId}`,
+      userId: `guest-${Date.now()}-${randomId}`,
+    };
+  }, [isSharedAccess]);
+
+  // Mutation to create session in database
+  const sessionCreatedRef = useRef(false);
+  const sessionExistsRef = useRef(false);
+
+  const createDbSession = useMutation(
+    trpc.session.createSession.mutationOptions({
+      onSuccess: (data) => {
+        console.log('[DB] Session created:', data.id);
+      },
+      onError: (error) => {
+        console.error('[DB] Failed to create session:', error);
+      },
+    })
+  );
+
+
   
   // Extract chat ID from params
   useEffect(() => {
-    params.then(({ id }) => {
-      setChatId(id);
+    params.then(async ({ id }) => {
       setSessionId(id);
+      
+      // Check if session exists in database, if not create it (only once)
+      if (!sessionCreatedRef.current) {
+        try {
+          const response = await fetch(`/api/session/${id}`);
+          if (response.status === 404) {
+            // Session doesn't exist, create it with the chat ID
+            sessionCreatedRef.current = true;
+            createDbSession.mutate({
+              id,
+              title: `Chat ${new Date().toLocaleString()}`,
+            });
+            // Session will exist after mutation succeeds
+            setTimeout(() => { sessionExistsRef.current = true; }, 500);
+          } else {
+            console.log('[DB] Session already exists:', id);
+            sessionCreatedRef.current = true;
+            sessionExistsRef.current = true;
+          }
+        } catch (error) {
+          console.error('[DB] Error checking session:', error);
+        }
+      }
       
       // Check for initial prompt from home page
       if (typeof globalThis !== 'undefined') {
@@ -58,30 +117,52 @@ function Page({ params }: PageProps) {
         }
       }
     });
-  }, [params]);
+  }, [params, createDbSession]);
   
   // Session management (allow dynamic updates from backend)
   const [sessionId, setSessionId] = useState(() => `session-${Date.now()}`);
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   
-  // Load sandbox data when sessionId changes
+  // Load session data from database when sessionId changes
   useEffect(() => {
-    if (typeof globalThis.globalThis === 'undefined') return;
-    try {
-      const stored = localStorage.getItem(`chat-${sessionId}`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setSandboxId(parsed.sandboxId || null);
-        setSandboxUrl(parsed.sandboxUrl || null);
-        // Show panel if sandbox exists
-        if (parsed.sandboxId || parsed.sandboxUrl) {
-          setShowSecondPanel(true);
+    if (!sessionId || sessionId.startsWith('session-')) return;
+    
+    const loadSession = async () => {
+      try {
+        console.log('[DB] Loading session data for:', sessionId);
+        const response = await fetch(`/api/session/${sessionId}`);
+        if (response.ok) {
+          const session = await response.json();
+          console.log('[DB] Session loaded:', session);
+          
+          // Mark session as existing since we successfully loaded it
+          sessionExistsRef.current = true;
+          
+          // Load messages from database
+          if (session.messages && Array.isArray(session.messages)) {
+            setMessages(session.messages);
+          }
+          
+          // Load sandbox data from database
+          if (session.sandboxId) {
+            setSandboxId(session.sandboxId);
+            console.log('[DB] Loaded sandboxId:', session.sandboxId);
+          }
+          if (session.sandboxUrl) {
+            setSandboxUrl(session.sandboxUrl);
+            setShowSecondPanel(true);
+            console.log('[DB] Loaded sandboxUrl:', session.sandboxUrl);
+          }
+        } else {
+          console.log('[DB] Session not found, will be created');
         }
+      } catch (error) {
+        console.error('[DB] Failed to load session:', error);
       }
-    } catch (error) {
-      console.error('Failed to load sandbox data:', error);
-    }
+    };
+    
+    loadSession();
   }, [sessionId]);
   
   const [isStreaming, setIsStreaming] = useState(false);
@@ -148,10 +229,16 @@ function Page({ params }: PageProps) {
   // Types for SSE payload
   type StatusData = { status?: string; message?: string; hasSandbox?: boolean };
   type PartialData = { content?: string; fullContent?: string };
-  type ToolData = { tool?: string };
+  type ToolData = { 
+    tool?: string; 
+    args?: Record<string, unknown>;
+    result?: string;
+    status?: "pending" | "running" | "complete" | "error";
+  };
   type SandboxData = { sandboxId?: string; sandboxUrl?: string; isNew?: boolean };
   type CompleteData = { response?: string; sandboxUrl?: string; hasSandbox?: boolean };
   type ErrorData = { error?: string; sandboxUrl?: string };
+  type ReasoningData = { reasoning?: string };
   interface SSEPayloadBase { sessionId?: string }
   type SSEPayload =
     | (SSEPayloadBase & { type: 'status'; data?: StatusData })
@@ -160,6 +247,7 @@ function Page({ params }: PageProps) {
     | (SSEPayloadBase & { type: 'sandbox'; data?: SandboxData })
     | (SSEPayloadBase & { type: 'complete'; data?: CompleteData })
     | (SSEPayloadBase & { type: 'error'; data?: ErrorData })
+    | (SSEPayloadBase & { type: 'reasoning'; data?: ReasoningData })
     | (SSEPayloadBase & { type: 'connected'; data?: Record<string, unknown> })
     | (SSEPayloadBase & { type: 'heartbeat'; data?: Record<string, unknown> });
 
@@ -251,7 +339,62 @@ function Page({ params }: PageProps) {
         ifMounted(() => setAgentUpdates(prev => [...prev, update]));
 
         // Update messages directly based on event type
-        if (parsed.type === 'partial') {
+        if (parsed.type === 'reasoning') {
+          const reasoning = parsed.data?.reasoning as string | undefined;
+          ifMounted(() => {
+            setMessages(prev => {
+              const newMessages = [...prev];
+              // Find last AI message and add reasoning
+              for (let i = newMessages.length - 1; i >= 0; i--) {
+                if (newMessages[i].role === 'ai') {
+                  newMessages[i] = { ...newMessages[i], reasoning };
+                  break;
+                }
+              }
+              return newMessages;
+            });
+          });
+        } else if (parsed.type === 'tool') {
+          const toolData = parsed.data as ToolData | undefined;
+          ifMounted(() => {
+            setMessages(prev => {
+              const newMessages = [...prev];
+              // Find last AI message and update tool calls
+              for (let i = newMessages.length - 1; i >= 0; i--) {
+                if (newMessages[i].role === 'ai') {
+                  const existingToolCalls = newMessages[i].toolCalls || [];
+                  const toolCallIndex = existingToolCalls.findIndex(tc => tc.tool === toolData?.tool);
+                  
+                  if (toolCallIndex >= 0) {
+                    // Update existing tool call
+                    existingToolCalls[toolCallIndex] = {
+                      ...existingToolCalls[toolCallIndex],
+                      ...toolData,
+                      status: toolData?.status || existingToolCalls[toolCallIndex].status
+                    };
+                  } else {
+                    // Add new tool call
+                    existingToolCalls.push({
+                      tool: toolData?.tool || 'unknown',
+                      args: toolData?.args,
+                      result: toolData?.result,
+                      status: toolData?.status || 'running'
+                    });
+                  }
+                  
+                  newMessages[i] = { 
+                    ...newMessages[i], 
+                    toolCalls: existingToolCalls,
+                    status: 'using_tool',
+                    toolName: toolData?.tool
+                  };
+                  break;
+                }
+              }
+              return newMessages;
+            });
+          });
+        } else if (parsed.type === 'partial') {
           const fullContent = parsed.data?.fullContent as string | undefined;
           ifMounted(() => {
             setMessages(prev => {
@@ -266,7 +409,7 @@ function Page({ params }: PageProps) {
               }
               
               if (aiIndex !== -1 && fullContent) {
-                newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullContent };
+                newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullContent, status: 'streaming' };
               }
               
               return newMessages;
@@ -312,39 +455,29 @@ function Page({ params }: PageProps) {
         } else if (parsed.type === 'sandbox') {
           if (parsed.data?.sandboxId) {
             const newSandboxId = parsed.data.sandboxId;
+            console.log('[SSE] Received sandbox event:', { newSandboxId, sessionId: sess, isNew: parsed.data?.isNew });
             ifMounted(() => {
+              console.log('[State] Setting sandboxId to:', newSandboxId);
               setSandboxId(newSandboxId);
-              // Immediately persist to localStorage
-              try {
-                const stored = localStorage.getItem(`chat-${sess}`);
-                const existing = stored ? JSON.parse(stored) : {};
-                localStorage.setItem(`chat-${sess}`, JSON.stringify({
-                  ...existing,
-                  sandboxId: newSandboxId,
-                  lastUpdated: Date.now()
-                }));
-              } catch (error) {
-                console.error('Failed to save sandbox ID:', error);
-              }
+              // Auto-open preview panel when sandbox is created
+              setShowSecondPanel(true);
             });
           }
           if (parsed.data?.sandboxUrl) {
             const newSandboxUrl = parsed.data.sandboxUrl;
             ifMounted(() => {
-              setSandboxUrl(newSandboxUrl);
-              setShowSecondPanel(true);
-              // Immediately persist to localStorage
-              try {
-                const stored = localStorage.getItem(`chat-${sess}`);
-                const existing = stored ? JSON.parse(stored) : {};
-                localStorage.setItem(`chat-${sess}`, JSON.stringify({
-                  ...existing,
-                  sandboxUrl: newSandboxUrl,
-                  lastUpdated: Date.now()
-                }));
-              } catch (error) {
-                console.error('Failed to save sandbox URL:', error);
-              }
+              // Only update if the URL actually changed to prevent iframe refresh
+              setSandboxUrl(prev => {
+                if (prev !== newSandboxUrl) {
+                  console.log('[Sandbox URL] Updating from', prev, 'to', newSandboxUrl);
+                  setShowSecondPanel(true);
+                  setActiveTab('live preview');
+                  setIframeLoading(true);
+                  return newSandboxUrl;
+                }
+                console.log('[Sandbox URL] No change, keeping existing:', prev);
+                return prev;
+              });
             });
           }
         } else if (parsed.type === 'complete' || parsed.type === 'error') {
@@ -352,19 +485,8 @@ function Page({ params }: PageProps) {
           if (parsed.data?.sandboxUrl) {
             const newSandboxUrl = parsed.data.sandboxUrl;
             ifMounted(() => {
-              setSandboxUrl(newSandboxUrl);
-              // Persist to localStorage
-              try {
-                const stored = localStorage.getItem(`chat-${sess}`);
-                const existing = stored ? JSON.parse(stored) : {};
-                localStorage.setItem(`chat-${sess}`, JSON.stringify({
-                  ...existing,
-                  sandboxUrl: newSandboxUrl,
-                  lastUpdated: Date.now()
-                }));
-              } catch (error) {
-                console.error('Failed to save sandbox URL:', error);
-              }
+              // Only update if URL changed
+              setSandboxUrl(prev => prev !== newSandboxUrl ? newSandboxUrl : prev);
             });
           }
         }
@@ -500,67 +622,22 @@ function Page({ params }: PageProps) {
     });
   };
 
-  // Chat state for Copilot-like interface with localStorage persistence
+  // Chat state for Copilot-like interface with database persistence
   const [messages, setMessages] = useState<ChatMessage[]>([{ 
     role: "ai", 
     content: "👋 Welcome to CodeVibe! I can help you generate code. Try asking me to 'generate some code' or 'create components' to see live file streaming in action!",
-    timestamp: 0, // Will be set properly when loaded or updated
+    timestamp: Date.now(),
     id: 'welcome'
   }]);
   
-  // Load messages from localStorage when sessionId changes
+  // Messages are loaded from database in the session load effect above
+  // Notify sidebar to refresh when messages change
   useEffect(() => {
-    if (typeof globalThis.globalThis === 'undefined') return;
-    
-    try {
-      const stored = localStorage.getItem(`chat-${sessionId}`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.messages && parsed.messages.length > 0) {
-          setMessages(parsed.messages);
-        }
-      } else {
-        // New chat - show welcome message with current timestamp
-        setMessages([{ 
-          role: "ai", 
-          content: "👋 Welcome to CodeVibe! I can help you generate code. Try asking me to 'generate some code' or 'create components' to see live file streaming in action!",
-          timestamp: Date.now(),
-          id: 'welcome'
-        }]);
-      }
-    } catch (error) {
-      console.error('Failed to load chat history:', error);
-    }
-  }, [sessionId]);
-  // Removed unused streaming demo code
-
-  // Simulate streaming code to files
-
-  // Handler for sending a message
-  // (removed duplicate handleSend definition)
-  
-  // Save messages to localStorage whenever they change
-  useEffect(() => {
-    // Only save if we have user messages (not just welcome message)
     const hasUserMessages = messages.some(m => m.role === 'user');
-    if (messages.length > 0 && hasUserMessages) {
-      try {
-        localStorage.setItem(`chat-${sessionId}`, JSON.stringify({
-          messages,
-          sessionId,
-          sandboxId,
-          sandboxUrl,
-          lastUpdated: Date.now()
-        }));
-        // Notify sidebar to refresh
-        if (typeof globalThis !== 'undefined') {
-          globalThis.dispatchEvent(new CustomEvent('chatUpdated'));
-        }
-      } catch (error) {
-        console.error('Failed to save chat history:', error);
-      }
+    if (hasUserMessages && typeof globalThis !== 'undefined') {
+      globalThis.dispatchEvent(new CustomEvent('chatUpdated'));
     }
-  }, [messages, sessionId, sandboxId, sandboxUrl]);
+  }, [messages]);
 
   // Update messages when real-time updates come in - agent activity logic for chat bubbles
   useEffect(() => {
@@ -640,6 +717,31 @@ function Page({ params }: PageProps) {
     }
   }, [agentUpdates]);
 
+  // Auto-save messages and sandbox data to database
+  useEffect(() => {
+    // Only save if session exists in database
+    if (sessionId && sessionExistsRef.current && messages.length > 0) {
+      // Debounce the save to avoid too many requests
+      const timeoutId = setTimeout(() => {
+        fetch(`/api/session/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: messages.map(m => ({
+              role: m.role,
+              content: m.content,
+              timestamp: m.timestamp,
+            })),
+            sandboxId: sandboxId || undefined,
+            sandboxUrl: sandboxUrl || undefined,
+          }),
+        }).catch(err => console.error('[DB] Failed to save session:', err));
+      }, 1000);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [sessionId, messages, sandboxId, sandboxUrl]);
+
   // Handler for sending a message
   const handleSend = useCallback(() => {
     if (!message.trim()) return;
@@ -679,46 +781,22 @@ function Page({ params }: PageProps) {
     // This ensures we don't miss any events from the agent
     startRealtimeSubscription(sessionId);
 
-    // Determine if we should use sandbox based on user request or existing sandbox
-    const isCodeRelatedRequest = 
-      userMessage.toLowerCase().includes("create") ||
-      userMessage.toLowerCase().includes("build") ||
-      userMessage.toLowerCase().includes("generate") ||
-      userMessage.toLowerCase().includes("component") ||
-      userMessage.toLowerCase().includes("app") ||
-      userMessage.toLowerCase().includes("page") ||
-      userMessage.toLowerCase().includes("add") ||
-      userMessage.toLowerCase().includes("update") ||
-      userMessage.toLowerCase().includes("change") ||
-      userMessage.toLowerCase().includes("modify") ||
-      userMessage.toLowerCase().includes("fix");
-
-    // Always use sandbox if it exists (to maintain context), or create one for code requests
-    const shouldUseSandbox = sandboxId || isCodeRelatedRequest;
-
-    // Show preview panel for code-related requests or when sandbox exists
-    if (shouldUseSandbox) {
-      setShowSecondPanel(true);
-    }
-
-    // Always use sandbox endpoint if sandbox exists to maintain context
-    // This prevents creating multiple sandboxes and losing context
+    // The agent will intelligently analyze if a sandbox is needed
+    // We only need to check if one already exists to maintain context
+    console.log('[handleSend] Current state - sandboxId:', sandboxId, 'sessionId:', sessionId);
     if (sandboxId) {
+      // Show preview panel for existing sandbox
+      setShowSecondPanel(true);
       // Use existing sandbox to maintain context
-      console.log('Reusing existing sandbox:', sandboxId);
+      console.log('[handleSend] Reusing existing sandbox:', sandboxId, 'for session:', sessionId);
       invokeWithSandbox.mutate({ 
         message: userMessage, 
         sandboxId,
         sessionId
       });
-    } else if (isCodeRelatedRequest) {
-      // Create new sandbox for code-related requests (don't pass sandboxId to create new one)
-      invokeWithSandbox.mutate({ 
-        message: userMessage,
-        sessionId
-      });
     } else {
-      // Use regular invoke for non-code questions
+      // Let the agent intelligently decide if a sandbox is needed
+      // It will analyze the task and create one if necessary
       invoke.mutate({ 
         message: userMessage, 
         sessionId
@@ -748,6 +826,12 @@ function Page({ params }: PageProps) {
           <span className="text-sm font-medium">
             {isStreaming ? 'AI is thinking...' : 'Ready'}
           </span>
+          {isSharedAccess && (
+            <Badge variant="secondary" className="text-xs">
+              <Users className="h-3 w-3 mr-1" />
+              Shared Session
+            </Badge>
+          )}
           {messages.length > 1 && (
             <span className="text-xs text-muted-foreground">
               {messages.length} messages
@@ -763,6 +847,28 @@ function Page({ params }: PageProps) {
         </div>
         
         <div className="flex items-center gap-2">
+          {/* Connected Users Avatars */}
+          {connectedUsers.length > 0 && (
+            <TooltipProvider>
+              <div className="flex items-center gap-1">
+                {connectedUsers.map((user, index) => (
+                  <Tooltip key={user.id}>
+                    <TooltipTrigger asChild>
+                      <Avatar className="h-7 w-7 border-2 -ml-2 first:ml-0" style={{ borderColor: user.color }}>
+                        <AvatarFallback style={{ backgroundColor: user.color + '20', color: user.color }}>
+                          {user.name.substring(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">{user.name}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                ))}
+              </div>
+            </TooltipProvider>
+          )}
+          {sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
           {sandboxUrl && (
             <Button
               variant="outline"
@@ -777,15 +883,25 @@ function Page({ params }: PageProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
+              onClick={async () => {
                 if (confirm('Clear all messages? This cannot be undone.')) {
-                  setMessages([{ 
-                    role: "ai", 
+                  const newMessages: ChatMessage[] = [{ 
+                    role: "ai" as const, 
                     content: "Chat cleared. How can I help you?",
                     timestamp: Date.now(),
                     id: 'clear-' + Date.now()
-                  }]);
-                  localStorage.removeItem(`chat-${sessionId}`);
+                  }];
+                  setMessages(newMessages);
+                  // Clear in database
+                  try {
+                    await fetch(`/api/session/${sessionId}`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ messages: newMessages }),
+                    });
+                  } catch (error) {
+                    console.error('[DB] Failed to clear messages:', error);
+                  }
                 }
               }}
               className="text-xs"
@@ -846,6 +962,11 @@ function Page({ params }: PageProps) {
                           height={"100%"}
                           label={selectedFile}
                           autoScroll={false}
+                          collaborative={true}
+                          roomId={sessionId}
+                          username={guestCredentials?.username || 'User'}
+                          userId={guestCredentials?.userId || sessionId}
+                          onUsersChange={setConnectedUsers}
                         />
                       </div>
                     </TabsContent>
@@ -859,7 +980,6 @@ function Page({ params }: PageProps) {
                         )}
                         {sandboxUrl ? (
                           <iframe
-                            key={sandboxUrl}
                             src={sandboxUrl}
                             className="w-full h-full min-h-[200px] border-0"
                             onLoad={() => setIframeLoading(false)}

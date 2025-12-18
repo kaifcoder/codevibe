@@ -56,17 +56,24 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (chatToDelete) {
-      localStorage.removeItem(`chat-${chatToDelete}`)
-      
-      // If we're currently viewing the deleted chat, redirect to home
-      if (pathname === `/chat/${chatToDelete}`) {
-        router.push('/')
+      try {
+        // Delete from database
+        await fetch(`/api/session/${chatToDelete}`, {
+          method: 'DELETE',
+        })
+        
+        // If we're currently viewing the deleted chat, redirect to home
+        if (pathname === `/chat/${chatToDelete}`) {
+          router.push('/')
+        }
+        
+        // Trigger reload of chat list
+        globalThis.dispatchEvent(new CustomEvent('chatUpdated'))
+      } catch (error) {
+        console.error('[Sidebar] Failed to delete session:', error)
       }
-      
-      // Trigger reload of chat list
-      globalThis.dispatchEvent(new CustomEvent('chatUpdated'))
     }
     setDeleteDialogOpen(false)
     setChatToDelete(null)
@@ -76,78 +83,63 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     setClearAllDialogOpen(true)
   }
 
-  const confirmClearAll = () => {
-    // Remove all chat data from localStorage
-    const keys = Object.keys(localStorage)
-    keys.forEach(key => {
-      if (key.startsWith('chat-')) {
-        localStorage.removeItem(key)
-      }
-    })
-    
-    // Redirect to home page
-    router.push('/')
-    
-    // Trigger reload of chat list
-    globalThis.dispatchEvent(new CustomEvent('chatUpdated'))
+  const confirmClearAll = async () => {
+    try {
+      // Delete all sessions from database
+      await fetch('/api/sessions', {
+        method: 'DELETE',
+      })
+      
+      // Redirect to home page
+      router.push('/')
+      
+      // Trigger reload of chat list
+      globalThis.dispatchEvent(new CustomEvent('chatUpdated'))
+    } catch (error) {
+      console.error('[Sidebar] Failed to clear all sessions:', error)
+    }
     setClearAllDialogOpen(false)
   }
 
   useEffect(() => {
-    // Load recent chats from localStorage
-    const loadRecentChats = () => {
-      if (typeof globalThis === 'undefined') return
-
-      const chats: ChatSession[] = []
-      
-      // Iterate through localStorage to find all chat sessions
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i)
-        if (key && key.startsWith('chat-')) {
-          const sessionId = key.replace('chat-', '')
-          const data = localStorage.getItem(key)
-          
-          if (data) {
-            try {
-              const parsed = JSON.parse(data)
-              // Only show chats that have user messages
-              const hasUserMessages = parsed.messages?.some((m: any) => m.role === 'user')
-              if (!hasUserMessages) {
-                // Clean up empty chats
-                localStorage.removeItem(key)
-                continue
-              }
-              
-              // Get first user message as title
-              const firstMessage = parsed.messages?.find((m: any) => m.role === 'user')
-              const title = firstMessage?.content?.slice(0, 50) || 'New Chat'
-              const timestamp = parsed.messages?.[0]?.timestamp || Date.now()
-              
-              chats.push({
-                id: sessionId,
-                title: title.length > 50 ? title + '...' : title,
-                timestamp
-              })
-            } catch (e) {
-              console.error('Error parsing chat session:', e)
-            }
-          }
+    // Load recent chats from database
+    const loadRecentChats = async () => {
+      try {
+        // Fetch sessions from the database API
+        const response = await fetch('/api/sessions')
+        if (!response.ok) {
+          console.error('[Sidebar] Failed to fetch sessions:', response.statusText)
+          return
         }
+        
+        const sessions = await response.json()
+        
+        // Map to ChatSession format
+        const chats: ChatSession[] = sessions
+          .filter((session: any) => {
+            // Only show chats that have user messages
+            const messages = Array.isArray(session.messages) ? session.messages : []
+            return messages.some((m: any) => m.role === 'user')
+          })
+          .map((session: any) => {
+            const messages = Array.isArray(session.messages) ? session.messages : []
+            const firstMessage = messages.find((m: any) => m.role === 'user')
+            const title = session.title || firstMessage?.content?.slice(0, 50) || 'New Chat'
+            const timestamp = new Date(session.createdAt).getTime()
+            
+            return {
+              id: session.id,
+              title: title.length > 50 ? title + '...' : title,
+              timestamp
+            }
+          })
+          .sort((a: ChatSession, b: ChatSession) => b.timestamp - a.timestamp)
+          .slice(0, 10)
+        
+        setRecentChats(chats)
+      } catch (error) {
+        console.error('[Sidebar] Error loading sessions:', error)
       }
-
-      // Sort by timestamp (most recent first) and limit to 10
-      chats.sort((a, b) => b.timestamp - a.timestamp)
-      const newChats = chats.slice(0, 10)
-      
-      // Only update state if the chat list actually changed
-      setRecentChats(prev => {
-        if (prev.length !== newChats.length) return newChats
-        const hasChanged = prev.some((chat, i) => 
-          chat.id !== newChats[i]?.id || 
-          chat.title !== newChats[i]?.title
-        )
-        return hasChanged ? newChats : prev
-      })
     }
 
     loadRecentChats()

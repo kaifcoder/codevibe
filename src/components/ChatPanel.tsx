@@ -12,6 +12,15 @@ export interface ChatMessage {
   content: string;
   timestamp?: number;
   id?: string;
+  status?: "thinking" | "using_tool" | "streaming" | "complete";
+  toolName?: string;
+  toolCalls?: Array<{
+    tool: string;
+    args?: Record<string, unknown>;
+    result?: string;
+    status?: "pending" | "running" | "complete" | "error";
+  }>;
+  reasoning?: string;
 }
 
 interface ChatPanelProps {
@@ -21,6 +30,7 @@ interface ChatPanelProps {
   onSend: () => void;
   isLoading?: boolean;
   isStreaming?: boolean; // whether the last AI message is actively streaming
+  readOnly?: boolean; // For shared sessions - disable sending messages
 }
 
 export function ChatPanel({
@@ -30,6 +40,7 @@ export function ChatPanel({
   onSend,
   isLoading,
   isStreaming,
+  readOnly = false,
 }: Readonly<ChatPanelProps>) {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -106,16 +117,100 @@ export function ChatPanel({
                   "rounded-lg px-4 py-3 prose prose-sm max-w-none",
                   isUser 
                     ? "bg-primary/10 text-foreground" 
-                    : "bg-muted/50 text-foreground",
-                  isAI && i === messages.length - 1 && isStreaming && msg.content === '🔄 Processing...' && "animate-pulse"
+                    : "bg-muted/50 text-foreground"
                 )}>
+                  {/* Reasoning section */}
+                  {isAI && msg.reasoning && (
+                    <div className="mb-3 pb-3 border-b border-border/50 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg p-3">
+                      <div className="flex items-start gap-2 text-sm">
+                        <div className="mt-0.5 w-5 h-5 shrink-0 flex items-center justify-center">
+                          <span className="text-base">💭</span>
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-blue-600 dark:text-blue-400 font-semibold mb-1.5 text-xs uppercase tracking-wide">Thinking</div>
+                          <div className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap italic">{msg.reasoning}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tool calls section */}
+                  {isAI && msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <div className="mb-3 pb-3 border-b border-border/50 space-y-2">
+                      <div className="text-purple-600 dark:text-purple-400 font-medium text-sm flex items-center gap-2">
+                        <span>🔧</span>
+                        <span>Tool Executions</span>
+                      </div>
+                      {msg.toolCalls.map((toolCall, idx) => (
+                        <div key={`${msg.id}-tool-${idx}`} className="ml-6 space-y-1 text-xs border-l-2 border-purple-200 dark:border-purple-800 pl-3">
+                          <div className="flex items-center gap-2">
+                            <code className="bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded font-mono">
+                              {toolCall.tool}
+                            </code>
+                            {toolCall.status === 'running' && (
+                              <span className="text-purple-500 animate-pulse">⚡ Running...</span>
+                            )}
+                            {toolCall.status === 'complete' && (
+                              <span className="text-green-500">✓ Complete</span>
+                            )}
+                            {toolCall.status === 'error' && (
+                              <span className="text-red-500">✗ Error</span>
+                            )}
+                          </div>
+                          {toolCall.args && Object.keys(toolCall.args).length > 0 && (
+                            <div className="text-muted-foreground">
+                              <span className="font-medium">Args:</span>{' '}
+                              <span className="font-mono">{JSON.stringify(toolCall.args, null, 2).slice(0, 100)}{JSON.stringify(toolCall.args).length > 100 ? '...' : ''}</span>
+                            </div>
+                          )}
+                          {toolCall.result && (
+                            <div className="text-muted-foreground mt-1">
+                              <span className="font-medium">Result:</span>{' '}
+                              <span className="whitespace-pre-wrap">{toolCall.result.slice(0, 150)}{toolCall.result.length > 150 ? '...' : ''}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Status indicators for AI messages */}
+                  {isAI && msg.status && msg.status !== 'complete' && (
+                    <div className="mb-3 pb-3 border-b border-border/50">
+                      {msg.status === 'thinking' && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <div className="flex gap-1">
+                            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:0ms]" />
+                            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:150ms]" />
+                            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:300ms]" />
+                          </div>
+                          <span className="text-blue-600 dark:text-blue-400 font-medium">Thinking...</span>
+                        </div>
+                      )}
+                      {msg.status === 'using_tool' && msg.toolName && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
+                          <span className="text-purple-600 dark:text-purple-400 font-medium">
+                            Using tool: <code className="text-xs bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded">{msg.toolName}</code>
+                          </span>
+                        </div>
+                      )}
+                      {msg.status === 'streaming' && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          <span className="text-green-600 dark:text-green-400 font-medium">Generating response...</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
                   <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                     {msg.content === '🔄 Processing...' ? (
                       <div className="flex items-center gap-2">
                         <div className="flex gap-1">
-                          <span className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                          <span className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce [animation-delay:0ms]" />
+                          <span className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce [animation-delay:150ms]" />
+                          <span className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce [animation-delay:300ms]" />
                         </div>
                         <span className="text-muted-foreground">Processing...</span>
                       </div>
@@ -123,7 +218,7 @@ export function ChatPanel({
                       <>
                         {msg.content}
                         {isAI && i === messages.length - 1 && isStreaming && msg.content !== '🔄 Processing...' && (
-                          <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1 align-middle" />
+                          <span className="inline-block w-0.5 h-4 bg-primary animate-pulse ml-1 align-middle" />
                         )}
                       </>
                     )}
@@ -136,44 +231,53 @@ export function ChatPanel({
         <div ref={chatEndRef} />
       </div>
       {/* Input bar */}
-      <div className="border-t border-border bg-muted/30 px-4 py-4">
-        <form
-          className="flex items-end gap-2 bg-background rounded-lg border border-border p-2 focus-within:ring-2 focus-within:ring-primary/20 transition-all"
-          onSubmit={e => {
-            e.preventDefault();
-            if (!isLoading && message.trim()) onSend();
-          }}
-        >
-          <Textarea
-            placeholder="Type a message... (Shift+Enter for new line)"
-            value={message}
-            onChange={e => setMessage(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (!isLoading && message.trim()) onSend();
-              }
+      {!readOnly && (
+        <div className="border-t border-border bg-muted/30 px-4 py-4">
+          <form
+            className="flex items-end gap-2 bg-background rounded-lg border border-border p-2 focus-within:ring-2 focus-within:ring-primary/20 transition-all"
+            onSubmit={e => {
+              e.preventDefault();
+              if (!isLoading && message.trim()) onSend();
             }}
-            disabled={isLoading}
-            className="flex-1 min-h-[60px] max-h-[200px] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent"
-            rows={1}
-          />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={isLoading || !message.trim()}
-            className={cn(
-              "transition-all",
-              !message.trim() && "opacity-50"
-            )}
           >
-            <LucideSend className="w-4 h-4" />
-          </Button>
-        </form>
-        <p className="text-xs text-muted-foreground mt-2 text-center">
-          Press Enter to send, Shift+Enter for new line
-        </p>
-      </div>
+            <Textarea
+              placeholder="Type a message... (Shift+Enter for new line)"
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (!isLoading && message.trim()) onSend();
+                }
+              }}
+              disabled={isLoading}
+              className="flex-1 min-h-[60px] max-h-[200px] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent"
+              rows={1}
+            />
+            <Button
+              type="submit"
+              size="icon"
+              disabled={isLoading || !message.trim()}
+              className={cn(
+                "transition-all",
+                !message.trim() && "opacity-50"
+              )}
+            >
+              <LucideSend className="w-4 h-4" />
+            </Button>
+          </form>
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        </div>
+      )}
+      {readOnly && (
+        <div className="border-t border-border bg-muted/30 px-4 py-3 text-center">
+          <p className="text-sm text-muted-foreground">
+            👀 View-only mode • Messages cannot be sent in shared sessions
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -15,7 +15,27 @@ datasource db {
 }
 
 model User {
-  id       Int   @id @default(autoincrement())
-  email     String   @unique
-  name      String?
+  id       Int      @id @default(autoincrement())
+  email    String   @unique
+  name     String?
+  sessions Session[]
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  title       String   @default("Untitled Session")
+  code        String   @default("")
+  language    String   @default("typescript")
+  messages    Json     @default("[]")
+  shareToken  String   @unique @default(cuid())
+  isPublic    Boolean  @default(false)
+  sandboxId   String?
+  sandboxUrl  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  userId      Int?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([shareToken])
+  @@index([userId])
 }
