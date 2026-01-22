@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Dispatch, SetStateAction, useRef, useEffect } from "react";
+import { Dispatch, SetStateAction, useRef, useEffect, memo, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LucideSend, Bot, User } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -33,7 +33,7 @@ interface ChatPanelProps {
   readOnly?: boolean; // For shared sessions - disable sending messages
 }
 
-export function ChatPanel({
+export const ChatPanel = memo(function ChatPanel({
   messages,
   message,
   setMessage,
@@ -157,12 +157,15 @@ export function ChatPanel({
                               <span className="text-red-500">✗ Error</span>
                             )}
                           </div>
-                          {toolCall.args && Object.keys(toolCall.args).length > 0 && (
-                            <div className="text-muted-foreground">
-                              <span className="font-medium">Args:</span>{' '}
-                              <span className="font-mono">{JSON.stringify(toolCall.args, null, 2).slice(0, 100)}{JSON.stringify(toolCall.args).length > 100 ? '...' : ''}</span>
-                            </div>
-                          )}
+                          {toolCall.args && Object.keys(toolCall.args).length > 0 && (() => {
+                            const argsStr = JSON.stringify(toolCall.args, null, 2);
+                            return (
+                              <div className="text-muted-foreground">
+                                <span className="font-medium">Args:</span>{' '}
+                                <span className="font-mono">{argsStr.slice(0, 100)}{argsStr.length > 100 ? '...' : ''}</span>
+                              </div>
+                            );
+                          })()}
                           {toolCall.result && (
                             <div className="text-muted-foreground mt-1">
                               <span className="font-medium">Result:</span>{' '}
@@ -280,4 +283,4 @@ export function ChatPanel({
       )}
     </div>
   );
-}
+});

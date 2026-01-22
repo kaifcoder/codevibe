@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { 
   ChevronRight, 
@@ -18,22 +18,20 @@ export type FileNode = {
   children?: FileNode[];
 };
 
+// Memoized file icon lookup
+const fileIconMap: Record<string, typeof FileCode> = {
+  'ts': FileCode,
+  'tsx': FileCode,
+  'js': FileCode,
+  'jsx': FileCode,
+  'json': FileJson,
+  'md': FileText,
+  'txt': FileText,
+};
+
 function getFileIcon(fileName: string) {
   const ext = fileName.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-      return FileCode;
-    case 'json':
-      return FileJson;
-    case 'md':
-    case 'txt':
-      return FileText;
-    default:
-      return File;
-  }
+  return ext ? (fileIconMap[ext] || File) : File;
 }
 
 export interface FileTreeProps {
@@ -44,7 +42,7 @@ export interface FileTreeProps {
   streamingFile?: string | null;
 }
 
-export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }: Readonly<FileTreeProps>) {
+export const FileTree = memo(function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }: Readonly<FileTreeProps>) {
   // Initialize with all folders expanded by default
   const [open, setOpen] = useState<{ [key: string]: boolean }>(() => {
     const initialOpen: { [key: string]: boolean } = {};
@@ -86,7 +84,10 @@ export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }
   return (
     <div className="w-full flex flex-col h-full overflow-y-auto text-sm bg-muted/20">
       {nodes.map((node) => {
-        const FileIconComponent = node.type === "file" ? getFileIcon(node.name) : null;
+        const FileIconComponent = useMemo(() => 
+          node.type === "file" ? getFileIcon(node.name) : null,
+          [node.type, node.name]
+        );
         return (
         <div key={node.path} className="select-none">
           <div style={{ paddingLeft: `${level * 12}px` }}>
@@ -151,4 +152,4 @@ export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }
       })}
     </div>
   );
-}
+});
