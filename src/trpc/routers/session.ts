@@ -92,28 +92,43 @@ export const sessionRouter = createTRPCRouter({
   deleteSession: baseProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      // Get session to retrieve sandboxId
-      const session = await ctx.prisma.session.findUnique({
-        where: { id: input.id },
+      // Use transaction to fetch and delete in one operation
+      const session = await ctx.prisma.$transaction(async (tx) => {
+        // Get session to retrieve sandboxId
+        const sess = await tx.session.findUnique({
+          where: { id: input.id },
+          select: { id: true, sandboxId: true },
+        });
+        
+        if (!sess) {
+          throw new Error('Session not found');
+        }
+        
+        // Delete session in same transaction
+        await tx.session.delete({
+          where: { id: input.id },
+        });
+        
+        return sess;
       });
       
-      // Kill sandbox if it exists
+      // Kill sandbox if it exists (outside transaction to avoid blocking)
       if (session?.sandboxId) {
-        try {
-          const sandbox = await getSandbox(session.sandboxId);
-          if (sandbox) {
-            await sandbox.kill();
+        // Fire and forget - don't await to avoid blocking response
+        getSandbox(session.sandboxId)
+          .then(sandbox => {
+            if (sandbox) {
+              return sandbox.kill();
+            }
+          })
+          .then(() => {
             console.log(`✅ Killed sandbox ${session.sandboxId} for session ${input.id}`);
-          }
-        } catch (error) {
-          console.error(`Failed to kill sandbox ${session.sandboxId}:`, error);
-          // Continue with session deletion even if sandbox kill fails
-        }
+          })
+          .catch((error) => {
+            console.error(`Failed to kill sandbox ${session.sandboxId}:`, error);
+          });
       }
       
-      await ctx.prisma.session.delete({
-        where: { id: input.id },
-      });
       return { success: true };
     }),
 

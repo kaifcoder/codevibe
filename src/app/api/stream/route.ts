@@ -18,6 +18,11 @@ interface AgentEventData {
   isNew?: boolean;
 }
 
+// Helper function to create SSE messages
+function createSSEMessage(type: string, data: Record<string, unknown>): string {
+  return `data: ${JSON.stringify({ type, data })}\n\n`;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const sessionId = searchParams.get('sessionId');
@@ -47,88 +52,61 @@ export async function GET(request: NextRequest) {
       };
 
       // Initial connection message
-      send(`data: ${JSON.stringify({ type: 'connected', sessionId })}
-
-`);
+      send(createSSEMessage('connected', { sessionId }));
 
       // Event handlers for different types of updates
       const handleAgentUpdate = (data: AgentEventData) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'status',
-            data: {
-              sessionId: data.sessionId,
-              status: data.status,
-              message: data.message,
-              hasSandbox: data.hasSandbox,
-            }
-          })}
-
-`);
+          send(createSSEMessage('status', {
+            sessionId: data.sessionId,
+            status: data.status,
+            message: data.message,
+            hasSandbox: data.hasSandbox,
+          }));
         }
       };
 
       const handlePartialContent = (data: AgentEventData) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'partial',
-            data: {
-              sessionId: data.sessionId,
-              content: data.content,
-              fullContent: data.fullContent,
-            }
-          })}
-
-`);
+          send(createSSEMessage('partial', {
+            sessionId: data.sessionId,
+            content: data.content,
+            fullContent: data.fullContent,
+          }));
         }
       };
 
       const handleToolUsed = (data: AgentEventData & { args?: Record<string, unknown>; result?: string; status?: string }) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'tool',
-            data: {
-              sessionId: data.sessionId,
-              tool: data.tool,
-              args: data.args,
-              result: data.result,
-              status: data.status,
-            }
-          })}
-
-`);
+          send(createSSEMessage('tool', {
+            sessionId: data.sessionId,
+            tool: data.tool,
+            args: data.args,
+            result: data.result,
+            status: data.status,
+          }));
         }
       };
 
       const handleSandboxStatus = (data: AgentEventData) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'sandbox',
-            data: {
-              sessionId: data.sessionId,
-              sandboxId: data.sandboxId,
-              sandboxUrl: data.sandboxUrl,
-              isNew: data.isNew,
-            }
-          })}
-
-`);
+          send(createSSEMessage('sandbox', {
+            sessionId: data.sessionId,
+            sandboxId: data.sandboxId,
+            sandboxUrl: data.sandboxUrl,
+            isNew: data.isNew,
+          }));
         }
       };
 
       const handleComplete = (data: AgentEventData) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'complete',
-            data: {
-              sessionId: data.sessionId,
-              response: data.response,
-              sandboxUrl: data.sandboxUrl,
-              hasSandbox: data.hasSandbox,
-            }
-          })}
-
-`);
+          send(createSSEMessage('complete', {
+            sessionId: data.sessionId,
+            response: data.response,
+            sandboxUrl: data.sandboxUrl,
+            hasSandbox: data.hasSandbox,
+          }));
           if (data.response) {
             appendSessionMessages(sessionId, [{ role: 'ai', content: String(data.response), ts: Date.now() }]);
           }
@@ -137,75 +115,50 @@ export async function GET(request: NextRequest) {
 
       const handleError = (data: AgentEventData) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'error',
-            data: {
-              sessionId: data.sessionId,
-              error: data.error,
-            }
-          })}
-
-`);
+          send(createSSEMessage('error', {
+            sessionId: data.sessionId,
+            error: data.error,
+          }));
         }
       };
 
       const handleReasoning = (data: AgentEventData & { reasoning?: string }) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'reasoning',
-            data: {
-              sessionId: data.sessionId,
-              reasoning: data.reasoning,
-            }
-          })}
-
-`);
+          send(createSSEMessage('reasoning', {
+            sessionId: data.sessionId,
+            reasoning: data.reasoning,
+          }));
         }
       };
 
       const handleFileUpdate = (data: AgentEventData & { filePath?: string; content?: string; action?: 'start' | 'update' | 'complete' }) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'file_update',
-            data: {
-              sessionId: data.sessionId,
-              filePath: data.filePath,
-              content: data.content,
-              action: data.action,
-            }
-          })}
-
-`);
+          send(createSSEMessage('file_update', {
+            sessionId: data.sessionId,
+            filePath: data.filePath,
+            content: data.content,
+            action: data.action,
+          }));
         }
       };
 
       const handleCodePatch = (data: AgentEventData & { filePath?: string; content?: string; action?: 'start' | 'patch' | 'complete' }) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'code_patch',
-            data: {
-              sessionId: data.sessionId,
-              filePath: data.filePath,
-              content: data.content,
-              action: data.action,
-            }
-          })}
-
-`);
+          send(createSSEMessage('code_patch', {
+            sessionId: data.sessionId,
+            filePath: data.filePath,
+            content: data.content,
+            action: data.action,
+          }));
         }
       };
 
       const handleFileTreeSync = (data: AgentEventData & { fileTree?: unknown }) => {
         if (data.sessionId === sessionId) {
-          send(`data: ${JSON.stringify({
-            type: 'file_tree_sync',
-            data: {
-              sessionId: data.sessionId,
-              fileTree: data.fileTree,
-            }
-          })}
-
-`);
+          send(createSSEMessage('file_tree_sync', {
+            sessionId: data.sessionId,
+            fileTree: data.fileTree,
+          }));
         }
       };
 
@@ -223,9 +176,7 @@ export async function GET(request: NextRequest) {
 
       // Keep connection alive with periodic heartbeat
       const heartbeat = setInterval(() => {
-        send(`data: ${JSON.stringify({ type: 'heartbeat', timestamp: Date.now() })}
-
-`);
+        send(createSSEMessage('heartbeat', { timestamp: Date.now() }));
       }, 30000);
 
       // Cleanup when client disconnects
