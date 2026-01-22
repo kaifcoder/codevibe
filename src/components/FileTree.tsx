@@ -1,4 +1,4 @@
-import { useState, useEffect, memo, useMemo } from "react";
+import { useState, useEffect, memo } from "react";
 import { cn } from "@/lib/utils";
 import { 
   ChevronRight, 
@@ -84,10 +84,7 @@ export const FileTree = memo(function FileTree({ nodes, selected, onSelect, leve
   return (
     <div className="w-full flex flex-col h-full overflow-y-auto text-sm bg-muted/20">
       {nodes.map((node) => {
-        const FileIconComponent = useMemo(() => 
-          node.type === "file" ? getFileIcon(node.name) : null,
-          [node.type, node.name]
-        );
+        const FileIconComponent = node.type === "file" ? getFileIcon(node.name) : null;
         return (
         <div key={node.path} className="select-none">
           <div style={{ paddingLeft: `${level * 12}px` }}>

@@ -141,7 +141,12 @@ export const ChatPanel = memo(function ChatPanel({
                         <span>🔧</span>
                         <span>Tool Executions</span>
                       </div>
-                      {msg.toolCalls.map((toolCall, idx) => (
+                      {msg.toolCalls.map((toolCall, idx) => {
+                        const argsStr = toolCall.args && Object.keys(toolCall.args).length > 0 
+                          ? JSON.stringify(toolCall.args, null, 2) 
+                          : null;
+                        
+                        return (
                         <div key={`${msg.id}-tool-${idx}`} className="ml-6 space-y-1 text-xs border-l-2 border-purple-200 dark:border-purple-800 pl-3">
                           <div className="flex items-center gap-2">
                             <code className="bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded font-mono">
@@ -157,15 +162,12 @@ export const ChatPanel = memo(function ChatPanel({
                               <span className="text-red-500">✗ Error</span>
                             )}
                           </div>
-                          {toolCall.args && Object.keys(toolCall.args).length > 0 && (() => {
-                            const argsStr = JSON.stringify(toolCall.args, null, 2);
-                            return (
-                              <div className="text-muted-foreground">
-                                <span className="font-medium">Args:</span>{' '}
-                                <span className="font-mono">{argsStr.slice(0, 100)}{argsStr.length > 100 ? '...' : ''}</span>
-                              </div>
-                            );
-                          })()}
+                          {argsStr && (
+                            <div className="text-muted-foreground">
+                              <span className="font-medium">Args:</span>{' '}
+                              <span className="font-mono">{argsStr.slice(0, 100)}{argsStr.length > 100 ? '...' : ''}</span>
+                            </div>
+                          )}
                           {toolCall.result && (
                             <div className="text-muted-foreground mt-1">
                               <span className="font-medium">Result:</span>{' '}
@@ -173,7 +175,8 @@ export const ChatPanel = memo(function ChatPanel({
                             </div>
                           )}
                         </div>
-                      ))}
+                      );
+                      })}
                     </div>
                   )}
 
