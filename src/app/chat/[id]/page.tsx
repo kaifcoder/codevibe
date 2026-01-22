@@ -184,10 +184,11 @@ function Page({ params }: PageProps) {
             setSandboxId(session.sandboxId);
             console.log('[DB] Loaded sandboxId:', session.sandboxId);
             
-            // Auto-sync filesystem when sandbox is loaded
-            // Block code tab until sync completes
+            // Auto-sync filesystem when sandbox is loaded - non-blocking async
             setIsSyncingFilesystem(true);
-            setTimeout(async () => {
+            // Use async IIFE instead of setTimeout for non-blocking operation
+            (async () => {
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s for sandbox to be ready
               try {
                 const response = await fetch('/api/sync-filesystem', {
                   method: 'POST',
@@ -208,7 +209,7 @@ function Page({ params }: PageProps) {
                 // Sync complete, unblock code tab
                 setIsSyncingFilesystem(false);
               }
-            }, 1000); // Wait 1s for sandbox to be ready
+            })();
           }
           if (session.sandboxUrl) {
             setSandboxUrl(session.sandboxUrl);
@@ -218,15 +219,16 @@ function Page({ params }: PageProps) {
               setIsCheckingExpiration(true);
               const createdTime = new Date(session.sandboxCreatedAt).getTime();
               setSandboxCreatedAt(createdTime);
-              // Check if already expired
+              // Check if already expired - non-blocking async
               const elapsed = Date.now() - createdTime;
-              setTimeout(() => {
+              (async () => {
+                await new Promise(resolve => setTimeout(resolve, 500)); // Small delay to show loader
                 if (elapsed >= SANDBOX_EXPIRY_MS) {
                   setIsSandboxExpired(true);
                   console.log('[DB] Sandbox already expired');
                 }
                 setIsCheckingExpiration(false);
-              }, 500); // Small delay to show loader
+              })();
             } else {
               // Fallback: if no timestamp in DB, use current time (new sandbox, not expired)
               setSandboxCreatedAt(Date.now());

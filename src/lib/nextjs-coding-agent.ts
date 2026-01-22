@@ -150,27 +150,27 @@ async function* typewriterEffect(content: string): AsyncGenerator<StreamResponse
   }
 }
 
+// Pre-compiled regex patterns for better performance
+const THINKING_PATTERNS = [
+  /^(?:Let me |I'll |I will |I need to |First,?\s+I |To answer this|Looking at|Based on |Analyzing )/i,
+  /^(?:Step \d+:|Thought:|Analysis:|Planning:|Reasoning:)/i,
+  /^(?:Thinking:|Approach:|Strategy:)/i,
+];
+
+const TRANSITION_PATTERNS = [
+  /\n\n(?:Here's|Here is|Now,|So,|Therefore,|Based on this,|The answer is|To summarize)/i,
+  /\n\n(?:Answer:|Response:|Solution:)/i,
+  /\n\n---+\n/,  // Markdown separator
+];
+
 // Helper function to extract reasoning from content
 function extractReasoningAndResponse(content: string): { reasoning?: string; response: string } {
-  // Common patterns for reasoning/thinking in LLM responses
-  const thinkingPatterns = [
-    /^(?:Let me |I'll |I will |I need to |First,?\s+I |To answer this|Looking at|Based on |Analyzing )/i,
-    /^(?:Step \d+:|Thought:|Analysis:|Planning:|Reasoning:)/i,
-    /^(?:Thinking:|Approach:|Strategy:)/i,
-  ];
-  
   // Check if content starts with thinking/reasoning
-  const startsWithThinking = thinkingPatterns.some(pattern => pattern.test(content));
+  const startsWithThinking = THINKING_PATTERNS.some(pattern => pattern.test(content));
   
   if (startsWithThinking) {
     // Look for clear transition markers between thinking and answer
-    const transitionPatterns = [
-      /\n\n(?:Here's|Here is|Now,|So,|Therefore,|Based on this,|The answer is|To summarize)/i,
-      /\n\n(?:Answer:|Response:|Solution:)/i,
-      /\n\n---+\n/,  // Markdown separator
-    ];
-    
-    for (const pattern of transitionPatterns) {
+    for (const pattern of TRANSITION_PATTERNS) {
       const parts = content.split(pattern);
       if (parts.length >= 2) {
         const reasoning = parts[0].trim();

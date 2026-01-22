@@ -218,6 +218,8 @@ export type WorkSummary = {
 };
 
 const MAX_MESSAGES = 40; // cap per session to avoid unbounded memory
+const MAX_FILES_TRACKED = 50; // cap on files tracked per session
+const MAX_COMPONENTS_TRACKED = 30; // cap on components tracked per session
 
 export async function getSessionMessages(sessionId: string): Promise<StoredChatMessage[]> {
   const memory = await getSessionMemory(sessionId, 'messages');
@@ -258,11 +260,16 @@ export async function updateWorkSummary(sessionId: string, summary: Partial<Work
     ts: Date.now()
   };
   
+  // Deduplicate arrays to prevent unbounded growth
+  const mergedFilesCreated = Array.from(new Set([...existing.filesCreated, ...(summary.filesCreated || [])]));
+  const mergedFilesModified = Array.from(new Set([...existing.filesModified, ...(summary.filesModified || [])]));
+  const mergedComponents = Array.from(new Set([...existing.componentsMade, ...(summary.componentsMade || [])]));
+  
   const updated: WorkSummary = {
-    filesCreated: [...existing.filesCreated, ...(summary.filesCreated || [])],
-    filesModified: [...existing.filesModified, ...(summary.filesModified || [])],
+    filesCreated: mergedFilesCreated.slice(-MAX_FILES_TRACKED), // Keep only most recent
+    filesModified: mergedFilesModified.slice(-MAX_FILES_TRACKED), // Keep only most recent
     lastAction: summary.lastAction || existing.lastAction,
-    componentsMade: [...existing.componentsMade, ...(summary.componentsMade || [])],
+    componentsMade: mergedComponents.slice(-MAX_COMPONENTS_TRACKED), // Keep only most recent
     ts: Date.now()
   };
   
