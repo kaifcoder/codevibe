@@ -75,6 +75,10 @@ export async function closeMCPClients() {
 export const PLAYWRIGHT_MCP_CONFIG: MCPServerConfig = {
   command: 'npx',
   args: ['-y', '@playwright/mcp@latest'],
+  env: {
+    ...process.env,
+    PLAYWRIGHT_HEADLESS: 'true', // Run browser in headless mode
+  },
 };
 
 export const NEXTJS_DOCS_MCP_CONFIG: MCPServerConfig = {

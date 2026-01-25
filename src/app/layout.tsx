@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import {
+  ClerkProvider
+} from "@clerk/nextjs";
+import { dark } from "@clerk/themes";
 import { TRPCReactProvider } from "@/trpc/client";
 import { Toaster } from "@/components/ui/sonner";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -29,39 +33,45 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <TRPCReactProvider>
-      <html lang="en" suppressHydrationWarning>
-        <body
-          className={`${geistSans.variable} ${geistMono.variable} antialiased h-screen w-full overflow-hidden`}
-        >
-          <ThemeProvider
-            attribute="class"
-            defaultTheme="system"
-            enableSystem
-            disableTransitionOnChange
+    <ClerkProvider
+      appearance={{
+        baseTheme: dark,
+      }}
+    >
+      <TRPCReactProvider>
+        <html lang="en" suppressHydrationWarning>
+          <body
+            className={`${geistSans.variable} ${geistMono.variable} antialiased h-screen w-full overflow-hidden`}
           >
-            <SidebarProvider
-              defaultOpen={false}
-              style={
-                {
-                  "--sidebar-width": "calc(var(--spacing) * 72)",
-                  "--header-height": "calc(var(--spacing) * 12)",
-                } as React.CSSProperties
-              }
-              className="h-screen"
+            <ThemeProvider
+              attribute="class"
+              defaultTheme="system"
+              enableSystem
+              disableTransitionOnChange
             >
-              <AppSidebar variant="inset" />
-              <SidebarInset className="flex flex-col overflow-hidden">
-                <SiteHeader />
-                <div className="flex-1 overflow-hidden">
-                  <Toaster />
-                  {children}
-                </div>
-              </SidebarInset>
-            </SidebarProvider>
-          </ThemeProvider>
-        </body>
-      </html>
-    </TRPCReactProvider>
+              <SidebarProvider
+                defaultOpen={false}
+                style={
+                  {
+                    "--sidebar-width": "calc(var(--spacing) * 72)",
+                    "--header-height": "calc(var(--spacing) * 12)",
+                  } as React.CSSProperties
+                }
+                className="h-screen"
+              >
+                <AppSidebar variant="inset" />
+                <SidebarInset className="flex flex-col overflow-hidden">
+                    <SiteHeader />
+                  <div className="flex-1 overflow-hidden">
+                    <Toaster />
+                    {children}
+                  </div>
+                </SidebarInset>
+              </SidebarProvider>
+            </ThemeProvider>
+          </body>
+        </html>
+      </TRPCReactProvider>
+    </ClerkProvider>
   );
 }

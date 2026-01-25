@@ -14,12 +14,14 @@ import {
   ScanLine,
   Sparkles,
 } from "lucide-react"
+import { useAuth, SignInButton } from "@clerk/nextjs"
 
 
 
 export default function HomePage() {
   const [prompt, setPrompt] = useState("")
   const [particles, setParticles] = useState<Array<{ id: string; left: string; top: string; duration: number; delay: number }>>([])
+  const { isSignedIn, isLoaded } = useAuth()
   
   const router = useRouter()
 
@@ -189,14 +191,25 @@ export default function HomePage() {
                     Press <kbd className="px-2 py-1 bg-white dark:bg-[#2a2a2a] border border-gray-300 dark:border-[#444] rounded text-xs font-mono">⌘</kbd> + <kbd className="px-2 py-1 bg-white dark:bg-[#2a2a2a] border border-gray-300 dark:border-[#444] rounded text-xs font-mono">Enter</kbd> to start
                   </div>
                   <div className="flex items-center space-x-2 flex-shrink-0">
-                    <Button
-                      onClick={handleStartChat}
-                      disabled={!prompt.trim()}
-                      className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 sm:px-6 py-2 sm:py-2.5 text-sm sm:text-base rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-md hover:shadow-lg transition-all duration-200 h-9 sm:h-10 gap-2"
-                    >
-                      Start Building
-                      <ArrowRight className="w-4 h-4" />
-                    </Button>
+                    {isLoaded && !isSignedIn ? (
+                      <SignInButton mode="modal">
+                        <Button
+                          className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 sm:px-6 py-2 sm:py-2.5 text-sm sm:text-base rounded-lg font-medium shadow-md hover:shadow-lg transition-all duration-200 h-9 sm:h-10 gap-2 cursor-pointer"
+                        >
+                          Sign in to Start
+                          <ArrowRight className="w-4 h-4" />
+                        </Button>
+                      </SignInButton>
+                    ) : (
+                      <Button
+                        onClick={handleStartChat}
+                        disabled={!prompt.trim()}
+                        className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 sm:px-6 py-2 sm:py-2.5 text-sm sm:text-base rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-md hover:shadow-lg transition-all duration-200 h-9 sm:h-10 gap-2"
+                      >
+                        Start Building
+                        <ArrowRight className="w-4 h-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>

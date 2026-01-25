@@ -27,18 +27,61 @@ const model = new AzureOpenAiChatClient({
   modelVersion: '2025-08-07', // Specific version from AI Core
   temperature: 1  // GPT-5 only supports temperature=1
 });
+
+// Cache for MCP tools to avoid reinitializing on every request
+let nextjsDocsToolsCache: any[] | null = null;
+let playwrightToolsCache: any[] | null = null;
+let mcpToolsInitialized = false;
+
+// Initialize MCP tools once and cache them
+async function initializeMCPTools() {
+  if (mcpToolsInitialized) return;
+  
+  try {
+    console.log('[Performance] Initializing MCP tools (one-time)...');
+    const startTime = Date.now();
+    
+    // Initialize Next.js docs tools
+    nextjsDocsToolsCache = await createNextJsDocsMCPTools();
+    console.log(`✅ Cached ${nextjsDocsToolsCache.length} Next.js docs MCP tools (${Date.now() - startTime}ms)`);
+    
+    // Initialize Playwright tools
+    const playwrightStart = Date.now();
+    playwrightToolsCache = await createPlaywrightMCPTools();
+    console.log(`✅ Cached ${playwrightToolsCache.length} Playwright MCP tools (${Date.now() - playwrightStart}ms)`);
+    
+    mcpToolsInitialized = true;
+    console.log(`[Performance] Total MCP initialization: ${Date.now() - startTime}ms`);
+  } catch (error) {
+    console.error('Failed to initialize MCP tools:', error);
+  }
+}
+
+// Workflow cache: key = `${sbxId}-${enableMCP}`, value = compiled workflow
+const workflowCache = new Map<string, any>();
+
 // Create a factory function to build the workflow with dynamic tools
 async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, sessionId?: string) {
+  const cacheKey = `${sbxId || 'no-sandbox'}-${enableMCP}`;
+  
+  // Return cached workflow if available
+  if (workflowCache.has(cacheKey)) {
+    console.log(`[Performance] Using cached workflow for ${cacheKey}`);
+    return workflowCache.get(cacheKey);
+  }
+  
+  console.log(`[Performance] Creating new workflow for ${cacheKey}...`);
+  const workflowStartTime = Date.now();
+  
+  // Initialize MCP tools if not already done
+  await initializeMCPTools();
+  
   // Start with base tools
   let allTools = [...baseTools];
   
-  // Add Next.js docs MCP tools (always enabled for Next.js questions)
-  try {
-    const nextjsDocsTools = await createNextJsDocsMCPTools();
-    allTools = [...allTools, ...nextjsDocsTools];
-    console.log(`✅ Added ${nextjsDocsTools.length} Next.js docs MCP tools to agent`);
-  } catch (error) {
-    console.error('Failed to initialize Next.js docs MCP tools:', error);
+  // Add cached Next.js docs MCP tools
+  if (nextjsDocsToolsCache) {
+    allTools = [...allTools, ...nextjsDocsToolsCache];
   }
   
   // Add E2B tools if sbxId is provided
@@ -46,15 +89,9 @@ async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, se
     allTools = [...allTools, ...makeE2BTools(sbxId, sessionId)];
   }
   
-  // Add additional MCP tools if enabled
-  if (enableMCP) {
-    try {
-      const mcpTools = await createPlaywrightMCPTools();
-      allTools = [...allTools, ...mcpTools];
-      console.log(`✅ Added ${mcpTools.length} Playwright MCP tools to agent`);
-    } catch (error) {
-      console.error('Failed to initialize Playwright MCP tools:', error);
-    }
+  // Add cached Playwright MCP tools if enabled
+  if (enableMCP && playwrightToolsCache) {
+    allTools = [...allTools, ...playwrightToolsCache];
   }
   
   const toolNode = new ToolNode(allTools);
@@ -88,10 +125,16 @@ async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, se
     .addEdge(START, 'agent');
 
   // Compile with memory persistence
-  return workflow.compile({ 
+  const compiledWorkflow = workflow.compile({ 
     checkpointer: new MemorySaver(),
     store: agentMemoryStore, // Enable long-term memory storage
   });
+  
+  // Cache the compiled workflow
+  workflowCache.set(cacheKey, compiledWorkflow);
+  console.log(`[Performance] Workflow created and cached in ${Date.now() - workflowStartTime}ms`);
+  
+  return compiledWorkflow;
 }
 
 type MessageArray = (SystemMessage | HumanMessage | AIMessage | ToolMessage)[];

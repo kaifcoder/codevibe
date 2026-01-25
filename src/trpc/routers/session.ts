@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { createTRPCRouter, baseProcedure } from "../init";
+import { createTRPCRouter, baseProcedure, protectedProcedure } from "../init";
 import { getSandbox } from "@/lib/sandbox-utils";
 
 export const sessionRouter = createTRPCRouter({
-  // Create a new session
-  createSession: baseProcedure
+  // Create a new session (requires authentication)
+  createSession: protectedProcedure
     .input(
       z.object({
         id: z.string().optional(),
@@ -12,7 +12,6 @@ export const sessionRouter = createTRPCRouter({
         code: z.string().optional(),
         language: z.string().optional(),
         messages: z.array(z.any()).optional(),
-        userId: z.number().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -23,20 +22,29 @@ export const sessionRouter = createTRPCRouter({
           code: input.code ?? "",
           language: input.language ?? "typescript",
           messages: input.messages ?? [],
-          userId: input.userId,
+          userId: ctx.userId, // Associate with the authenticated user
         },
       });
       return session;
     }),
 
-  // Get session by ID
+  // Get session by ID (user can only access their own sessions or public shared sessions)
   getSession: baseProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const session = await ctx.prisma.session.findUnique({
         where: { id: input.id },
       });
-      return session;
+      
+      if (!session) return null;
+      
+      // Allow access if: user owns the session OR session is public
+      if (session.userId === ctx.userId || session.isPublic) {
+        return session;
+      }
+      
+      // Otherwise, deny access
+      return null;
     }),
 
   // Get session by share token
@@ -49,8 +57,8 @@ export const sessionRouter = createTRPCRouter({
       return session;
     }),
 
-  // Update session
-  updateSession: baseProcedure
+  // Update session (requires ownership)
+  updateSession: protectedProcedure
     .input(
       z.object({
         id: z.string(),
@@ -67,6 +75,16 @@ export const sessionRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      
+      // Verify ownership before updating
+      const existingSession = await ctx.prisma.session.findUnique({
+        where: { id },
+      });
+      
+      if (!existingSession || existingSession.userId !== ctx.userId) {
+        throw new Error('Session not found or access denied');
+      }
+      
       const session = await ctx.prisma.session.update({
         where: { id },
         data,
@@ -74,10 +92,19 @@ export const sessionRouter = createTRPCRouter({
       return session;
     }),
 
-  // Make session public and get share link
-  shareSession: baseProcedure
+  // Make session public and get share link (requires ownership)
+  shareSession: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Verify ownership before sharing
+      const existingSession = await ctx.prisma.session.findUnique({
+        where: { id: input.id },
+      });
+      
+      if (!existingSession || existingSession.userId !== ctx.userId) {
+        throw new Error('Session not found or access denied');
+      }
+      
       const session = await ctx.prisma.session.update({
         where: { id: input.id },
         data: { isPublic: true },
@@ -88,14 +115,18 @@ export const sessionRouter = createTRPCRouter({
       };
     }),
 
-  // Delete a session
-  deleteSession: baseProcedure
+  // Delete a session (requires ownership)
+  deleteSession: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      // Get session to retrieve sandboxId
+      // Get session to verify ownership and retrieve sandboxId
       const session = await ctx.prisma.session.findUnique({
         where: { id: input.id },
       });
+      
+      if (!session || session.userId !== ctx.userId) {
+        throw new Error('Session not found or access denied');
+      }
       
       // Kill sandbox if it exists
       if (session?.sandboxId) {
@@ -117,17 +148,16 @@ export const sessionRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  // List user's sessions
-  listSessions: baseProcedure
+  // List user's sessions (requires authentication, only shows user's own sessions)
+  listSessions: protectedProcedure
     .input(
       z.object({
-        userId: z.number().optional(),
         limit: z.number().default(10),
       })
     )
     .query(async ({ ctx, input }) => {
       const sessions = await ctx.prisma.session.findMany({
-        where: input.userId ? { userId: input.userId } : undefined,
+        where: { userId: ctx.userId },
         orderBy: { updatedAt: "desc" },
         take: input.limit,
       });
