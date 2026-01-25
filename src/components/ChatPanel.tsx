@@ -134,43 +134,47 @@ export function ChatPanel({
                     </div>
                   )}
 
-                  {/* Tool calls section */}
+                  {/* Tool calls section - compact design */}
                   {isAI && msg.toolCalls && msg.toolCalls.length > 0 && (
-                    <div className="mb-3 pb-3 border-b border-border/50 space-y-2">
-                      <div className="text-purple-600 dark:text-purple-400 font-medium text-sm flex items-center gap-2">
-                        <span>🔧</span>
-                        <span>Tool Executions</span>
+                    <div className="mb-3 pb-3 border-b border-border/50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tools Used</span>
+                        <span className="text-xs text-muted-foreground">({msg.toolCalls.length})</span>
                       </div>
-                      {msg.toolCalls.map((toolCall, idx) => (
-                        <div key={`${msg.id}-tool-${idx}`} className="ml-6 space-y-1 text-xs border-l-2 border-purple-200 dark:border-purple-800 pl-3">
-                          <div className="flex items-center gap-2">
-                            <code className="bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded font-mono">
-                              {toolCall.tool}
-                            </code>
-                            {toolCall.status === 'running' && (
-                              <span className="text-purple-500 animate-pulse">⚡ Running...</span>
-                            )}
-                            {toolCall.status === 'complete' && (
-                              <span className="text-green-500">✓ Complete</span>
-                            )}
-                            {toolCall.status === 'error' && (
-                              <span className="text-red-500">✗ Error</span>
-                            )}
-                          </div>
-                          {toolCall.args && Object.keys(toolCall.args).length > 0 && (
-                            <div className="text-muted-foreground">
-                              <span className="font-medium">Args:</span>{' '}
-                              <span className="font-mono">{JSON.stringify(toolCall.args, null, 2).slice(0, 100)}{JSON.stringify(toolCall.args).length > 100 ? '...' : ''}</span>
-                            </div>
-                          )}
-                          {toolCall.result && (
-                            <div className="text-muted-foreground mt-1">
-                              <span className="font-medium">Result:</span>{' '}
-                              <span className="whitespace-pre-wrap">{toolCall.result.slice(0, 150)}{toolCall.result.length > 150 ? '...' : ''}</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                      <div className="flex flex-wrap gap-1.5">
+                        {msg.toolCalls.map((toolCall, idx) => {
+                          // Format tool name for display (e2b_write_file -> Write File)
+                          const displayName = toolCall.tool
+                            .replace(/^e2b_/, '')
+                            .replace(/^browser_/, '🌐 ')
+                            .replace(/_/g, ' ')
+                            .replace(/\b\w/g, c => c.toUpperCase());
+                          
+                          // Get status icon
+                          const statusIcon = toolCall.status === 'running' ? '⏳' : 
+                                           toolCall.status === 'complete' ? '✓' : 
+                                           toolCall.status === 'error' ? '✗' : '•';
+                          
+                          const statusColor = toolCall.status === 'running' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800' :
+                                            toolCall.status === 'complete' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' :
+                                            toolCall.status === 'error' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800' :
+                                            'bg-muted text-muted-foreground border-border';
+                          
+                          return (
+                            <span 
+                              key={`${msg.id}-tool-${idx}`} 
+                              className={cn(
+                                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors",
+                                statusColor
+                              )}
+                              title={toolCall.result ? `Result: ${toolCall.result.slice(0, 200)}` : undefined}
+                            >
+                              <span>{statusIcon}</span>
+                              <span>{displayName}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
 
