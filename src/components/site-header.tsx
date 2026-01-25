@@ -32,7 +32,7 @@ export function SiteHeader() {
             </a>
           </Button>
           <SignedOut>
-            <SignInButton>
+            <SignInButton mode="modal">
               <Button variant="ghost" size="sm" className="cursor-pointer">
                 Sign In
               </Button>

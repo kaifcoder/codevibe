@@ -14,7 +14,7 @@ import {
   ScanLine,
   Sparkles,
 } from "lucide-react"
-import { useAuth, SignInButton } from "@clerk/nextjs"
+import { useAuth, SignInButton, useClerk } from "@clerk/nextjs"
 
 
 
@@ -22,6 +22,7 @@ export default function HomePage() {
   const [prompt, setPrompt] = useState("")
   const [particles, setParticles] = useState<Array<{ id: string; left: string; top: string; duration: number; delay: number }>>([])
   const { isSignedIn, isLoaded } = useAuth()
+  const { openSignIn } = useClerk()
   
   const router = useRouter()
 
@@ -44,6 +45,7 @@ export default function HomePage() {
 
   const handleStartChat = () => {
     if (!prompt.trim()) return
+    if (!isSignedIn) return // Don't proceed if not signed in
 
     const chatId = generateChatId()
 
@@ -54,9 +56,13 @@ export default function HomePage() {
     router.push(`/chat/${chatId}`)
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && e.metaKey) {
       e.preventDefault()
+      if (!isSignedIn) {
+        openSignIn()
+        return
+      }
       handleStartChat()
     }
   }
@@ -179,7 +185,7 @@ export default function HomePage() {
                 <Textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  onKeyPress={handleKeyPress}
+                  onKeyDown={handleKeyDown}
                   placeholder="Describe an app or site you want to create..."
                   className="w-full min-h-[120px] sm:min-h-[140px] px-4 sm:px-5 py-4 sm:py-5 text-base sm:text-lg dark:bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
                   rows={4}

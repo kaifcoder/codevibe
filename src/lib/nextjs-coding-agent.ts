@@ -33,32 +33,50 @@ let nextjsDocsToolsCache: any[] | null = null;
 let playwrightToolsCache: any[] | null = null;
 let mcpToolsInitialized = false;
 
-// Initialize MCP tools once and cache them
+// Initialize MCP tools once and cache them - PARALLEL initialization for speed
 async function initializeMCPTools() {
   if (mcpToolsInitialized) return;
   
   try {
-    console.log('[Performance] Initializing MCP tools (one-time)...');
+    console.log('[Performance] Initializing MCP tools in parallel (one-time)...');
     const startTime = Date.now();
     
-    // Initialize Next.js docs tools
-    nextjsDocsToolsCache = await createNextJsDocsMCPTools();
-    console.log(`✅ Cached ${nextjsDocsToolsCache.length} Next.js docs MCP tools (${Date.now() - startTime}ms)`);
+    // Initialize BOTH MCP tools in parallel for faster startup
+    const [nextjsTools, playwrightTools] = await Promise.all([
+      createNextJsDocsMCPTools().catch(err => {
+        console.error('Failed to initialize Next.js docs MCP:', err);
+        return [];
+      }),
+      createPlaywrightMCPTools().catch(err => {
+        console.error('Failed to initialize Playwright MCP:', err);
+        return [];
+      })
+    ]);
     
-    // Initialize Playwright tools
-    const playwrightStart = Date.now();
-    playwrightToolsCache = await createPlaywrightMCPTools();
-    console.log(`✅ Cached ${playwrightToolsCache.length} Playwright MCP tools (${Date.now() - playwrightStart}ms)`);
-    
+    nextjsDocsToolsCache = nextjsTools;
+    playwrightToolsCache = playwrightTools;
     mcpToolsInitialized = true;
-    console.log(`[Performance] Total MCP initialization: ${Date.now() - startTime}ms`);
+    
+    console.log(`✅ Cached ${nextjsTools.length} Next.js docs + ${playwrightTools.length} Playwright MCP tools in ${Date.now() - startTime}ms`);
   } catch (error) {
     console.error('Failed to initialize MCP tools:', error);
+    mcpToolsInitialized = true; // Mark as initialized to avoid retry loops
   }
+}
+
+// Eagerly warm up MCP tools on module load (non-blocking)
+if (globalThis.window === undefined) {
+  // Server-side only - warm up MCP tools immediately
+  setImmediate(() => {
+    initializeMCPTools().catch(console.error);
+  });
 }
 
 // Workflow cache: key = `${sbxId}-${enableMCP}`, value = compiled workflow
 const workflowCache = new Map<string, any>();
+
+// Cache for bound models to avoid re-binding tools on every request
+const boundModelCache = new Map<string, { model: any; tools: any[] }>();
 
 // Create a factory function to build the workflow with dynamic tools
 async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, sessionId?: string) {
@@ -76,26 +94,46 @@ async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, se
   // Initialize MCP tools if not already done
   await initializeMCPTools();
   
-  // Start with base tools
-  let allTools = [...baseTools];
+  // Build tools array and get cached bound model
+  let modelWithTools: any;
+  let allTools: any[];
   
-  // Add cached Next.js docs MCP tools
-  if (nextjsDocsToolsCache) {
-    allTools = [...allTools, ...nextjsDocsToolsCache];
-  }
-  
-  // Add E2B tools if sbxId is provided
-  if (sbxId) {
-    allTools = [...allTools, ...makeE2BTools(sbxId, sessionId)];
-  }
-  
-  // Add cached Playwright MCP tools if enabled
-  if (enableMCP && playwrightToolsCache) {
-    allTools = [...allTools, ...playwrightToolsCache];
+  // Check if we have a cached bound model for this configuration
+  if (boundModelCache.has(cacheKey)) {
+    console.log(`[Performance] Using cached bound model for ${cacheKey}`);
+    const cached = boundModelCache.get(cacheKey);
+    modelWithTools = cached.model;
+    allTools = cached.tools;
+  } else {
+    // Build tools array
+    allTools = [...baseTools];
+    
+    // Add cached Next.js docs MCP tools
+    if (nextjsDocsToolsCache) {
+      allTools = [...allTools, ...nextjsDocsToolsCache];
+    }
+    
+    // Add E2B tools if sbxId is provided
+    if (sbxId) {
+      allTools = [...allTools, ...makeE2BTools(sbxId, sessionId)];
+    }
+    
+    // Add cached Playwright MCP tools if enabled
+    if (enableMCP && playwrightToolsCache) {
+      allTools = [...allTools, ...playwrightToolsCache];
+    }
+    
+    // Bind tools to model (expensive operation - cache it)
+    console.log(`[Performance] Binding ${allTools.length} tools to model...`);
+    const bindStart = Date.now();
+    modelWithTools = model.bindTools(allTools);
+    console.log(`[Performance] Tool binding completed in ${Date.now() - bindStart}ms`);
+    
+    // Cache the bound model
+    boundModelCache.set(cacheKey, { model: modelWithTools, tools: allTools });
   }
   
   const toolNode = new ToolNode(allTools);
-  const modelWithTools = model.bindTools(allTools);
 
   async function callModel(state: AgentState): Promise<Partial<AgentState>> {
     try {
@@ -151,8 +189,8 @@ function compactPrevMessages(
   prevMessages: MessageArray = [],
   options?: { maxMessages?: number; maxContentLen?: number }
 ): MessageArray {
-  const maxMessages = options?.maxMessages ?? 12;
-  const maxContentLen = options?.maxContentLen ?? 1500;
+  const maxMessages = options?.maxMessages ?? 10; // Reduced from 12 for faster context processing
+  const maxContentLen = options?.maxContentLen ?? 1200; // Reduced from 1500 for speed
   if (!prevMessages.length) return prevMessages;
 
   // Trim overly long message contents
@@ -186,8 +224,8 @@ function compactPrevMessages(
 
 // Helper function to stream content (no delay for speed)
 async function* typewriterEffect(content: string): AsyncGenerator<StreamResponse, void, unknown> {
-  // Stream in larger chunks for better performance
-  const chunkSize = 50;
+  // Stream in larger chunks for faster perceived response (150 chars per chunk)
+  const chunkSize = 150;
   for (let i = 0; i < content.length; i += chunkSize) {
     yield { content: content.slice(i, i + chunkSize), type: 'partial' };
   }
@@ -289,7 +327,7 @@ export async function invokeNextJsAgent(
     configurable: { 
       thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session' 
     },
-    recursionLimit: 75, // Balanced limit to prevent errors on complex tasks
+    recursionLimit: 50, // Reduced from 75 for faster completion
   };
 
   // Create system prompt with appropriate tool descriptions
@@ -350,7 +388,7 @@ export async function* streamNextJsAgent(
       configurable: { 
         thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session' 
       },
-      recursionLimit: 75, // Balanced limit for complex tasks
+      recursionLimit: 50, // Reduced from 75 for faster completion
     };
 
     // Create system prompt with appropriate tool descriptions
