@@ -1,12 +1,23 @@
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
+import { auth } from '@clerk/nextjs/server'
 
 const prisma = new PrismaClient()
 
-// GET /api/sessions - List all sessions
+// GET /api/sessions - List user's sessions (requires authentication)
 export async function GET() {
   try {
+    const { userId } = await auth()
+    
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      )
+    }
+    
     const sessions = await prisma.session.findMany({
+      where: { userId },
       orderBy: {
         createdAt: 'desc'
       }
@@ -22,10 +33,21 @@ export async function GET() {
   }
 }
 
-// DELETE /api/sessions - Delete all sessions
+// DELETE /api/sessions - Delete all user's sessions (requires authentication)
 export async function DELETE() {
   try {
-    await prisma.session.deleteMany()
+    const { userId } = await auth()
+    
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      )
+    }
+    
+    await prisma.session.deleteMany({
+      where: { userId }
+    })
     
     return NextResponse.json({ success: true })
   } catch (error) {

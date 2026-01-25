@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@/generated/prisma";
 import { getSandbox } from "@/lib/sandbox-utils";
+import { auth } from "@clerk/nextjs/server";
 
 const prisma = new PrismaClient();
 
@@ -29,6 +30,7 @@ export async function GET(
 ) {
   try {
     const { token } = await params;
+    const { userId } = await auth();
     
     // Try to find by ID first (for regular chat sessions)
     let session = await prisma.session.findUnique({
@@ -48,6 +50,14 @@ export async function GET(
         { status: 404 }
       );
     }
+    
+    // Check access: user owns the session OR session is public
+    if (session.userId !== userId && !session.isPublic) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 403 }
+      );
+    }
 
     return NextResponse.json(session);
   } catch (error) {
@@ -65,6 +75,27 @@ export async function PATCH(
 ) {
   try {
     const { token } = await params;
+    const { userId } = await auth();
+    
+    if (!userId) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+    
+    // Verify ownership before updating
+    const existingSession = await prisma.session.findUnique({
+      where: { id: token },
+    });
+    
+    if (!existingSession || existingSession.userId !== userId) {
+      return NextResponse.json(
+        { error: "Session not found or access denied" },
+        { status: 403 }
+      );
+    }
+    
     const body = await request.json() as Record<string, unknown>;
 
     // Sanitize data to remove null bytes before saving to PostgreSQL
@@ -91,11 +122,26 @@ export async function DELETE(
 ) {
   try {
     const { token } = await params;
+    const { userId } = await auth();
+    
+    if (!userId) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
 
-    // Get session to retrieve sandboxId
+    // Get session to verify ownership and retrieve sandboxId
     const session = await prisma.session.findUnique({
       where: { id: token },
     });
+    
+    if (!session || session.userId !== userId) {
+      return NextResponse.json(
+        { error: "Session not found or access denied" },
+        { status: 403 }
+      );
+    }
     
     // Kill sandbox if it exists
     if (session?.sandboxId) {
