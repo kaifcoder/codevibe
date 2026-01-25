@@ -3,6 +3,7 @@
 import { BotIcon, MessagesSquareIcon, Trash2Icon, MoreHorizontalIcon, Trash } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
+import { useAuth } from "@clerk/nextjs"
 
 import {
   Sidebar,
@@ -48,6 +49,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
+  const { isSignedIn, isLoaded } = useAuth()
 
   const handleDeleteChat = (chatId: string, e: React.MouseEvent) => {
     e.preventDefault()
@@ -102,13 +104,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }
 
   useEffect(() => {
-    // Load recent chats from database
+    // Load recent chats from database only if signed in
     const loadRecentChats = async () => {
+      // Clear chats if not signed in
+      if (!isLoaded || !isSignedIn) {
+        setRecentChats([])
+        return
+      }
+      
       try {
         // Fetch sessions from the database API
         const response = await fetch('/api/sessions')
         if (!response.ok) {
           console.error('[Sidebar] Failed to fetch sessions:', response.statusText)
+          setRecentChats([])
           return
         }
         
@@ -162,7 +171,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       globalThis.removeEventListener('storage', handleStorageChange)
       globalThis.removeEventListener('chatUpdated', handleStorageChange)
     }
-  }, [])
+  }, [isLoaded, isSignedIn])
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -182,64 +191,76 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Recent Chats</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {recentChats.length === 0 ? (
-                <SidebarMenuItem>
-                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                    No recent chats
-                  </div>
-                </SidebarMenuItem>
-              ) : (
-                recentChats.map((chat) => (
-                  <SidebarMenuItem key={chat.id}>
-                    <SidebarMenuButton asChild>
-                      <Link href={`/chat/${chat.id}`}>
-                        <MessagesSquareIcon />
-                        <span className="truncate">{chat.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <SidebarMenuAction showOnHover>
-                          <MoreHorizontalIcon className="h-4 w-4" />
-                          <span className="sr-only">More options</span>
-                        </SidebarMenuAction>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent side="bottom" align="center">
-                        <DropdownMenuItem
-                          onClick={(e) => handleDeleteChat(chat.id, e as any)}
-                          className="text-destructive focus:text-destructive"
-                        >
-                          <Trash2Icon className="h-4 w-4 mr-2" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+        {isLoaded && isSignedIn ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>Recent Chats</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {recentChats.length === 0 ? (
+                  <SidebarMenuItem>
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                      No recent chats
+                    </div>
                   </SidebarMenuItem>
-                ))
-              )}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+                ) : (
+                  recentChats.map((chat) => (
+                    <SidebarMenuItem key={chat.id}>
+                      <SidebarMenuButton asChild>
+                        <Link href={`/chat/${chat.id}`}>
+                          <MessagesSquareIcon />
+                          <span className="truncate">{chat.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <SidebarMenuAction showOnHover>
+                            <MoreHorizontalIcon className="h-4 w-4" />
+                            <span className="sr-only">More options</span>
+                          </SidebarMenuAction>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent side="bottom" align="center">
+                          <DropdownMenuItem
+                            onClick={(e) => handleDeleteChat(chat.id, e as React.MouseEvent)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2Icon className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </SidebarMenuItem>
+                  ))
+                )}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : (
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <div className="px-2 py-4 text-sm text-muted-foreground text-center">
+                Sign in to see your chats
+              </div>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              onClick={handleClearAll}
-              className="text-destructive hover:text-destructive hover:bg-destructive/10"
-              tooltip="Clear All Chats"
-            >
-              <Trash />
-              <span>Clear All Chats</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
+      {isLoaded && isSignedIn && (
+        <SidebarFooter>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                onClick={handleClearAll}
+                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                tooltip="Clear All Chats"
+              >
+                <Trash />
+                <span>Clear All Chats</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+      )}
       
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
