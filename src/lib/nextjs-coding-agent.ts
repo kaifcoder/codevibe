@@ -65,12 +65,13 @@ async function initializeMCPTools() {
 }
 
 // Eagerly warm up MCP tools on module load (non-blocking)
-if (globalThis.window === undefined) {
-  // Server-side only - warm up MCP tools immediately
-  setImmediate(() => {
-    initializeMCPTools().catch(console.error);
-  });
-}
+// Disabled: MCP processes can crash causing EPIPE errors
+// MCP tools are now initialized lazily on first agent request
+// if (globalThis.window === undefined) {
+//   setImmediate(() => {
+//     initializeMCPTools().catch(console.error);
+//   });
+// }
 
 // Workflow cache: key = `${sbxId}-${enableMCP}`, value = compiled workflow
 const workflowCache = new Map<string, any>();
