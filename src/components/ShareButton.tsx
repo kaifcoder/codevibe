@@ -56,12 +56,12 @@ export function ShareButton({ sessionId }: Readonly<ShareButtonProps>) {
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
         <Button
-          variant="outline"
+          variant="ghost"
           size="sm"
           onClick={handleShare}
-          className="gap-2"
+          className="gap-1.5 text-xs"
         >
-          <Share2 className="h-4 w-4" />
+          <Share2 className="h-3.5 w-3.5" />
           Share
         </Button>
       </DialogTrigger>

@@ -1,5 +1,6 @@
 "use client";
 
+import { Dispatch, SetStateAction } from "react";
 import { MessageSquare, Code, Eye } from "lucide-react";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import { CodeEditor } from "@/components/CodeEditor";
@@ -7,13 +8,14 @@ import { CodeEditor } from "@/components/CodeEditor";
 // Type aliases
 type MobilePanel = "chat" | "preview" | "code";
 type ConnectionStatus = "connected" | "connecting" | "disconnected";
+type ConnectedUser = { id: string; name: string; color: string };
 
 export interface MobileChatLayoutProps {
   mobileActivePanel: MobilePanel;
   setMobileActivePanel: (panel: MobilePanel) => void;
   messages: ChatMessage[];
   message: string;
-  setMessage: (message: string) => void;
+  setMessage: Dispatch<SetStateAction<string>>;
   handleSend: () => void;
   isLoading: boolean;
   isStreaming: boolean;
@@ -26,7 +28,7 @@ export interface MobileChatLayoutProps {
   getCurrentFileContent: (file: string) => string;
   handleCodeChange: (value: string | undefined) => void;
   guestCredentials: { username: string; userId: string } | null;
-  setConnectedUsers: (users: string[]) => void;
+  setConnectedUsers: (users: ConnectedUser[]) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
 }
 
@@ -50,7 +52,7 @@ export function MobileChatLayout({
   guestCredentials,
   setConnectedUsers,
   setConnectionStatus,
-}: MobileChatLayoutProps) {
+}: Readonly<MobileChatLayoutProps>) {
   return (
     <div className="h-full flex flex-col">
       {/* Mobile Tab Bar */}
@@ -144,7 +146,6 @@ export function MobileChatLayout({
                     value={getCurrentFileContent(selectedFile)}
                     onChange={handleCodeChange}
                     language="typescript"
-                    height={"100%"}
                     autoScroll={false}
                     collaborative={true}
                     roomId={`${sessionId}-${selectedFile}`}

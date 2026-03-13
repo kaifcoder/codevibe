@@ -1,7 +1,32 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:1234';
+/**
+ * Get the WebSocket URL based on current hostname
+ * Must match the logic in initCollaboration.ts
+ */
+function getWebSocketUrl(): string {
+  // Check for explicit environment variable first
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL;
+  }
+  
+  // In SSR context, use localhost
+  if (globalThis.window === undefined) {
+    return 'ws://localhost:1234';
+  }
+  
+  const hostname = globalThis.window.location.hostname;
+  const protocol = globalThis.window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  
+  // Use localhost for local access, otherwise use current hostname
+  let finalHostname = hostname;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    finalHostname = 'localhost';
+  }
+  
+  return `${protocol}//${finalHostname}:1234`;
+}
 
 /**
  * Update a Yjs document directly from the server/agent
@@ -9,14 +34,15 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:1234';
  */
 export async function updateYjsDocument(roomId: string, content: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    console.log('[updateYjsDocument] Connecting to room:', roomId);
+    const wsUrl = getWebSocketUrl();
+    console.log('[updateYjsDocument] Connecting to room:', roomId, 'via', wsUrl);
     
     // Create a temporary Y.Doc and provider to update the document
     const doc = new Y.Doc();
     const yText = doc.getText('monaco');
     
     const provider = new HocuspocusProvider({
-      url: WS_URL,
+      url: wsUrl,
       name: roomId,
       document: doc,
       onSynced: () => {

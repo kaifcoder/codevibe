@@ -3,19 +3,7 @@ import { InMemoryStore } from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
-// Create a memory store instance
-// NOTE: InMemoryStore persists during server runtime but clears on restart
-// For production persistence across restarts, use a database-backed store:
-//
-// PostgreSQL:
-// import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
-// export const agentMemoryStore = PostgresSaver.fromConnString(process.env.DATABASE_URL);
-//
-// Redis:
-// import { RedisSaver } from '@langchain/langgraph-checkpoint-redis';
-// export const agentMemoryStore = new RedisSaver({ url: process.env.REDIS_URL });
-//
-// Current setup: InMemoryStore (good for development, persists across prompts)
+// InMemoryStore persists during server runtime but clears on restart
 export const agentMemoryStore = new InMemoryStore();
 
 // Schema for user/session context
@@ -185,22 +173,6 @@ export async function saveSessionMemory(sessionId: string, category: string, dat
   }
 }
 
-export async function clearSessionMemory(sessionId: string) {
-  const namespace = ['sessions', sessionId];
-  try {
-    // Delete all memory categories for this session
-    await agentMemoryStore.delete(namespace, 'preferences');
-    await agentMemoryStore.delete(namespace, 'context');
-    await agentMemoryStore.delete(namespace, 'tasks');
-    await agentMemoryStore.delete(namespace, 'messages');
-    await agentMemoryStore.delete(namespace, 'workSummary');
-    return true;
-  } catch (error) {
-    console.error('Error clearing session memory:', error);
-    return false;
-  }
-}
-
 // ============ Chat Message History Functions ============
 
 export type StoredChatMessage = {
@@ -238,35 +210,9 @@ export async function appendSessionMessages(sessionId: string, newMessages: Stor
   await saveSessionMemory(sessionId, 'messages', { messages: trimmed });
 }
 
-export async function resetSession(sessionId: string) {
-  await clearSessionMemory(sessionId);
-}
-
 export async function getWorkSummary(sessionId: string): Promise<WorkSummary | null> {
   const memory = await getSessionMemory(sessionId, 'workSummary');
   return memory as WorkSummary | null;
-}
-
-export async function updateWorkSummary(sessionId: string, summary: Partial<WorkSummary>) {
-  if (!sessionId) return;
-  
-  const existing = await getWorkSummary(sessionId) || {
-    filesCreated: [],
-    filesModified: [],
-    lastAction: '',
-    componentsMade: [],
-    ts: Date.now()
-  };
-  
-  const updated: WorkSummary = {
-    filesCreated: [...existing.filesCreated, ...(summary.filesCreated || [])],
-    filesModified: [...existing.filesModified, ...(summary.filesModified || [])],
-    lastAction: summary.lastAction || existing.lastAction,
-    componentsMade: [...existing.componentsMade, ...(summary.componentsMade || [])],
-    ts: Date.now()
-  };
-  
-  await saveSessionMemory(sessionId, 'workSummary', updated);
 }
 
 export function getWorkSummaryText(summary: WorkSummary | null): string {

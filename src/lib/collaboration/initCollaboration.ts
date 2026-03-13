@@ -183,11 +183,3 @@ function disconnectRoom(roomId: string): void {
   
   console.log(`[Collaboration] Cleaned up room: ${roomId}`);
 }
-
-/**
- * Cleanup all active sessions (call on app unmount)
- */
-export function cleanupAllSessions(): void {
-  providers.forEach((_, roomId) => disconnectRoom(roomId));
-  console.log('[Collaboration] All sessions cleaned up');
-}

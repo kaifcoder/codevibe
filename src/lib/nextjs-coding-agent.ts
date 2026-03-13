@@ -64,14 +64,6 @@ async function initializeMCPTools() {
   }
 }
 
-// Eagerly warm up MCP tools on module load (non-blocking)
-// Disabled: MCP processes can crash causing EPIPE errors
-// MCP tools are now initialized lazily on first agent request
-// if (globalThis.window === undefined) {
-//   setImmediate(() => {
-//     initializeMCPTools().catch(console.error);
-//   });
-// }
 
 // Workflow cache: key = `${sbxId}-${enableMCP}`, value = compiled workflow
 const workflowCache = new Map<string, any>();
@@ -79,100 +71,99 @@ const workflowCache = new Map<string, any>();
 // Cache for bound models to avoid re-binding tools on every request
 const boundModelCache = new Map<string, { model: any; tools: any[] }>();
 
-// Create a factory function to build the workflow with dynamic tools
-async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, sessionId?: string) {
-  const cacheKey = `${sbxId || 'no-sandbox'}-${enableMCP}`;
-  
-  // Return cached workflow if available
-  if (workflowCache.has(cacheKey)) {
-    console.log(`[Performance] Using cached workflow for ${cacheKey}`);
-    return workflowCache.get(cacheKey);
-  }
-  
-  console.log(`[Performance] Creating new workflow for ${cacheKey}...`);
-  const workflowStartTime = Date.now();
-  
-  // Initialize MCP tools if not already done
-  await initializeMCPTools();
-  
-  // Build tools array and get cached bound model
-  let modelWithTools: any;
-  let allTools: any[];
-  
-  // Check if we have a cached bound model for this configuration
-  if (boundModelCache.has(cacheKey)) {
-    console.log(`[Performance] Using cached bound model for ${cacheKey}`);
-    const cached = boundModelCache.get(cacheKey);
-    modelWithTools = cached.model;
-    allTools = cached.tools;
-  } else {
-    // Build tools array
-    allTools = [...baseTools];
-    
-    // Add cached Next.js docs MCP tools
-    if (nextjsDocsToolsCache) {
-      allTools = [...allTools, ...nextjsDocsToolsCache];
-    }
-    
-    // Add E2B tools if sbxId is provided
-    if (sbxId) {
-      allTools = [...allTools, ...makeE2BTools(sbxId, sessionId)];
-    }
-    
-    // Add cached Playwright MCP tools if enabled
-    if (enableMCP && playwrightToolsCache) {
-      allTools = [...allTools, ...playwrightToolsCache];
-    }
-    
-    // Bind tools to model (expensive operation - cache it)
-    console.log(`[Performance] Binding ${allTools.length} tools to model...`);
-    const bindStart = Date.now();
-    modelWithTools = model.bindTools(allTools);
-    console.log(`[Performance] Tool binding completed in ${Date.now() - bindStart}ms`);
-    
-    // Cache the bound model
-    boundModelCache.set(cacheKey, { model: modelWithTools, tools: allTools });
-  }
-  
-  const toolNode = new ToolNode(allTools);
+/** Assembles the full tools array from base tools, MCP caches, and E2B tools. */
+function buildToolsArray(sbxId?: string, sessionId?: string, enableMCP: boolean = true): any[] {
+  const tools = [...baseTools];
 
-  async function callModel(state: AgentState): Promise<Partial<AgentState>> {
+  if (nextjsDocsToolsCache) {
+    tools.push(...nextjsDocsToolsCache);
+  }
+  if (sbxId) {
+    tools.push(...makeE2BTools(sbxId, sessionId));
+  }
+  if (enableMCP && playwrightToolsCache) {
+    tools.push(...playwrightToolsCache);
+  }
+
+  return tools;
+}
+
+/** Returns a cached bound model + tools, or builds and caches a fresh one. */
+function getOrBindModel(
+  cacheKey: string,
+  sbxId?: string,
+  sessionId?: string,
+  enableMCP: boolean = true
+): { boundModel: any; tools: any[] } {
+  const cached = boundModelCache.get(cacheKey);
+  if (cached) {
+    console.log(`[Performance] Using cached bound model for ${cacheKey}`);
+    return { boundModel: cached.model, tools: cached.tools };
+  }
+
+  const tools = buildToolsArray(sbxId, sessionId, enableMCP);
+
+  console.log(`[Performance] Binding ${tools.length} tools to model...`);
+  const bindStart = Date.now();
+  const boundModel = model.bindTools(tools);
+  console.log(`[Performance] Tool binding completed in ${Date.now() - bindStart}ms`);
+
+  boundModelCache.set(cacheKey, { model: boundModel, tools });
+  return { boundModel, tools };
+}
+
+/** Constructs and compiles the LangGraph state graph for the agent. */
+function compileAgentGraph(boundModel: any, tools: any[]) {
+  const callModel = async (state: AgentState): Promise<Partial<AgentState>> => {
     try {
-      const response = await modelWithTools.invoke(state.messages);
+      const response = await boundModel.invoke(state.messages);
       return { messages: [response] };
     } catch (error) {
       console.error('Error in callModel:', error);
       return { messages: [new AIMessage('Error processing request. Please try again.')] };
     }
-  }
+  };
 
-  // Return the next node name, not routing logic
-  
-  async function shouldContinue(state: AgentState): Promise<string> {
+  const shouldContinue = async (state: AgentState): Promise<string> => {
     const lastMessage = state.messages[state.messages.length - 1];
     if (lastMessage instanceof AIMessage && lastMessage.tool_calls?.length) {
       return 'tools';
     }
     return END;
-  }
+  };
 
-  const workflow = new StateGraph(MessagesAnnotation)
+  return new StateGraph(MessagesAnnotation)
     .addNode('agent', callModel)
-    .addNode('tools', toolNode)
+    .addNode('tools', new ToolNode(tools))
     .addConditionalEdges('agent', shouldContinue, ['tools', END])
     .addEdge('tools', 'agent')
-    .addEdge(START, 'agent');
+    .addEdge(START, 'agent')
+    .compile({
+      checkpointer: new MemorySaver(),
+      store: agentMemoryStore,
+    });
+}
 
-  // Compile with memory persistence
-  const compiledWorkflow = workflow.compile({ 
-    checkpointer: new MemorySaver(),
-    store: agentMemoryStore, // Enable long-term memory storage
-  });
-  
-  // Cache the compiled workflow
+/** Factory: returns a cached compiled workflow, or creates + caches a new one. */
+async function createAgentWorkflow(sbxId?: string, enableMCP: boolean = true, sessionId?: string) {
+  const cacheKey = `${sbxId || 'no-sandbox'}-${enableMCP}`;
+
+  if (workflowCache.has(cacheKey)) {
+    console.log(`[Performance] Using cached workflow for ${cacheKey}`);
+    return workflowCache.get(cacheKey);
+  }
+
+  console.log(`[Performance] Creating new workflow for ${cacheKey}...`);
+  const startTime = Date.now();
+
+  await initializeMCPTools();
+
+  const { boundModel, tools } = getOrBindModel(cacheKey, sbxId, sessionId, enableMCP);
+  const compiledWorkflow = compileAgentGraph(boundModel, tools);
+
   workflowCache.set(cacheKey, compiledWorkflow);
-  console.log(`[Performance] Workflow created and cached in ${Date.now() - workflowStartTime}ms`);
-  
+  console.log(`[Performance] Workflow created and cached in ${Date.now() - startTime}ms`);
+
   return compiledWorkflow;
 }
 
@@ -275,24 +266,34 @@ function extractReasoningAndResponse(content: string): { reasoning?: string; res
 }
 
 // Helper function to process agent messages
-async function* processAgentMessages(messages: any): AsyncGenerator<StreamResponse, void, unknown> {
+async function* processAgentMessages(messages: any, toolCallArgsMap: Map<string, any>): AsyncGenerator<StreamResponse, void, unknown> {
   // Convert messages to array if it's not already
   const messageArray = Array.isArray(messages) ? messages : [messages];
-  
+
   for (const message of messageArray) {
     if (message instanceof AIMessage) {
       // Check if it's a tool call
       if (message.tool_calls && message.tool_calls.length > 0) {
-        yield { 
-          content: `Using tool: ${message.tool_calls[0].name}`, 
-          tool_call_output: message.tool_calls[0],
-          type: 'tool_call' 
-        };
-      } else if (typeof message.content === 'string' && 
+        for (const toolCall of message.tool_calls) {
+          // Store args in the map for later retrieval
+          const toolCallId = toolCall.id || toolCall.name;
+          toolCallArgsMap.set(toolCallId, toolCall.args);
+
+          yield {
+            content: `Using tool: ${toolCall.name}`,
+            tool_call_output: {
+              tool: toolCall.name,
+              args: toolCall.args,
+              status: 'running'
+            },
+            type: 'tool_call'
+          };
+        }
+      } else if (typeof message.content === 'string' &&
                 !message.content.startsWith('Audit:')) {
         // Extract reasoning and response
         const { reasoning, response } = extractReasoningAndResponse(message.content);
-        
+
         // Emit reasoning separately if present
         if (reasoning) {
           yield {
@@ -301,7 +302,7 @@ async function* processAgentMessages(messages: any): AsyncGenerator<StreamRespon
             tool_call_output: { reasoning }
           };
         }
-        
+
         // Stream the actual response content
         if (response) {
           yield* typewriterEffect(response);
@@ -385,9 +386,9 @@ export async function* streamNextJsAgent(
   try {
     // Create workflow with dynamic tools based on sbxId
     const app = await createAgentWorkflow(sbxId, enableMCP, sessionId);
-    const config = { 
-      configurable: { 
-        thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session' 
+    const config = {
+      configurable: {
+        thread_id: sbxId ? `nextjs-session-${sbxId}` : 'nextjs-coding-session'
       },
       recursionLimit: 50, // Reduced from 75 for faster completion
     };
@@ -397,22 +398,25 @@ export async function* streamNextJsAgent(
     const compactedPrev = compactPrevMessages(prevMessages);
     const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
 
+    // Track tool call args for completion events
+    const toolCallArgsMap = new Map<string, any>();
+
     // Use stream method for real-time updates
     const stream = await app.stream({ messages }, config);
-    
+
     for await (const chunk of stream) {
-      yield* processStreamChunk(chunk);
+      yield* processStreamChunk(chunk, toolCallArgsMap);
     }
-    
+
     yield { content: '', type: 'complete' };
-    
+
   } catch (error) {
     console.error('Error in streamNextJsAgent:', error);
     // Check for recursion limit error
     if (error instanceof Error && (error.message.includes('Recursion limit') || (error as any).lc_error_code === 'GRAPH_RECURSION_LIMIT')) {
-      yield { 
-        content: 'Task completed successfully. If you need additional changes, please make a new request.', 
-        type: 'complete' 
+      yield {
+        content: 'Task completed successfully. If you need additional changes, please make a new request.',
+        type: 'complete'
       };
     } else {
       yield* handleStreamError(error);
@@ -421,27 +425,35 @@ export async function* streamNextJsAgent(
 }
 
 // Helper function to process stream chunks
-async function* processStreamChunk(chunk: any): AsyncGenerator<StreamResponse, void, unknown> {
+async function* processStreamChunk(chunk: any, toolCallArgsMap: Map<string, any>): AsyncGenerator<StreamResponse, void, unknown> {
   if (chunk.agent?.messages) {
-    yield* processAgentMessages(chunk.agent.messages);
+    yield* processAgentMessages(chunk.agent.messages, toolCallArgsMap);
   } else if (chunk.tools?.messages) {
     // Process tool execution results
     for (const toolMessage of chunk.tools.messages) {
       if (toolMessage instanceof ToolMessage) {
         const toolName = toolMessage.name || 'unknown_tool';
-        const toolContent = typeof toolMessage.content === 'string' 
-          ? toolMessage.content.slice(0, 200) 
+        const toolContent = typeof toolMessage.content === 'string'
+          ? toolMessage.content.slice(0, 200)
           : JSON.stringify(toolMessage.content).slice(0, 200);
-        
-        yield { 
-          content: toolName, 
+
+        // Retrieve original args from map
+        const toolCallId = toolMessage.tool_call_id || toolName;
+        const originalArgs = toolCallArgsMap.get(toolCallId);
+
+        yield {
+          content: toolName,
           type: 'tool_call',
           tool_call_output: {
             tool: toolName,
+            args: originalArgs, // Include the original args
             result: toolContent,
             status: 'complete'
           }
         };
+
+        // Clean up the map entry
+        toolCallArgsMap.delete(toolCallId);
       }
     }
   }
@@ -464,13 +476,3 @@ async function* handleStreamError(error: unknown): AsyncGenerator<StreamResponse
 
 // Export factory functions for advanced usage
 export { createAgentWorkflow };
-
-// Legacy exports for backward compatibility (without E2B tools)
-// Note: These are now async due to MCP integration
-const defaultConfig = { configurable: { thread_id: 'nextjs-coding-session' } };
-const defaultSystemPrompt = createSystemPrompt();
-
-export { 
-  defaultConfig as nextJsAgentConfig, 
-  defaultSystemPrompt as nextJsAgentSystemPrompt 
-};

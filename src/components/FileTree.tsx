@@ -45,6 +45,21 @@ export interface FileTreeProps {
 }
 
 export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }: Readonly<FileTreeProps>) {
+  // Map level to Tailwind padding classes (supports up to 10 levels deep)
+  const levelPadding: Record<number, string> = {
+    0: 'pl-0',
+    1: 'pl-3',
+    2: 'pl-6',
+    3: 'pl-9',
+    4: 'pl-12',
+    5: 'pl-[60px]',
+    6: 'pl-[72px]',
+    7: 'pl-[84px]',
+    8: 'pl-[96px]',
+    9: 'pl-[108px]',
+    10: 'pl-[120px]',
+  };
+
   // Initialize with all folders expanded by default
   const [open, setOpen] = useState<{ [key: string]: boolean }>(() => {
     const initialOpen: { [key: string]: boolean } = {};
@@ -89,7 +104,7 @@ export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }
         const FileIconComponent = node.type === "file" ? getFileIcon(node.name) : null;
         return (
         <div key={node.path} className="select-none">
-          <div style={{ paddingLeft: `${level * 12}px` }}>
+          <div className={cn(levelPadding[level] ?? `pl-[${level * 12}px]`)}>
             {node.type === "folder" ? (
               <>
                 <button

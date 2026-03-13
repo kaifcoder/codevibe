@@ -1,5 +1,6 @@
 "use client";
 
+import { Dispatch, SetStateAction } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -23,11 +24,12 @@ type FileNode = {
 };
 
 type ConnectionStatus = "connected" | "connecting" | "disconnected";
+type ConnectedUser = { id: string; name: string; color: string };
 
 export interface DesktopChatLayoutProps {
   messages: ChatMessage[];
   message: string;
-  setMessage: (message: string) => void;
+  setMessage: Dispatch<SetStateAction<string>>;
   handleSend: () => void;
   isLoading: boolean;
   isStreaming: boolean;
@@ -45,8 +47,8 @@ export interface DesktopChatLayoutProps {
   handleCodeChange: (value: string | undefined) => void;
   guestCredentials: { username: string; userId: string } | null;
   connectionStatus: ConnectionStatus;
-  connectedUsers: string[];
-  setConnectedUsers: (users: string[]) => void;
+  connectedUsers: ConnectedUser[];
+  setConnectedUsers: (users: ConnectedUser[]) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   isSyncingToE2B: boolean;
   renderPreview: () => React.ReactNode;
@@ -78,7 +80,7 @@ export function DesktopChatLayout({
   setConnectionStatus,
   isSyncingToE2B,
   renderPreview,
-}: DesktopChatLayoutProps) {
+}: Readonly<DesktopChatLayoutProps>) {
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full">
       <ResizablePanel defaultSize={30} minSize={20}>
@@ -199,7 +201,7 @@ export function DesktopChatLayout({
                                       const newOpenFiles = openFiles.filter(f => f !== filePath);
                                       setOpenFiles(newOpenFiles);
                                       if (filePath === selectedFile && newOpenFiles.length > 0) {
-                                        setSelectedFile(newOpenFiles[newOpenFiles.length - 1]);
+                                        setSelectedFile(newOpenFiles.at(-1) ?? selectedFile);
                                       }
                                     }}
                                   >
@@ -217,12 +219,22 @@ export function DesktopChatLayout({
                           {/* Yjs Connection Status */}
                           <div className="flex items-center gap-1">
                             <span className={`w-1.5 h-1.5 rounded-full ${
-                              connectionStatus === 'connected' ? 'bg-green-500' :
-                              connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
-                              'bg-gray-400'
+                              (() => {
+                                switch (connectionStatus) {
+                                  case 'connected': return 'bg-green-500';
+                                  case 'connecting': return 'bg-yellow-500 animate-pulse';
+                                  default: return 'bg-gray-400';
+                                }
+                              })()
                             }`} />
                             <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                              {connectionStatus === 'connected' ? 'Live' : connectionStatus === 'connecting' ? 'Connecting' : 'Offline'}
+                              {(() => {
+                                switch (connectionStatus) {
+                                  case 'connected': return 'Live';
+                                  case 'connecting': return 'Connecting';
+                                  default: return 'Offline';
+                                }
+                              })()}
                             </span>
                           </div>
                           {connectionStatus === 'connected' && (
@@ -247,7 +259,6 @@ export function DesktopChatLayout({
                         value={getCurrentFileContent(selectedFile)}
                         onChange={handleCodeChange}
                         language="typescript"
-                        height={"100%"}
                         autoScroll={false}
                         collaborative={true}
                         roomId={`${sessionId}-${selectedFile}`}
