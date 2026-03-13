@@ -236,3 +236,41 @@
   background-color: inherit;
   border: inherit;
 }
+
+/* Shimmer animation for skeleton loaders */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* AI change highlight animation - subtle yellow/green fade */
+@keyframes ai-change-fade {
+  0% {
+    background-color: rgba(251, 191, 36, 0.3); /* amber-400 with opacity */
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.monaco-editor .ai-change-highlight {
+  animation: ai-change-fade 2s ease-out forwards;
+}
+
+/* Dark mode version */
+.dark .monaco-editor .ai-change-highlight {
+  animation: ai-change-fade-dark 2s ease-out forwards;
+}
+
+@keyframes ai-change-fade-dark {
+  0% {
+    background-color: rgba(234, 179, 8, 0.2); /* yellow-600 with less opacity for dark mode */
+  }
+  100% {
+    background-color: transparent;
+  }
+}

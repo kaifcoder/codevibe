@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
 import * as monaco from "monaco-editor";
@@ -8,12 +7,12 @@ import { Card } from "./ui/card";
 import { useTheme } from "next-themes";
 import { initCollaboration } from "@/lib/collaboration/initCollaboration";
 import { bindMonaco } from "@/lib/collaboration/bindMonaco";
+import type { YTextEvent } from "yjs";
 
 interface CodeEditorProps {
   value: string;
   onChange: (value: string | undefined) => void;
   language?: string;
-  height?: number | string;
   label?: string;
   autoScroll?: boolean;
   collaborative?: boolean;
@@ -24,11 +23,11 @@ interface CodeEditorProps {
   onConnectionStatusChange?: (status: 'connected' | 'disconnected' | 'connecting') => void;
 }
 
-export function CodeEditor({ 
-  value, 
-  onChange, 
-  language = "typescript", 
-  label, 
+export function CodeEditor({
+  value,
+  onChange,
+  language = "typescript",
+  label,
   autoScroll = false,
   collaborative = false,
   roomId,
@@ -45,6 +44,55 @@ export function CodeEditor({
   const setupInProgressRef = useRef(false);
   const currentRoomRef = useRef<string>('');
   const { resolvedTheme } = useTheme();
+  const decorationsCollectionRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+  const highlightTimeoutsRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
+
+  // Function to highlight changed lines with fade effect
+  const highlightChangedLines = (startLine: number, endLine: number) => {
+    if (!editorRef.current) return;
+
+    const editor = editorRef.current;
+
+    // Clear existing timeout for these lines if any
+    for (let line = startLine; line <= endLine; line++) {
+      const existingTimeout = highlightTimeoutsRef.current.get(line);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+    }
+
+    // Create decorations for the changed lines
+    if (!decorationsCollectionRef.current) {
+      decorationsCollectionRef.current = editor.createDecorationsCollection([]);
+    }
+
+    const newDecorations = [];
+    for (let line = startLine; line <= endLine; line++) {
+      newDecorations.push({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: true,
+          className: 'ai-change-highlight',
+          inlineClassName: 'ai-change-highlight-inline'
+        }
+      });
+    }
+
+    decorationsCollectionRef.current.append(newDecorations);
+
+    // Set timeout to fade out after 2 seconds
+    const timeout = setTimeout(() => {
+      if (decorationsCollectionRef.current) {
+        decorationsCollectionRef.current.clear();
+      }
+      highlightTimeoutsRef.current.clear();
+    }, 2000);
+
+    // Store timeout reference
+    for (let line = startLine; line <= endLine; line++) {
+      highlightTimeoutsRef.current.set(line, timeout);
+    }
+  };
 
   // Auto-scroll to bottom when content changes and autoScroll is enabled
   useEffect(() => {
@@ -204,7 +252,52 @@ export function CodeEditor({
 
       // Sync changes back to parent component with debouncing
       let changeTimeout: NodeJS.Timeout | null = null;
-      yText.observe(() => {
+      yText.observe((event: YTextEvent) => {
+        // Track which lines changed for highlighting
+        if (event.changes && editorRef.current) {
+          const model = editorRef.current.getModel();
+          if (model) {
+            // Calculate affected line range
+            event.changes.delta.forEach((change) => {
+              if (change.insert || change.delete) {
+                const content = model.getValue();
+                const lines = content.split('\n');
+
+                // Get the position in the document
+                let position = 0;
+                if (change.retain) {
+                  position = change.retain;
+                }
+
+                // Convert position to line number
+                let currentPos = 0;
+                let startLine = 1;
+                let endLine = 1;
+
+                for (let i = 0; i < lines.length; i++) {
+                  const lineLength = lines[i].length + 1; // +1 for newline
+                  if (currentPos + lineLength > position) {
+                    startLine = i + 1;
+
+                    // Calculate end line based on inserted content
+                    if (change.insert && typeof change.insert === 'string') {
+                      const insertedLines = change.insert.split('\n').length;
+                      endLine = startLine + insertedLines - 1;
+                    } else {
+                      endLine = startLine;
+                    }
+
+                    // Highlight the changed lines
+                    highlightChangedLines(startLine, endLine);
+                    break;
+                  }
+                  currentPos += lineLength;
+                }
+              }
+            });
+          }
+        }
+
         // Debounce onChange calls to reduce re-renders
         if (changeTimeout) {
           clearTimeout(changeTimeout);
@@ -263,6 +356,33 @@ export function CodeEditor({
     editorRef.current = editor;
     setEditorMounted(true);
   };
+
+  // Configure Monaco diagnostics before mount
+  const handleEditorWillMount = (monacoInstance: typeof monaco) => {
+    // Disable unreachable code warnings for TypeScript
+    monacoInstance.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [
+        7027, // Unreachable code detected
+        7028, // Unused label
+        6133, // Variable is declared but never used
+        6196, // Variable is declared but its value is never read
+      ],
+    });
+
+    // Disable unreachable code warnings for JavaScript
+    monacoInstance.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [
+        7027, // Unreachable code detected
+        7028, // Unused label
+        6133, // Variable is declared but never used
+        6196, // Variable is declared but its value is never read
+      ],
+    });
+  };
   
   // Update editor read-only state dynamically when agentEditing changes
   useEffect(() => {
@@ -308,6 +428,7 @@ export function CodeEditor({
           language={language}
           height="100%"
           theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+          beforeMount={handleEditorWillMount}
           onMount={handleEditorDidMount}
           options={{
             fontSize: 14,

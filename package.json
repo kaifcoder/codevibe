@@ -90,6 +90,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "baseline-browser-mapping": "^2.10.7",
     "eslint": "^9",
     "eslint-config-next": "15.3.4",
     "prisma": "^6.11.0",

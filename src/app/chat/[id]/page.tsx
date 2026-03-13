@@ -15,6 +15,7 @@ import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileChatLayout } from "@/components/MobileChatLayout";
 import { DesktopChatLayout } from "@/components/DesktopChatLayout";
+import { PreviewShimmer } from "@/components/ui/shimmer";
 
 // Define FileNode type for file tree structure
 type FileNode = {
@@ -77,6 +78,10 @@ function Page({ params }: PageProps) {
     })
   );
 
+  // Use ref for createDbSession to avoid useEffect dependency issues
+  const createDbSessionRef = useRef(createDbSession);
+  createDbSessionRef.current = createDbSession;
+
 
   
   // Extract chat ID from params
@@ -105,7 +110,7 @@ function Page({ params }: PageProps) {
         if (response.status === 404) {
           // Session doesn't exist, create it with the chat ID
           console.log('[DB] Creating new session:', id);
-          createDbSession.mutate({
+          createDbSessionRef.current.mutate({
             id,
             title: `Chat ${new Date().toLocaleString()}`,
           });
@@ -607,14 +612,57 @@ function Page({ params }: PageProps) {
               for (let i = newMessages.length - 1; i >= 0; i--) {
                 if (newMessages[i].role === 'ai') {
                   const existingToolCalls = newMessages[i].toolCalls || [];
-                  const toolCallIndex = existingToolCalls.findIndex(tc => tc.tool === toolData?.tool);
+                  
+                  // Helper to extract file path from args for matching
+                  const getFilePath = (args?: Record<string, unknown>) => {
+                    if (!args) return null;
+                    return args.filePath ?? args.file_path ?? args.path ?? args.filename ?? args.file ?? null;
+                  };
+                  
+                  const incomingFilePath = getFilePath(toolData?.args);
+                  
+                  // Find existing tool call by matching tool name AND file path (if available)
+                  // Strategy: Match running->complete transitions, avoid duplicates
+                  const toolCallIndex = existingToolCalls.findIndex(tc => {
+                    if (tc.tool !== toolData?.tool) return false;
+
+                    // If incoming event has complete/error status, find the matching running/pending entry
+                    if (toolData?.status === 'complete' || toolData?.status === 'error') {
+                      // Must match running/pending status
+                      if (tc.status !== 'running' && tc.status !== 'pending') return false;
+
+                      // Match by file path if both have it
+                      const existingFilePath = getFilePath(tc.args);
+                      if (incomingFilePath && existingFilePath) {
+                        return existingFilePath === incomingFilePath;
+                      }
+
+                      // Otherwise match the first running/pending entry with same tool name
+                      return true;
+                    }
+
+                    // For new running events, check if there's already an entry with same path/tool
+                    if (toolData?.status === 'running' || toolData?.status === 'pending') {
+                      const existingFilePath = getFilePath(tc.args);
+
+                      // Match by file path if both have it
+                      if (incomingFilePath && existingFilePath) {
+                        return existingFilePath === incomingFilePath;
+                      }
+
+                      // If no file path, match by tool name and incomplete status
+                      return (tc.status === 'running' || tc.status === 'pending');
+                    }
+
+                    return false;
+                  });
                   
                   if (toolCallIndex >= 0) {
-                    // Update existing tool call
+                    // Update existing tool call - backend now sends complete data including args
                     existingToolCalls[toolCallIndex] = {
                       ...existingToolCalls[toolCallIndex],
                       ...toolData,
-                      status: toolData?.status || existingToolCalls[toolCallIndex].status
+                      status: toolData?.status ?? existingToolCalls[toolCallIndex].status
                     };
                   } else {
                     // Add new tool call
@@ -666,8 +714,25 @@ function Page({ params }: PageProps) {
               const newMessages = [...prev];
               for (let i = newMessages.length - 1; i >= 0; i--) {
                 if (newMessages[i].role === 'ai') {
+                  // Mark all tool calls as complete
+                  const updatedToolCalls = newMessages[i].toolCalls?.map(tc => ({
+                    ...tc,
+                    status: tc.status === 'running' ? 'complete' as const : tc.status
+                  }));
+                  
                   if (response && response.trim()) {
-                    newMessages[i] = { ...newMessages[i], content: response };
+                    newMessages[i] = { 
+                      ...newMessages[i], 
+                      content: response, 
+                      status: 'complete',
+                      toolCalls: updatedToolCalls
+                    };
+                  } else {
+                    newMessages[i] = { 
+                      ...newMessages[i], 
+                      status: 'complete',
+                      toolCalls: updatedToolCalls
+                    };
                   }
                   break;
                 }
@@ -821,8 +886,6 @@ function Page({ params }: PageProps) {
   const [message, setMessage] = useState("");
   // state for toggling the second panel - show when sandbox exists or code-related activity
   const [showSecondPanel, setShowSecondPanel] = useState(false);
-  // state for the code editor
-  const [code, setCode] = useState("// Write your code here\n");
   // state for iframe loading
   const [iframeLoading, setIframeLoading] = useState(true);
   // state for active tab
@@ -906,7 +969,6 @@ function Page({ params }: PageProps) {
   // update file content when code changes - synced via Yjs
   const handleCodeChange = useCallback((val: string | undefined) => {
     const newContent = val ?? "";
-    setCode(newContent);
     
     // Update file tree with new content
     setFileTree(prev => {
@@ -1021,12 +1083,12 @@ function Page({ params }: PageProps) {
         const fullFromEvent = (latestUpdate.data?.fullContent as string | undefined) || '';
         if (fullFromEvent) {
           // Use the full accumulated content from the server
-          newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullFromEvent };
+          newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullFromEvent, status: 'streaming' };
         } else {
           // Fallback: append delta (shouldn't happen with our current implementation)
-          const existing = newMessages[aiIndex].content === '🔄 Processing...' ? '' : newMessages[aiIndex].content;
+          const existing = (newMessages[aiIndex].content === '🔄 Processing...' || !newMessages[aiIndex].content) ? '' : newMessages[aiIndex].content;
           const delta = latestUpdate.content || '';
-          newMessages[aiIndex] = { ...newMessages[aiIndex], content: existing + delta };
+          newMessages[aiIndex] = { ...newMessages[aiIndex], content: existing + delta, status: 'streaming' };
         }
         return newMessages;
       });
@@ -1038,15 +1100,23 @@ function Page({ params }: PageProps) {
         for (let i = newMessages.length - 1; i >= 0; i--) {
           if (newMessages[i].role === 'ai') {
             const responseContent = latestUpdate.data?.response as string | undefined;
+            // Mark all tool calls as complete
+            const updatedToolCalls = newMessages[i].toolCalls?.map(tc => ({
+              ...tc,
+              status: tc.status === 'running' ? 'complete' as const : tc.status
+            }));
+
             // Always update if we have response content from complete event
             if (responseContent && responseContent.trim()) {
-              newMessages[i] = { ...newMessages[i], content: responseContent };
+              newMessages[i] = { ...newMessages[i], content: responseContent, status: 'complete', toolCalls: updatedToolCalls };
             } 
             // If still showing processing or empty, use response or fallback
-            else if (!newMessages[i].content || newMessages[i].content === '🔄 Processing...' || newMessages[i].content === '') {
-              newMessages[i] = { ...newMessages[i], content: responseContent || 'Task completed' };
+            else if (!newMessages[i].content || newMessages[i].content === '🔄 Processing...' || newMessages[i].status === 'thinking') {
+              newMessages[i] = { ...newMessages[i], content: responseContent || 'Task completed', status: 'complete', toolCalls: updatedToolCalls };
+            } else {
+              // Mark as complete even if we're keeping accumulated content
+              newMessages[i] = { ...newMessages[i], status: 'complete', toolCalls: updatedToolCalls };
             }
-            // Otherwise keep the accumulated content from partial updates
             break;
           }
         }
@@ -1121,9 +1191,10 @@ function Page({ params }: PageProps) {
       // Always add an AI processing stub for the new response
       newMessages.push({ 
         role: 'ai', 
-        content: '🔄 Processing...',
+        content: '',
         timestamp: Date.now(),
-        id: `ai-${Date.now()}`
+        id: `ai-${Date.now()}`,
+        status: 'thinking'
       });
       return newMessages;
     });
@@ -1210,14 +1281,84 @@ function Page({ params }: PageProps) {
 
     if (sandboxUrl && !isSandboxExpired) {
       return (
-        <iframe
-          src={sandboxUrl}
-          className="w-full h-full min-h-[200px] border-0"
-          onLoad={() => setIframeLoading(false)}
-          title="Sandbox Preview"
-          sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-          allow="clipboard-write; clipboard-read; microphone; camera; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
-        />
+        <div className="relative w-full h-full flex flex-col bg-background">
+          {/* Browser Chrome */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 shrink-0">
+            {/* Navigation Buttons */}
+            <div className="flex items-center gap-1 mr-2">
+              <button 
+                type="button"
+                className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setIframeLoading(true);
+                  const iframe = document.querySelector('iframe[title="Sandbox Preview"]') as HTMLIFrameElement;
+                  if (iframe) {
+                    const currentSrc = iframe.src;
+                    iframe.src = '';
+                    setTimeout(() => { iframe.src = currentSrc; }, 0);
+                  }
+                }}
+                title="Refresh"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* URL Bar */}
+            <div className="flex-1 flex items-center gap-2 px-3 py-1.5 bg-background rounded-md border text-sm">
+              <svg className="w-3.5 h-3.5 text-green-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+              </svg>
+              <span className="text-muted-foreground truncate font-mono text-xs">
+                {sandboxUrl}
+              </span>
+              <button
+                type="button"
+                className="ml-auto p-0.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+                onClick={() => {
+                  navigator.clipboard.writeText(sandboxUrl);
+                  toast.success('URL copied to clipboard');
+                }}
+                title="Copy URL"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* External Link Button */}
+            <button
+              type="button"
+              className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+              onClick={() => globalThis.open(sandboxUrl, '_blank')}
+              title="Open in new tab"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </button>
+          </div>
+          
+          {/* Iframe Container */}
+          <div className="relative flex-1 min-h-0">
+            {iframeLoading && (
+              <div className="absolute inset-0 z-10">
+                <PreviewShimmer />
+              </div>
+            )}
+            <iframe
+              src={sandboxUrl}
+              className={`w-full h-full border-0 transition-opacity duration-300 ${iframeLoading ? 'opacity-0' : 'opacity-100'}`}
+              onLoad={() => setIframeLoading(false)}
+              title="Sandbox Preview"
+              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+              allow="clipboard-write; clipboard-read; microphone; camera; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+            />
+          </div>
+        </div>
       );
     }
 
@@ -1376,16 +1517,6 @@ function Page({ params }: PageProps) {
             </TooltipProvider>
           )}
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
-          {sandboxUrl && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => globalThis.globalThis.open(sandboxUrl, '_blank')}
-              className="text-xs h-8"
-            >
-              🏗️ Open in Browser
-            </Button>
-          )}
           {messages.length > 1 && (
             <Button
               variant="ghost"

@@ -68,18 +68,6 @@ export const appRouter = createTRPCRouter({
 
     // Real-time updates are handled via Server-Sent Events at /api/stream
     // This provides better browser compatibility and simpler implementation
-    
-  hello: baseProcedure
-    .input(
-      z.object({
-        text: z.string(),
-      }),
-    )
-    .query((opts) => {
-      return {
-        greeting: `hello ${opts.input.text}`,
-      };
-    }),
 });
 
 // export type definition of API
