@@ -5,7 +5,7 @@
 CodeVibe is a collaborative AI-powered code editor with real-time synchronization. It combines:
 - **Real-time collaboration** via Yjs CRDT (WebSocket on port 1234)
 - **E2B sandboxed execution** for running Next.js apps (25-minute TTL)
-- **LangGraph AI agent** using GPT-5 (2025-08-07) from SAP AI SDK
+- **LangGraph AI agent** using GPT-5 (2025-08-07)
 - **MCP integration** for Playwright browser automation and Next.js docs
 - **tRPC + Prisma** for type-safe APIs and PostgreSQL persistence
 - **Clerk authentication** for user management and session ownership
