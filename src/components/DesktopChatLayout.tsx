@@ -1,6 +1,5 @@
 "use client";
 
-import { Dispatch, SetStateAction } from "react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -13,18 +12,8 @@ import { toast } from "sonner";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import { CodeEditor } from "@/components/CodeEditor";
 import { FileTree } from "@/components/FileTree";
-
-// Define FileNode type for file tree structure
-type FileNode = {
-  name: string;
-  path: string;
-  type: "file" | "folder";
-  children?: FileNode[];
-  content?: string;
-};
-
-type ConnectionStatus = "connected" | "connecting" | "disconnected";
-type ConnectedUser = { id: string; name: string; color: string };
+import { useChatStore } from "@/stores/chat-store";
+import type { Dispatch, SetStateAction } from "react";
 
 export interface DesktopChatLayoutProps {
   messages: ChatMessage[];
@@ -35,22 +24,8 @@ export interface DesktopChatLayoutProps {
   isStreaming: boolean;
   activeTab: string;
   setActiveTab: (tab: string) => void;
-  fileTree: FileNode[];
-  selectedFile: string;
-  setSelectedFile: (file: string) => void;
-  openFiles: string[];
-  setOpenFiles: (files: string[]) => void;
-  isSyncingFilesystem: boolean;
-  sandboxId: string | null;
-  sessionId: string;
-  getCurrentFileContent: (file: string) => string;
   handleCodeChange: (value: string | undefined) => void;
   guestCredentials: { username: string; userId: string } | null;
-  connectionStatus: ConnectionStatus;
-  connectedUsers: ConnectedUser[];
-  setConnectedUsers: (users: ConnectedUser[]) => void;
-  setConnectionStatus: (status: ConnectionStatus) => void;
-  isSyncingToE2B: boolean;
   renderPreview: () => React.ReactNode;
 }
 
@@ -63,24 +38,26 @@ export function DesktopChatLayout({
   isStreaming,
   activeTab,
   setActiveTab,
-  fileTree,
-  selectedFile,
-  setSelectedFile,
-  openFiles,
-  setOpenFiles,
-  isSyncingFilesystem,
-  sandboxId,
-  sessionId,
-  getCurrentFileContent,
   handleCodeChange,
   guestCredentials,
-  connectionStatus,
-  connectedUsers,
-  setConnectedUsers,
-  setConnectionStatus,
-  isSyncingToE2B,
   renderPreview,
 }: Readonly<DesktopChatLayoutProps>) {
+  // Read file/editor state directly from store — survives tab switches
+  const fileTree = useChatStore(s => s.fileTree);
+  const selectedFile = useChatStore(s => s.selectedFile);
+  const openFiles = useChatStore(s => s.openFiles);
+  const sandboxId = useChatStore(s => s.sandboxId);
+  const sessionId = useChatStore(s => s.sessionId);
+  const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
+  const connectionStatus = useChatStore(s => s.connectionStatus);
+  const connectedUsers = useChatStore(s => s.connectedUsers);
+  const isSyncingToE2B = useChatStore(s => s.isSyncingToE2B);
+  const setSelectedFile = useChatStore(s => s.setSelectedFile);
+  const setOpenFiles = useChatStore(s => s.setOpenFiles);
+  const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
+  const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
+  const getFileContent = useChatStore(s => s.getFileContent);
+
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full">
       <ResizablePanel defaultSize={30} minSize={20}>
@@ -155,7 +132,7 @@ export function DesktopChatLayout({
                       onSelect={(path) => {
                         setSelectedFile(path);
                         if (!openFiles.includes(path)) {
-                          setOpenFiles([...openFiles, path]);
+                          setOpenFiles((prev) => [...prev, path]);
                         }
                       }}
                     />
@@ -256,7 +233,7 @@ export function DesktopChatLayout({
                       </div>
                       <CodeEditor
                         key={`${sessionId}-${selectedFile}`}
-                        value={getCurrentFileContent(selectedFile)}
+                        value={getFileContent(selectedFile)}
                         onChange={handleCodeChange}
                         language="typescript"
                         autoScroll={false}

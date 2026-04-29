@@ -267,26 +267,16 @@ export class FallbackAgent {
       for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages, true, sessionId, sbxUrl)) {
         switch (chunk.type) {
           case 'partial': {
-            // Check if this chunk contains reasoning
-            if (chunk.tool_call_output?.reasoning) {
-              // Emit reasoning separately
-              await emitSSEEvent('reasoning', {
-                reasoning: chunk.content
-              });
-            } else {
-              // Regular content
-              fullResponse += chunk.content;
-              onUpdate?.({
-                type: 'partial',
-                content: chunk.content,
-                data: { fullContent: fullResponse }
-              });
-              // Emit to SSE
-              await emitSSEEvent('partial', {
-                content: chunk.content,
-                fullContent: fullResponse
-              });
-            }
+            fullResponse += chunk.content;
+            onUpdate?.({
+              type: 'partial',
+              content: chunk.content,
+              data: { fullContent: fullResponse }
+            });
+            await emitSSEEvent('partial', {
+              content: chunk.content,
+              fullContent: fullResponse
+            });
             break;
           }
             
