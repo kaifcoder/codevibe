@@ -43,12 +43,15 @@ export async function updateYjsDocument(roomId: string, content: string): Promis
   return new Promise((resolve, reject) => {
     const doc = new Y.Doc();
     const yText = doc.getText('monaco');
+    let settled = false;
 
     const provider = new HocuspocusProvider({
       url: getWebSocketUrl(),
       name: roomId,
       document: doc,
       onSynced: () => {
+        if (settled) return;
+        settled = true;
         try {
           doc.transact(() => {
             yText.delete(0, yText.length);
@@ -66,7 +69,8 @@ export async function updateYjsDocument(roomId: string, content: string): Promis
     });
 
     setTimeout(() => {
-      if (!provider.synced) {
+      if (!settled) {
+        settled = true;
         provider.destroy();
         reject(new Error('Timeout waiting for Yjs sync'));
       }

@@ -140,7 +140,7 @@ export function CodeEditor({
 
     try {
       // Step 1: Initialize collaboration infrastructure
-      const { yText, provider } = initCollaboration({
+      const { yText, provider, disconnect } = initCollaboration({
         roomId,
         username,
         userId,
@@ -327,11 +327,8 @@ export function CodeEditor({
           bindingRef.current = null;
         }
         
-        if (provider) {
-          console.log('[CodeEditor] Disconnecting provider...');
-          provider.disconnect();
-          provider.destroy();
-        }
+        console.log('[CodeEditor] Disconnecting provider...');
+        disconnect();
         
         setupInProgressRef.current = false;
         setConnectionStatus('disconnected');

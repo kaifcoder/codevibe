@@ -5,7 +5,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTRPC } from "@/trpc/client";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type Dispatch, type SetStateAction } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,15 +16,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileChatLayout } from "@/components/MobileChatLayout";
 import { DesktopChatLayout } from "@/components/DesktopChatLayout";
 import { PreviewShimmer } from "@/components/ui/shimmer";
-
-// Define FileNode type for file tree structure
-type FileNode = {
-  name: string;
-  path: string;
-  type: "file" | "folder";
-  children?: FileNode[];
-  content?: string;
-};
+import { useChatStore } from "@/stores/chat-store";
+import type { FileNode } from "@/stores/chat-store";
 
 // Sandbox expiration constant (outside component to avoid re-creation each render)
 const SANDBOX_EXPIRY_MS = 25 * 60 * 1000; // 25 minutes
@@ -39,11 +32,10 @@ function Page({ params }: PageProps) {
   const shareToken = searchParams.get('token');
   const isSharedAccess = !!shareToken;
 
+  // --- Local-only state (component-specific, not shared) ---
   const [shouldAutoSend, setShouldAutoSend] = useState(false);
-  const [connectedUsers, setConnectedUsers] = useState<Array<{ id: string; name: string; color: string }>>([]);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
   const [isMounted, setIsMounted] = useState(false);
-  const [isSyncingToE2B, setIsSyncingToE2B] = useState(false);
+  const [isCheckingExpiration, setIsCheckingExpiration] = useState(false);
 
   // Generate stable guest credentials for shared sessions
   const guestCredentials = useMemo(() => {
@@ -55,10 +47,63 @@ function Page({ params }: PageProps) {
     };
   }, [isSharedAccess]);
 
-  // Mutation to create session in database
+  // --- Zustand store state ---
+  const sessionId = useChatStore(s => s.sessionId);
+  const setSessionId = useChatStore(s => s.setSessionId);
+  const messages = useChatStore(s => s.messages);
+  const setMessages = useChatStore(s => s.setMessages);
+  const message = useChatStore(s => s.message);
+  const setMessage = useChatStore(s => s.setMessage);
+  const isStreaming = useChatStore(s => s.isStreaming);
+  const setIsStreaming = useChatStore(s => s.setIsStreaming);
+  const fileTree = useChatStore(s => s.fileTree);
+  const setFileTree = useChatStore(s => s.setFileTree);
+  const selectedFile = useChatStore(s => s.selectedFile);
+  const setSelectedFile = useChatStore(s => s.setSelectedFile);
+  const openFiles = useChatStore(s => s.openFiles);
+  const setOpenFiles = useChatStore(s => s.setOpenFiles);
+  const sandboxId = useChatStore(s => s.sandboxId);
+  const setSandboxId = useChatStore(s => s.setSandboxId);
+  const sandboxUrl = useChatStore(s => s.sandboxUrl);
+  const setSandboxUrl = useChatStore(s => s.setSandboxUrl);
+  const sandboxCreatedAt = useChatStore(s => s.sandboxCreatedAt);
+  const setSandboxCreatedAt = useChatStore(s => s.setSandboxCreatedAt);
+  const isSandboxExpired = useChatStore(s => s.isSandboxExpired);
+  const setIsSandboxExpired = useChatStore(s => s.setIsSandboxExpired);
+  const activeTab = useChatStore(s => s.activeTab);
+  const setActiveTab = useChatStore(s => s.setActiveTab);
+  const showSecondPanel = useChatStore(s => s.showSecondPanel);
+  const setShowSecondPanel = useChatStore(s => s.setShowSecondPanel);
+  const mobileActivePanel = useChatStore(s => s.mobileActivePanel);
+  const setMobileActivePanel = useChatStore(s => s.setMobileActivePanel);
+  const isSyncingToE2B = useChatStore(s => s.isSyncingToE2B);
+  const setIsSyncingToE2B = useChatStore(s => s.setIsSyncingToE2B);
+  const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
+  const setIsSyncingFilesystem = useChatStore(s => s.setIsSyncingFilesystem);
+  const iframeLoading = useChatStore(s => s.iframeLoading);
+  const setIframeLoading = useChatStore(s => s.setIframeLoading);
+  const connectionStatus = useChatStore(s => s.connectionStatus);
+  const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
+  const connectedUsers = useChatStore(s => s.connectedUsers);
+  const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
+
+  // --- Refs (component-local concerns) ---
+  const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const activeSessionRef = useRef<string | null>(null);
+  const hasAutoSent = useRef(false);
+  const isSending = useRef(false);
   const sessionCheckRef = useRef<Set<string>>(new Set());
   const sessionExistsRef = useRef(false);
+  const mountedRef = useRef(true);
+  const retriesRef = useRef(0);
+  const MAX_RETRIES = 5;
+  const lastSavedContentRef = useRef<{ [filePath: string]: string }>({});
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  const isMobile = useIsMobile();
+
+  // Mutation to create session in database
   const createDbSession = useMutation(
     trpc.session.createSession.mutationOptions({
       onSuccess: (data) => {
@@ -74,31 +119,29 @@ function Page({ params }: PageProps) {
   const createDbSessionRef = useRef(createDbSession);
   createDbSessionRef.current = createDbSession;
 
-
-  
   // Extract chat ID from params
   useEffect(() => {
     let mounted = true;
-    
+
     params.then(async ({ id }) => {
       if (!mounted) return;
-      
+
       setSessionId(id);
-      
+
       // Check if we've already processed this session ID
       if (sessionCheckRef.current.has(id)) {
         console.log('[DB] Session already processed:', id);
         return;
       }
-      
+
       // Mark this session as being processed
       sessionCheckRef.current.add(id);
-      
+
       // Check if session exists in database, if not create it (only once)
       try {
         const response = await fetch(`/api/session/${id}`);
         if (!mounted) return;
-        
+
         if (response.status === 404) {
           // Session doesn't exist, create it with the chat ID
           console.log('[DB] Creating new session:', id);
@@ -116,40 +159,28 @@ function Page({ params }: PageProps) {
         // Remove from set on error so it can be retried
         sessionCheckRef.current.delete(id);
       }
-      
+
       // Check for initial prompt from home page
       if (typeof globalThis !== 'undefined') {
         const initialPrompt = sessionStorage.getItem(`chat_${id}_initial`);
         if (initialPrompt) {
-          setMessage(initialPrompt);
+          useChatStore.getState().setMessage(initialPrompt);
           setShouldAutoSend(true);
           // Clean up sessionStorage
           sessionStorage.removeItem(`chat_${id}_initial`);
         }
       }
     });
-    
+
     return () => {
       mounted = false;
     };
-  }, [params]);
-  
-  // Session management (allow dynamic updates from backend)
-  const [sessionId, setSessionId] = useState(() => `session-${Date.now()}`);
-  const [isSyncingFilesystem, setIsSyncingFilesystem] = useState(false);
-  const [sandboxId, setSandboxId] = useState<string | null>(null);
-  const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
-  
-  // Use ref to always access latest sandboxId in event handlers
-  const sandboxIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    sandboxIdRef.current = sandboxId;
-  }, [sandboxId]);
-  
+  }, [params, setSessionId]);
+
   // Load session data from database when sessionId changes
   useEffect(() => {
     if (!sessionId || sessionId.startsWith('session-')) return;
-    
+
     const loadSession = async () => {
       try {
         console.log('[DB] Loading session data for:', sessionId);
@@ -157,25 +188,25 @@ function Page({ params }: PageProps) {
         if (response.ok) {
           const session = await response.json();
           console.log('[DB] Session loaded:', session);
-          
+
           // Mark session as existing since we successfully loaded it
           sessionExistsRef.current = true;
-          
+
           // Load messages from database
           if (session.messages && Array.isArray(session.messages)) {
             setMessages(session.messages);
           }
-          
+
           // Load file tree from database
           if (session.fileTree && Array.isArray(session.fileTree)) {
             setFileTree(session.fileTree);
           }
-          
+
           // Load sandbox data from database
           if (session.sandboxId) {
             setSandboxId(session.sandboxId);
             console.log('[DB] Loaded sandboxId:', session.sandboxId);
-            
+
             // Auto-sync filesystem when sandbox is loaded
             // Block code tab until sync completes
             setIsSyncingFilesystem(true);
@@ -184,9 +215,9 @@ function Page({ params }: PageProps) {
                 const response = await fetch('/api/sync-filesystem', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ 
-                    sandboxId: session.sandboxId, 
-                    sessionId: sessionId 
+                  body: JSON.stringify({
+                    sandboxId: session.sandboxId,
+                    sessionId: sessionId
                   }),
                 });
                 if (response.ok) {
@@ -198,7 +229,7 @@ function Page({ params }: PageProps) {
                 console.error('[Sync] Auto-sync failed:', err);
               } finally {
                 // Sync complete, unblock code tab
-                setIsSyncingFilesystem(false);
+                useChatStore.getState().setIsSyncingFilesystem(false);
               }
             }, 1000); // Wait 1s for sandbox to be ready
           }
@@ -214,7 +245,7 @@ function Page({ params }: PageProps) {
               const elapsed = Date.now() - createdTime;
               setTimeout(() => {
                 if (elapsed >= SANDBOX_EXPIRY_MS) {
-                  setIsSandboxExpired(true);
+                  useChatStore.getState().setIsSandboxExpired(true);
                   console.log('[DB] Sandbox already expired');
                 }
                 setIsCheckingExpiration(false);
@@ -233,35 +264,28 @@ function Page({ params }: PageProps) {
         console.error('[DB] Failed to load session:', error);
       }
     };
-    
+
     loadSession();
-  }, [sessionId, SANDBOX_EXPIRY_MS]);
-  
-  const [isStreaming, setIsStreaming] = useState(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
-  // Real-time updates
-  const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
-  const activeSessionRef = useRef<string | null>(null);
-  const hasAutoSent = useRef(false);
-  const isSending = useRef(false);
-
+  // --- tRPC Mutations ---
   const invoke = useMutation(
     trpc.invoke.mutationOptions({
       onSuccess: ({ sessionId: newSessionId }) => {
         toast.success('Agent started successfully!');
-        if (newSessionId && newSessionId !== sessionId) {
-          setSessionId(newSessionId);
+        if (newSessionId && newSessionId !== useChatStore.getState().sessionId) {
+          useChatStore.getState().setSessionId(newSessionId);
         }
         isSending.current = false;
-        // SSE connection already started in handleSend before mutation
       },
       onError: (error) => {
         toast.error(`Error invoking agent: ${error.message}`);
-        setIsStreaming(false);
+        useChatStore.getState().setIsStreaming(false);
         isSending.current = false;
       },
       onMutate: () => {
-        setIsStreaming(true);
+        useChatStore.getState().setIsStreaming(true);
         toast.loading("Starting AI agent...");
       },
       onSettled: () => {
@@ -274,19 +298,18 @@ function Page({ params }: PageProps) {
     trpc.invokeWithSandbox.mutationOptions({
       onSuccess: ({ sessionId: newSessionId }) => {
         toast.success('Agent started with sandbox!');
-        if (newSessionId && newSessionId !== sessionId) {
-          setSessionId(newSessionId);
+        if (newSessionId && newSessionId !== useChatStore.getState().sessionId) {
+          useChatStore.getState().setSessionId(newSessionId);
         }
         isSending.current = false;
-        // SSE connection already started in handleSend before mutation
       },
       onError: (error) => {
         toast.error(`Error invoking agent: ${error.message}`);
-        setIsStreaming(false);
+        useChatStore.getState().setIsStreaming(false);
         isSending.current = false;
       },
       onMutate: () => {
-        setIsStreaming(true);
+        useChatStore.getState().setIsStreaming(true);
         toast.loading("Starting AI agent with sandbox...");
       },
       onSettled: () => {
@@ -313,8 +336,8 @@ function Page({ params }: PageProps) {
   // Types for SSE payload
   type StatusData = { status?: string; message?: string; hasSandbox?: boolean };
   type PartialData = { content?: string; fullContent?: string };
-  type ToolData = { 
-    tool?: string; 
+  type ToolData = {
+    tool?: string;
     args?: Record<string, unknown>;
     result?: string;
     status?: "pending" | "running" | "complete" | "error";
@@ -322,7 +345,6 @@ function Page({ params }: PageProps) {
   type SandboxData = { sandboxId?: string; sandboxUrl?: string; isNew?: boolean; replacedOld?: string };
   type CompleteData = { response?: string; sandboxUrl?: string; hasSandbox?: boolean };
   type ErrorData = { error?: string; sandboxUrl?: string };
-  type ReasoningData = { reasoning?: string };
   type FileUpdateData = { filePath?: string; content?: string; action?: 'start' | 'update' | 'complete' };
   type CodePatchData = { filePath?: string; content?: string; action?: 'start' | 'patch' | 'complete' };
   type FileTreeSyncData = { fileTree: FileNode[] };
@@ -334,28 +356,22 @@ function Page({ params }: PageProps) {
     | (SSEPayloadBase & { type: 'sandbox'; data?: SandboxData })
     | (SSEPayloadBase & { type: 'complete'; data?: CompleteData })
     | (SSEPayloadBase & { type: 'error'; data?: ErrorData })
-    | (SSEPayloadBase & { type: 'reasoning'; data?: ReasoningData })
     | (SSEPayloadBase & { type: 'file_update'; data?: FileUpdateData })
     | (SSEPayloadBase & { type: 'code_patch'; data?: CodePatchData })
     | (SSEPayloadBase & { type: 'file_tree_sync'; data?: FileTreeSyncData })
     | (SSEPayloadBase & { type: 'connected'; data?: Record<string, unknown> })
     | (SSEPayloadBase & { type: 'heartbeat'; data?: Record<string, unknown> });
 
-  const mountedRef = useRef(true);
-  const retriesRef = useRef(0);
-  const MAX_RETRIES = 5;
-
   useEffect(() => {
     mountedRef.current = true;
     setIsMounted(true);
-    return () => { 
-      mountedRef.current = false; 
+    return () => {
+      mountedRef.current = false;
     };
   }, []);
 
   // Helper to update state only if component still mounted
   const ifMounted = (fn: () => void) => { if (mountedRef.current) fn(); };
-
 
   // Start real-time subscription for agent events using Server-Sent Events with reconnection
   const startRealtimeSubscription = useCallback((sess: string) => {
@@ -363,12 +379,12 @@ function Page({ params }: PageProps) {
       console.warn('Attempted to start SSE without sessionId');
       return;
     }
-    
+
     // Don't recreate if already connected to this session
     if (activeSessionRef.current === sess && subscriptionRef.current) {
       return;
     }
-    
+
     // Close existing connection if switching sessions
     if (subscriptionRef.current) {
       subscriptionRef.current.unsubscribe();
@@ -397,6 +413,9 @@ function Page({ params }: PageProps) {
         }
         if (!parsed) return;
 
+        // Use store.getState() inside the handler to avoid stale closures
+        const store = useChatStore.getState();
+
         // Heartbeat / connection notifications
         if (parsed.type === 'heartbeat') return;
         if (parsed.type === 'connected') {
@@ -410,47 +429,48 @@ function Page({ params }: PageProps) {
             console.log('[Agent] Syncing complete file tree from e2b filesystem');
             const newFileTree = syncData.fileTree;
             ifMounted(() => {
-              setFileTree(newFileTree);
+              useChatStore.getState().setFileTree(newFileTree);
               // Auto-select first file if none selected
-              const allFiles = flattenFiles(newFileTree);
-              if (allFiles.length > 0 && !selectedFile) {
-                setSelectedFile(allFiles[0].path);
-                setOpenFiles([allFiles[0].path]);
+              const currentSelected = useChatStore.getState().selectedFile;
+              const firstFile = findFirstFile(newFileTree);
+              if (firstFile && !currentSelected) {
+                useChatStore.getState().setSelectedFile(firstFile);
+                useChatStore.getState().setOpenFiles([firstFile]);
               }
             });
           }
         }
 
-        // Handle code patches from agent - NEW APPROACH: Agent writes directly to editor
+        // Handle code patches from agent
         if (parsed.type === 'code_patch') {
           const patchData = parsed.data as { filePath?: string; content?: string; action?: string } | undefined;
           const filePath = patchData?.filePath;
           const content = patchData?.content;
           const action = patchData?.action;
-          
-          console.log('[Agent] code_patch event:', { action, filePath, hasContent: content !== undefined, contentLength: content?.length, hasSandboxId: !!sandboxIdRef.current });
+
+          console.log('[Agent] code_patch event:', { action, filePath, hasContent: content !== undefined, contentLength: content?.length, hasSandboxId: !!useChatStore.getState().sandboxId });
 
           if (filePath) {
             if (action === 'start') {
               console.log('[Agent] Started editing file:', filePath);
               ifMounted(() => {
-                setSelectedFile(filePath);
-                if (!openFiles.includes(filePath)) {
-                  setOpenFiles(prev => [...prev, filePath]);
+                useChatStore.getState().setSelectedFile(filePath);
+                const currentOpen = useChatStore.getState().openFiles;
+                if (!currentOpen.includes(filePath)) {
+                  useChatStore.getState().setOpenFiles([...currentOpen, filePath]);
                 }
               });
             } else if (action === 'complete') {
               console.log('[Agent] Completed editing file:', filePath);
-              // E2B sync is handled in 'patch' after Yjs update — nothing to do here
             } else if (action === 'patch' && content !== undefined) {
               console.log('[Agent] Applying code patch to:', filePath, 'content length:', content.length);
               // Mark as saved to prevent duplicate E2B write from handleCodeChange
               lastSavedContentRef.current[filePath] = content;
               ifMounted(() => {
                 // Update file tree - add file if it doesn't exist
-                setFileTree(prev => {
+                useChatStore.getState().setFileTree(prev => {
                   let fileExists = false;
-                  
+
                   function updateFile(nodes: FileNode[]): FileNode[] {
                     return nodes.map(node => {
                       if (node.type === 'file' && node.path === filePath) {
@@ -463,52 +483,28 @@ function Page({ params }: PageProps) {
                       return node;
                     });
                   }
-                  
+
                   const updated = updateFile(prev);
-                  
+
                   if (!fileExists) {
                     console.log('[Agent] File not in tree, adding:', filePath);
                     return [...updated, {
                       name: filePath.split('/').pop() || filePath,
                       path: filePath,
-                      type: 'file',
+                      type: 'file' as const,
                       content
                     }];
                   }
-                  
+
                   return updated;
                 });
-                
-                // Update Yjs first, then sync to E2B
+
+                // Update Yjs so Monaco reflects the change (agent already wrote to E2B)
                 import('@/lib/collaboration').then(({ updateYjsDocument }) => {
                   const roomId = `${sess}-${filePath}`;
-                  updateYjsDocument(roomId, content)
-                    .then(() => {
-                      // Now sync to E2B after Yjs is updated
-                      if (sandboxIdRef.current) {
-                        fetch('/api/write-to-sandbox', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            sandboxId: sandboxIdRef.current,
-                            filePath,
-                            content,
-                          }),
-                        })
-                          .then(r => r.json())
-                          .then(data => {
-                            if (data.success) {
-                              console.log('[Agent] Synced to e2b:', filePath);
-                            } else {
-                              console.error('[Agent] Failed to sync to e2b:', data.error);
-                            }
-                          })
-                          .catch(err => console.error('[Agent] E2B sync failed:', err));
-                      }
-                    })
-                    .catch((err: Error) => {
-                      console.error('[Agent] Failed to update Yjs:', err);
-                    });
+                  updateYjsDocument(roomId, content).catch((err: Error) => {
+                    console.error('[Agent] Failed to update Yjs:', err);
+                  });
                 });
               });
             }
@@ -523,6 +519,8 @@ function Page({ params }: PageProps) {
 
           if (filePath && content !== undefined) {
             console.log('[Agent] File written directly to e2b, syncing to Yjs:', filePath);
+            // Mark as saved to prevent handleCodeChange from writing back to E2B
+            lastSavedContentRef.current[filePath] = content;
             // Immediately sync to Yjs
             import('@/lib/collaboration').then(({ updateYjsDocument }) => {
               const roomId = `${sess}-${filePath}`;
@@ -530,10 +528,10 @@ function Page({ params }: PageProps) {
                 console.error('[Agent] Failed to sync e2b write to Yjs:', err);
               });
             });
-            
+
             // Update file tree
             ifMounted(() => {
-              setFileTree(prev => {
+              useChatStore.getState().setFileTree(prev => {
                 function updateFile(nodes: FileNode[]): FileNode[] {
                   return nodes.map(node => {
                     if (node.type === 'file' && node.path === filePath) {
@@ -552,84 +550,55 @@ function Page({ params }: PageProps) {
         }
 
         // Update messages directly based on event type
-        if (parsed.type === 'reasoning') {
-          const reasoning = parsed.data?.reasoning as string | undefined;
-          ifMounted(() => {
-            setMessages(prev => {
-              const newMessages = [...prev];
-              // Find last AI message and add reasoning
-              for (let i = newMessages.length - 1; i >= 0; i--) {
-                if (newMessages[i].role === 'ai') {
-                  newMessages[i] = { ...newMessages[i], reasoning };
-                  break;
-                }
-              }
-              return newMessages;
-            });
-          });
-        } else if (parsed.type === 'tool') {
+        if (parsed.type === 'tool') {
           const toolData = parsed.data as ToolData | undefined;
           ifMounted(() => {
-            setMessages(prev => {
+            useChatStore.getState().setMessages(prev => {
               const newMessages = [...prev];
               // Find last AI message and update tool calls
               for (let i = newMessages.length - 1; i >= 0; i--) {
                 if (newMessages[i].role === 'ai') {
                   const existingToolCalls = newMessages[i].toolCalls || [];
-                  
+
                   // Helper to extract file path from args for matching
                   const getFilePath = (args?: Record<string, unknown>) => {
                     if (!args) return null;
                     return args.filePath ?? args.file_path ?? args.path ?? args.filename ?? args.file ?? null;
                   };
-                  
+
                   const incomingFilePath = getFilePath(toolData?.args);
-                  
+
                   // Find existing tool call by matching tool name AND file path (if available)
-                  // Strategy: Match running->complete transitions, avoid duplicates
                   const toolCallIndex = existingToolCalls.findIndex(tc => {
                     if (tc.tool !== toolData?.tool) return false;
 
-                    // If incoming event has complete/error status, find the matching running/pending entry
                     if (toolData?.status === 'complete' || toolData?.status === 'error') {
-                      // Must match running/pending status
                       if (tc.status !== 'running' && tc.status !== 'pending') return false;
-
-                      // Match by file path if both have it
                       const existingFilePath = getFilePath(tc.args);
                       if (incomingFilePath && existingFilePath) {
                         return existingFilePath === incomingFilePath;
                       }
-
-                      // Otherwise match the first running/pending entry with same tool name
                       return true;
                     }
 
-                    // For new running events, check if there's already an entry with same path/tool
                     if (toolData?.status === 'running' || toolData?.status === 'pending') {
                       const existingFilePath = getFilePath(tc.args);
-
-                      // Match by file path if both have it
                       if (incomingFilePath && existingFilePath) {
                         return existingFilePath === incomingFilePath;
                       }
-
-                      // If no file path, match by tool name and incomplete status
                       return (tc.status === 'running' || tc.status === 'pending');
                     }
 
                     return false;
                   });
-                  
+
                   if (toolCallIndex >= 0) {
-                    // Update existing tool call - backend now sends complete data including args
                     existingToolCalls[toolCallIndex] = {
                       ...existingToolCalls[toolCallIndex],
                       ...toolData,
                       status: toolData?.status ?? existingToolCalls[toolCallIndex].status
                     };
                   } else {
-                    // Add new tool call
                     existingToolCalls.push({
                       tool: toolData?.tool || 'unknown',
                       args: toolData?.args,
@@ -637,9 +606,9 @@ function Page({ params }: PageProps) {
                       status: toolData?.status || 'running'
                     });
                   }
-                  
-                  newMessages[i] = { 
-                    ...newMessages[i], 
+
+                  newMessages[i] = {
+                    ...newMessages[i],
                     toolCalls: existingToolCalls,
                     status: 'using_tool',
                     toolName: toolData?.tool
@@ -653,9 +622,8 @@ function Page({ params }: PageProps) {
         } else if (parsed.type === 'partial') {
           const fullContent = parsed.data?.fullContent as string | undefined;
           ifMounted(() => {
-            setMessages(prev => {
+            useChatStore.getState().setMessages(prev => {
               const newMessages = [...prev];
-              // Find last AI message
               let aiIndex = -1;
               for (let i = newMessages.length - 1; i >= 0; i--) {
                 if (newMessages[i].role === 'ai') {
@@ -663,37 +631,36 @@ function Page({ params }: PageProps) {
                   break;
                 }
               }
-              
+
               if (aiIndex !== -1 && fullContent) {
                 newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullContent, status: 'streaming' };
               }
-              
+
               return newMessages;
             });
           });
         } else if (parsed.type === 'complete') {
           const response = parsed.data?.response as string | undefined;
           ifMounted(() => {
-            setMessages(prev => {
+            useChatStore.getState().setMessages(prev => {
               const newMessages = [...prev];
               for (let i = newMessages.length - 1; i >= 0; i--) {
                 if (newMessages[i].role === 'ai') {
-                  // Mark all tool calls as complete
                   const updatedToolCalls = newMessages[i].toolCalls?.map(tc => ({
                     ...tc,
                     status: tc.status === 'running' ? 'complete' as const : tc.status
                   }));
-                  
+
                   if (response && response.trim()) {
-                    newMessages[i] = { 
-                      ...newMessages[i], 
-                      content: response, 
+                    newMessages[i] = {
+                      ...newMessages[i],
+                      content: response,
                       status: 'complete',
                       toolCalls: updatedToolCalls
                     };
                   } else {
-                    newMessages[i] = { 
-                      ...newMessages[i], 
+                    newMessages[i] = {
+                      ...newMessages[i],
                       status: 'complete',
                       toolCalls: updatedToolCalls
                     };
@@ -707,11 +674,11 @@ function Page({ params }: PageProps) {
         } else if (parsed.type === 'error') {
           const error = parsed.data?.error as string | undefined;
           ifMounted(() => {
-            setMessages(prev => {
+            useChatStore.getState().setMessages(prev => {
               const newMessages = [...prev];
               for (let i = newMessages.length - 1; i >= 0; i--) {
                 if (newMessages[i].role === 'ai') {
-                  newMessages[i] = { ...newMessages[i], content: `❌ Error: ${error}` };
+                  newMessages[i] = { ...newMessages[i], content: `Error: ${error}` };
                   break;
                 }
               }
@@ -722,31 +689,30 @@ function Page({ params }: PageProps) {
 
         if (parsed.type === 'status') {
           const status = parsed.data?.status;
-          ifMounted(() => setIsStreaming(status === 'started' || status === 'processing'));
+          ifMounted(() => useChatStore.getState().setIsStreaming(status === 'started' || status === 'processing'));
         } else if (parsed.type === 'partial') {
-          ifMounted(() => setIsStreaming(true));
+          ifMounted(() => useChatStore.getState().setIsStreaming(true));
         } else if (parsed.type === 'sandbox') {
           if (parsed.data?.sandboxId) {
             const newSandboxId = parsed.data.sandboxId;
             const replacedOld = parsed.data?.replacedOld as string | undefined;
             console.log('[SSE] Received sandbox event:', { newSandboxId, sessionId: sess, isNew: parsed.data?.isNew, replacedOld });
-            
+
             ifMounted(() => {
               console.log('[State] Setting sandboxId to:', newSandboxId);
-              setSandboxId(newSandboxId);
-              // Auto-open preview panel when sandbox is created
-              setShowSecondPanel(true);
-              
+              useChatStore.getState().setSandboxId(newSandboxId);
+              useChatStore.getState().setShowSecondPanel(true);
+
               // Trigger filesystem sync immediately when sandbox is created
-              setIsSyncingFilesystem(true);
+              useChatStore.getState().setIsSyncingFilesystem(true);
               setTimeout(async () => {
                 try {
                   const response = await fetch('/api/sync-filesystem', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                      sandboxId: newSandboxId, 
-                      sessionId: sess 
+                    body: JSON.stringify({
+                      sandboxId: newSandboxId,
+                      sessionId: sess
                     }),
                   });
                   if (response.ok) {
@@ -757,10 +723,10 @@ function Page({ params }: PageProps) {
                 } catch (err) {
                   console.error('[Sync] Auto-sync failed:', err);
                 } finally {
-                  setIsSyncingFilesystem(false);
+                  useChatStore.getState().setIsSyncingFilesystem(false);
                 }
               }, 500);
-              
+
               // If this is replacing a deleted sandbox, update the session in database
               if (replacedOld) {
                 console.log('[Database] Updating session with new sandbox ID');
@@ -775,43 +741,38 @@ function Page({ params }: PageProps) {
           if (parsed.data?.sandboxUrl) {
             const newSandboxUrl = parsed.data.sandboxUrl;
             ifMounted(() => {
-              // Only update if the URL actually changed to prevent iframe refresh
-              setSandboxUrl(prev => {
-                if (prev !== newSandboxUrl) {
-                  console.log('[Sandbox URL] Updating from', prev, 'to', newSandboxUrl);
-                  setShowSecondPanel(true);
-                  setActiveTab('live preview');
-                  setIframeLoading(true);
-                  setSandboxCreatedAt(Date.now());
-                  setIsSandboxExpired(false);
-                  return newSandboxUrl;
-                }
-                console.log('[Sandbox URL] No change, keeping existing:', prev);
-                return prev;
-              });
+              const currentUrl = useChatStore.getState().sandboxUrl;
+              if (currentUrl !== newSandboxUrl) {
+                console.log('[Sandbox URL] Updating from', currentUrl, 'to', newSandboxUrl);
+                useChatStore.getState().setSandboxUrl(newSandboxUrl);
+                useChatStore.getState().setShowSecondPanel(true);
+                useChatStore.getState().setActiveTab('live preview');
+                useChatStore.getState().setIframeLoading(true);
+                useChatStore.getState().setSandboxCreatedAt(Date.now());
+                useChatStore.getState().setIsSandboxExpired(false);
+              } else {
+                console.log('[Sandbox URL] No change, keeping existing:', currentUrl);
+              }
             });
           }
         } else if (parsed.type === 'complete' || parsed.type === 'error') {
-          ifMounted(() => setIsStreaming(false));
+          ifMounted(() => useChatStore.getState().setIsStreaming(false));
           if (parsed.data?.sandboxUrl) {
             const newSandboxUrl = parsed.data.sandboxUrl;
             ifMounted(() => {
-              // Only update if URL changed
-              setSandboxUrl(prev => {
-                if (prev !== newSandboxUrl) {
-                  setSandboxCreatedAt(Date.now());
-                  setIsSandboxExpired(false);
-                  return newSandboxUrl;
-                }
-                return prev;
-              });
+              const currentUrl = useChatStore.getState().sandboxUrl;
+              if (currentUrl !== newSandboxUrl) {
+                useChatStore.getState().setSandboxUrl(newSandboxUrl);
+                useChatStore.getState().setSandboxCreatedAt(Date.now());
+                useChatStore.getState().setIsSandboxExpired(false);
+              }
             });
           }
         }
       };
 
       eventSource.onerror = () => {
-        ifMounted(() => setIsStreaming(false));
+        ifMounted(() => useChatStore.getState().setIsStreaming(false));
         if (retriesRef.current < MAX_RETRIES && mountedRef.current) {
           const retryIn = 500 * 2 ** retriesRef.current;
           retriesRef.current += 1;
@@ -836,7 +797,7 @@ function Page({ params }: PageProps) {
       startRealtimeSubscription(sessionId);
     }
   }, [sessionId, startRealtimeSubscription]);
-  
+
   // Cleanup subscription on unmount
   useEffect(() => {
     return () => {
@@ -846,116 +807,16 @@ function Page({ params }: PageProps) {
     };
   }, []);
 
-  // state for the input message
-  const [message, setMessage] = useState("");
-  // state for toggling the second panel - show when sandbox exists or code-related activity
-  const [showSecondPanel, setShowSecondPanel] = useState(false);
-  // state for iframe loading
-  const [iframeLoading, setIframeLoading] = useState(true);
-  // state for active tab
-  const [activeTab, setActiveTab] = useState("live preview");
-  // state for mobile view panel
-  const [mobileActivePanel, setMobileActivePanel] = useState<"chat" | "preview" | "code">("chat");
-  const isMobile = useIsMobile();
-  // state for sandbox expiration tracking
-  const [sandboxCreatedAt, setSandboxCreatedAt] = useState<number | null>(null);
-  const [isSandboxExpired, setIsSandboxExpired] = useState(false);
-  const [isCheckingExpiration, setIsCheckingExpiration] = useState(false);
-
-  // sample hierarchical file tree state
-  const [fileTree, setFileTree] = useState<FileNode[]>([
-    {
-      name: "app",
-      path: "app",
-      type: "folder",
-      children: [
-        {
-          name: "page.tsx",
-          path: "app/page.tsx",
-          type: "file",
-          content: "// Home page code\n",
-        },
-      ],
-    },
-    {
-      name: "lib",
-      path: "lib",
-      type: "folder",
-      children: [
-        {
-          name: "utils.ts",
-          path: "lib/utils.ts",
-          type: "file",
-          content: "export function sum(a, b) { return a + b; }\n",
-        },
-      ],
-    },
-    {
-      name: "components",
-      path: "components",
-      type: "folder",
-      children: [
-        {
-          name: "Button.tsx",
-          path: "components/Button.tsx",
-          type: "file",
-          content: "export const Button = () => <button>Click</button>;\n",
-        },
-      ],
-    },
-  ]);
-
-  // flatten file tree to get all files for selection and editing
-  function flattenFiles(nodes: FileNode[]): FileNode[] {
-    let files: FileNode[] = [];
-    for (const node of nodes) {
-      if (node.type === "file") files.push(node);
-      if (node.type === "folder" && node.children) files = files.concat(flattenFiles(node.children));
-    }
-    return files;
-  }
-  const allFiles = flattenFiles(fileTree);
-  const [selectedFile, setSelectedFile] = useState(allFiles[0]?.path || 'app/page.tsx');
-  const [openFiles, setOpenFiles] = useState<string[]>([allFiles[0]?.path || 'app/page.tsx']);
-
-  // Get current file's content directly from fileTree to avoid stale state
-  const getCurrentFileContent = useCallback((filePath: string): string => {
-    const file = allFiles.find(f => f.path === filePath);
-    return file?.content ?? "";
-  }, [allFiles]);
-
-
-
-  // Ref to track the last saved content for debouncing
-  const lastSavedContentRef = useRef<{ [filePath: string]: string }>({});
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // update file content when code changes - synced via Yjs
+  // --- handleCodeChange: reads from store.getState() so never stale ---
   const handleCodeChange = useCallback((val: string | undefined) => {
+    const { selectedFile, sandboxId, isStreaming, updateFileContent } = useChatStore.getState();
     const newContent = val ?? "";
-    
+
     // Update file tree with new content
-    setFileTree(prev => {
-      interface UpdateNode {
-        name: string;
-        path: string;
-        type: "file" | "folder";
-        children?: UpdateNode[];
-        content?: string;
-      }
+    updateFileContent(selectedFile, newContent);
 
-      function update(nodes: UpdateNode[]): UpdateNode[] {
-        return nodes.map((n: UpdateNode) => {
-          if (n.type === "file" && n.path === selectedFile) return { ...n, content: newContent };
-          if (n.type === "folder" && n.children) return { ...n, children: update(n.children) };
-          return n;
-        });
-      }
-      return update(prev);
-    });
-
-    // Debounced sync to e2b filesystem
-    if (sandboxId && selectedFile) {
+    // Debounced sync to e2b filesystem (skip when agent is writing)
+    if (sandboxId && selectedFile && !isStreaming) {
       // Cancel previous timeout
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -968,10 +829,14 @@ function Page({ params }: PageProps) {
 
       // Set new timeout to save after 1 second of inactivity
       saveTimeoutRef.current = setTimeout(async () => {
+        // Re-read latest state at save time
+        const latestState = useChatStore.getState();
+        const currentFile = latestState.selectedFile;
+
         try {
-          setIsSyncingToE2B(true);
+          useChatStore.getState().setIsSyncingToE2B(true);
           lastSavedContentRef.current[selectedFile] = newContent;
-          
+
           const response = await fetch('/api/write-to-sandbox', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -984,7 +849,7 @@ function Page({ params }: PageProps) {
 
           const data = await response.json();
           if (response.ok) {
-            console.log('[Sync] ✅ Saved to e2b:', selectedFile);
+            console.log('[Sync] Saved to e2b:', selectedFile);
           } else {
             console.error('[Sync] Failed to write to e2b:', data.error);
             toast.error('Failed to sync to sandbox');
@@ -993,21 +858,12 @@ function Page({ params }: PageProps) {
           console.error('[Sync] Error writing to e2b:', error);
           toast.error('Sync error');
         } finally {
-          setIsSyncingToE2B(false);
+          useChatStore.getState().setIsSyncingToE2B(false);
         }
       }, 1000);
     }
-  }, [sandboxId, selectedFile]);
+  }, []); // Empty deps! Reads from store.getState() so never stale
 
-  // Chat state for Copilot-like interface with database persistence
-  const [messages, setMessages] = useState<ChatMessage[]>([{ 
-    role: "ai", 
-    content: "👋 Welcome to CodeVibe! I can help you generate code. Try asking me to 'generate some code' or 'create components' to see live file streaming in action!",
-    timestamp: Date.now(),
-    id: 'welcome'
-  }]);
-
-  // Messages are loaded from database in the session load effect above
   // Notify sidebar to refresh when messages change
   useEffect(() => {
     const hasUserMessages = messages.some(m => m.role === 'user');
@@ -1017,7 +873,6 @@ function Page({ params }: PageProps) {
   }, [messages]);
 
   // Auto-save messages and sandbox data to database (debounced)
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
     if (!sessionId || !sessionExistsRef.current || messages.length === 0) return;
 
@@ -1047,29 +902,30 @@ function Page({ params }: PageProps) {
 
   // Handler for sending a message
   const handleSend = useCallback(() => {
+    const { message, sessionId, sandboxId } = useChatStore.getState();
+
     if (!message.trim()) return;
     if (isSending.current) {
       return;
     }
-    
+
     isSending.current = true;
     const userMessage = message;
-    setMessage("");
-    
+    useChatStore.getState().setMessage("");
+
     // Add user message to chat and ensure AI response placeholder
-    setMessages((prev) => {
+    useChatStore.getState().setMessages((prev) => {
       const newMessages: ChatMessage[] = [
-        ...prev, 
-        { 
-          role: "user", 
+        ...prev,
+        {
+          role: "user",
           content: userMessage,
           timestamp: Date.now(),
           id: `user-${Date.now()}`
         }
       ];
-      // Always add an AI processing stub for the new response
-      newMessages.push({ 
-        role: 'ai', 
+      newMessages.push({
+        role: 'ai',
         content: '',
         timestamp: Date.now(),
         id: `ai-${Date.now()}`,
@@ -1079,34 +935,27 @@ function Page({ params }: PageProps) {
     });
 
     // Start streaming mode
-    setIsStreaming(true);
+    useChatStore.getState().setIsStreaming(true);
 
     // IMPORTANT: Start SSE subscription BEFORE sending the message
-    // This ensures we don't miss any events from the agent
     startRealtimeSubscription(sessionId);
 
-    // The agent will intelligently analyze if a sandbox is needed
-    // We only need to check if one already exists to maintain context
     console.log('[handleSend] Current state - sandboxId:', sandboxId, 'sessionId:', sessionId);
     if (sandboxId) {
-      // Show preview panel for existing sandbox
-      setShowSecondPanel(true);
-      // Use existing sandbox to maintain context
+      useChatStore.getState().setShowSecondPanel(true);
       console.log('[handleSend] Reusing existing sandbox:', sandboxId, 'for session:', sessionId);
-      invokeWithSandbox.mutate({ 
-        message: userMessage, 
+      invokeWithSandbox.mutate({
+        message: userMessage,
         sandboxId,
         sessionId
       });
     } else {
-      // Let the agent intelligently decide if a sandbox is needed
-      // It will analyze the task and create one if necessary
-      invoke.mutate({ 
-        message: userMessage, 
+      invoke.mutate({
+        message: userMessage,
         sessionId
       });
     }
-  }, [message, sessionId, sandboxId, invoke, invokeWithSandbox, startRealtimeSubscription]);
+  }, [invoke, invokeWithSandbox, startRealtimeSubscription]);
 
   // Check sandbox expiration
   useEffect(() => {
@@ -1125,22 +974,20 @@ function Page({ params }: PageProps) {
     // Check every minute
     const interval = setInterval(checkExpiration, 60000);
     return () => clearInterval(interval);
-  }, [sandboxCreatedAt, sandboxUrl, SANDBOX_EXPIRY_MS]);
+  }, [sandboxCreatedAt, sandboxUrl, setIsSandboxExpired]);
 
   // Switch to code tab when sandbox expires
   useEffect(() => {
     if (isSandboxExpired) {
       setActiveTab('code');
     }
-  }, [isSandboxExpired]);
+  }, [isSandboxExpired, setActiveTab]);
 
   // Auto-send initial message from home page
   useEffect(() => {
     if (shouldAutoSend && message.trim() && !hasAutoSent.current && messages.length === 1) {
-      // Only auto-send if we haven't sent yet and only have welcome message
       hasAutoSent.current = true;
       setShouldAutoSend(false);
-      // Use setTimeout to ensure component is fully mounted
       setTimeout(() => {
         handleSend();
       }, 100);
@@ -1165,7 +1012,7 @@ function Page({ params }: PageProps) {
           <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 shrink-0">
             {/* Navigation Buttons */}
             <div className="flex items-center gap-1 mr-2">
-              <button 
+              <button
                 type="button"
                 className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 onClick={() => {
@@ -1184,7 +1031,7 @@ function Page({ params }: PageProps) {
                 </svg>
               </button>
             </div>
-            
+
             {/* URL Bar */}
             <div className="flex-1 flex items-center gap-2 px-3 py-1.5 bg-background rounded-md border text-sm">
               <svg className="w-3.5 h-3.5 text-green-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -1207,7 +1054,7 @@ function Page({ params }: PageProps) {
                 </svg>
               </button>
             </div>
-            
+
             {/* External Link Button */}
             <button
               type="button"
@@ -1220,7 +1067,7 @@ function Page({ params }: PageProps) {
               </svg>
             </button>
           </div>
-          
+
           {/* Iframe Container */}
           <div className="relative flex-1 min-h-0">
             {iframeLoading && (
@@ -1267,7 +1114,7 @@ function Page({ params }: PageProps) {
             <ChatPanel
               messages={messages}
               message={message}
-              setMessage={setMessage}
+              setMessage={setMessage as Dispatch<SetStateAction<string>>}
               onSend={handleSend}
               isLoading={invoke.isPending || invokeWithSandbox.isPending}
               isStreaming={isStreaming}
@@ -1284,21 +1131,13 @@ function Page({ params }: PageProps) {
           setMobileActivePanel={setMobileActivePanel}
           messages={messages}
           message={message}
-          setMessage={setMessage}
+          setMessage={setMessage as Dispatch<SetStateAction<string>>}
           handleSend={handleSend}
           isLoading={invoke.isPending || invokeWithSandbox.isPending}
           isStreaming={isStreaming}
           renderPreview={renderPreview}
-          isSyncingFilesystem={isSyncingFilesystem}
-          openFiles={openFiles}
-          selectedFile={selectedFile}
-          setSelectedFile={setSelectedFile}
-          sessionId={sessionId}
-          getCurrentFileContent={getCurrentFileContent}
           handleCodeChange={handleCodeChange}
           guestCredentials={guestCredentials}
-          setConnectedUsers={setConnectedUsers}
-          setConnectionStatus={setConnectionStatus}
         />
       );
     }
@@ -1307,28 +1146,14 @@ function Page({ params }: PageProps) {
       <DesktopChatLayout
         messages={messages}
         message={message}
-        setMessage={setMessage}
+        setMessage={setMessage as Dispatch<SetStateAction<string>>}
         handleSend={handleSend}
         isLoading={invoke.isPending || invokeWithSandbox.isPending}
         isStreaming={isStreaming}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        fileTree={fileTree}
-        selectedFile={selectedFile}
-        setSelectedFile={setSelectedFile}
-        openFiles={openFiles}
-        setOpenFiles={setOpenFiles}
-        isSyncingFilesystem={isSyncingFilesystem}
-        sandboxId={sandboxId}
-        sessionId={sessionId}
-        getCurrentFileContent={getCurrentFileContent}
         handleCodeChange={handleCodeChange}
         guestCredentials={guestCredentials}
-        connectionStatus={connectionStatus}
-        connectedUsers={connectedUsers}
-        setConnectedUsers={setConnectedUsers}
-        setConnectionStatus={setConnectionStatus}
-        isSyncingToE2B={isSyncingToE2B}
         renderPreview={renderPreview}
       />
     );
@@ -1362,7 +1187,7 @@ function Page({ params }: PageProps) {
             </span>
           )}
         </div>
-        
+
         <div className="flex items-center gap-2">
           {/* Tab Switcher */}
           {showSecondPanel && (
@@ -1373,7 +1198,7 @@ function Page({ params }: PageProps) {
               </TabsList>
             </Tabs>
           )}
-          
+
           {/* Connected Users Avatars */}
           {connectedUsers.length > 0 && (
             <TooltipProvider>
@@ -1402,8 +1227,8 @@ function Page({ params }: PageProps) {
               size="sm"
               onClick={async () => {
                 if (confirm('Clear all messages? This cannot be undone.')) {
-                  const newMessages: ChatMessage[] = [{ 
-                    role: "ai" as const, 
+                  const newMessages: ChatMessage[] = [{
+                    role: "ai" as const,
                     content: "Chat cleared. How can I help you?",
                     timestamp: Date.now(),
                     id: 'clear-' + Date.now()
@@ -1434,6 +1259,18 @@ function Page({ params }: PageProps) {
       </div>
     </div>
   );
+}
+
+// Helper to find first file path in a tree (used in SSE handler)
+function findFirstFile(nodes: FileNode[]): string | null {
+  for (const node of nodes) {
+    if (node.type === 'file') return node.path;
+    if (node.type === 'folder' && node.children) {
+      const found = findFirstFile(node.children);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 export default Page;

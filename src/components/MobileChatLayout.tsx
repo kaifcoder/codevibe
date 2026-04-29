@@ -4,11 +4,9 @@ import { Dispatch, SetStateAction } from "react";
 import { MessageSquare, Code, Eye } from "lucide-react";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import { CodeEditor } from "@/components/CodeEditor";
+import { useChatStore } from "@/stores/chat-store";
 
-// Type aliases
 type MobilePanel = "chat" | "preview" | "code";
-type ConnectionStatus = "connected" | "connecting" | "disconnected";
-type ConnectedUser = { id: string; name: string; color: string };
 
 export interface MobileChatLayoutProps {
   mobileActivePanel: MobilePanel;
@@ -20,16 +18,8 @@ export interface MobileChatLayoutProps {
   isLoading: boolean;
   isStreaming: boolean;
   renderPreview: () => React.ReactNode;
-  isSyncingFilesystem: boolean;
-  openFiles: string[];
-  selectedFile: string;
-  setSelectedFile: (file: string) => void;
-  sessionId: string;
-  getCurrentFileContent: (file: string) => string;
   handleCodeChange: (value: string | undefined) => void;
   guestCredentials: { username: string; userId: string } | null;
-  setConnectedUsers: (users: ConnectedUser[]) => void;
-  setConnectionStatus: (status: ConnectionStatus) => void;
 }
 
 export function MobileChatLayout({
@@ -42,17 +32,19 @@ export function MobileChatLayout({
   isLoading,
   isStreaming,
   renderPreview,
-  isSyncingFilesystem,
-  openFiles,
-  selectedFile,
-  setSelectedFile,
-  sessionId,
-  getCurrentFileContent,
   handleCodeChange,
   guestCredentials,
-  setConnectedUsers,
-  setConnectionStatus,
 }: Readonly<MobileChatLayoutProps>) {
+  // Read file/editor state directly from store
+  const openFiles = useChatStore(s => s.openFiles);
+  const selectedFile = useChatStore(s => s.selectedFile);
+  const setSelectedFile = useChatStore(s => s.setSelectedFile);
+  const sessionId = useChatStore(s => s.sessionId);
+  const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
+  const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
+  const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
+  const getFileContent = useChatStore(s => s.getFileContent);
+
   return (
     <div className="h-full flex flex-col">
       {/* Mobile Tab Bar */}
@@ -60,8 +52,8 @@ export function MobileChatLayout({
         <button
           onClick={() => setMobileActivePanel("chat")}
           className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${
-            mobileActivePanel === "chat" 
-              ? "text-foreground border-b-2 border-primary" 
+            mobileActivePanel === "chat"
+              ? "text-foreground border-b-2 border-primary"
               : "text-muted-foreground"
           }`}
         >
@@ -71,8 +63,8 @@ export function MobileChatLayout({
         <button
           onClick={() => setMobileActivePanel("preview")}
           className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${
-            mobileActivePanel === "preview" 
-              ? "text-foreground border-b-2 border-primary" 
+            mobileActivePanel === "preview"
+              ? "text-foreground border-b-2 border-primary"
               : "text-muted-foreground"
           }`}
         >
@@ -82,8 +74,8 @@ export function MobileChatLayout({
         <button
           onClick={() => setMobileActivePanel("code")}
           className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${
-            mobileActivePanel === "code" 
-              ? "text-foreground border-b-2 border-primary" 
+            mobileActivePanel === "code"
+              ? "text-foreground border-b-2 border-primary"
               : "text-muted-foreground"
           }`}
         >
@@ -91,7 +83,7 @@ export function MobileChatLayout({
           Code
         </button>
       </div>
-      
+
       {/* Mobile Panel Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {mobileActivePanel === "chat" && (
@@ -143,7 +135,7 @@ export function MobileChatLayout({
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <CodeEditor
                     key={`${sessionId}-${selectedFile}`}
-                    value={getCurrentFileContent(selectedFile)}
+                    value={getFileContent(selectedFile)}
                     onChange={handleCodeChange}
                     language="typescript"
                     autoScroll={false}
