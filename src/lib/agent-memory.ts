@@ -6,13 +6,6 @@ import { z } from 'zod';
 // InMemoryStore persists during server runtime but clears on restart
 export const agentMemoryStore = new InMemoryStore();
 
-// Schema for user/session context
-export interface AgentContext {
-  userId?: string;
-  sessionId: string;
-  workspaceId?: string;
-}
-
 // Memory schemas
 const UserPreferencesSchema = z.object({
   language: z.string().optional(),

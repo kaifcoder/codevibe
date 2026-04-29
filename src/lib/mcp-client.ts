@@ -96,21 +96,6 @@ export async function createMCPTools(serverName: string, config: MCPServerConfig
   }
 }
 
-/**
- * Cleanup MCP clients on shutdown
- */
-export async function closeMCPClients() {
-  for (const [serverName, entry] of mcpClients.entries()) {
-    try {
-      await entry.client.close();
-      console.log(`🔌 Closed MCP client for ${serverName}`);
-    } catch (error) {
-      console.error(`Error closing MCP client for ${serverName}:`, error);
-    }
-  }
-  mcpClients.clear();
-}
-
 // MCP Server Configurations
 export const PLAYWRIGHT_MCP_CONFIG: MCPServerConfig = {
   command: 'npx',

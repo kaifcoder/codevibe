@@ -59,7 +59,7 @@ function buildTools(sbxId?: string, sessionId?: string): any[] {
   return tools;
 }
 
-async function createAgentWorkflow(sbxId?: string, _enableMCP: boolean = true, sessionId?: string, _sandboxUrl?: string) {
+async function createAgentWorkflow(sbxId?: string, sessionId?: string) {
   await initializeMCPTools();
 
   // Sandbox agents must be rebuilt (E2B tools capture sessionId in closures)
@@ -177,49 +177,10 @@ async function* processStreamChunk(chunk: any, toolCallArgsMap: Map<string, any>
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-export async function invokeNextJsAgent(
-  userPrompt: string,
-  sbxId?: string,
-  prevMessages: MessageArray = [],
-  enableMCP: boolean = false,
-  sandboxUrl?: string
-): Promise<{ response: string; messages: MessageArray }> {
-  if (!userPrompt) throw new Error('User prompt cannot be empty');
-
-  const app = await createAgentWorkflow(sbxId, enableMCP, undefined, sandboxUrl);
-  const config = {
-    configurable: { thread_id: sbxId ? `session-${sbxId}` : 'text-session' },
-    recursionLimit: 40,
-  };
-
-  const systemPrompt = createSystemPrompt(sbxId, sandboxUrl);
-  const compactedPrev = compactPrevMessages(prevMessages);
-  const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
-
-  try {
-    const response = await app.invoke({ messages }, config);
-    const lastAI = (response.messages || [])
-      .filter((msg: any) => msg instanceof AIMessage)
-      .pop();
-
-    return {
-      response: lastAI && typeof lastAI.content === 'string' ? lastAI.content : 'No response content',
-      messages: response.messages as MessageArray,
-    };
-  } catch (error) {
-    console.error('[Agent] invoke error:', error);
-    if (error instanceof Error && (error.message.includes('Recursion limit') || (error as any).lc_error_code === 'GRAPH_RECURSION_LIMIT')) {
-      return { response: 'Task completed. Make a new request for additional changes.', messages };
-    }
-    return { response: 'Error processing request. Please try again.', messages };
-  }
-}
-
 export async function* streamNextJsAgent(
   userPrompt: string,
   sbxId?: string,
   prevMessages: MessageArray = [],
-  enableMCP: boolean = false,
   sessionId?: string,
   sandboxUrl?: string
 ): AsyncGenerator<StreamResponse, void, unknown> {
@@ -229,7 +190,7 @@ export async function* streamNextJsAgent(
   }
 
   try {
-    const app = await createAgentWorkflow(sbxId, enableMCP, sessionId, sandboxUrl);
+    const app = await createAgentWorkflow(sbxId, sessionId);
     const config = {
       configurable: { thread_id: sbxId ? `session-${sbxId}` : 'text-session' },
       recursionLimit: 40,
@@ -257,4 +218,4 @@ export async function* streamNextJsAgent(
   }
 }
 
-export { createAgentWorkflow };
+
