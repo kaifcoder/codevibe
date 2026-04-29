@@ -26,13 +26,8 @@ type FileNode = {
   content?: string;
 };
 
-// Real-time update types
-type AgentUpdate = {
-  type: 'status' | 'partial' | 'tool' | 'complete' | 'error' | 'sandbox' | 'file_tree_sync' | 'code_patch' | 'file_update';
-  content: string;
-  timestamp: Date;
-  data?: Record<string, unknown>;
-};
+// Sandbox expiration constant (outside component to avoid re-creation each render)
+const SANDBOX_EXPIRY_MS = 25 * 60 * 1000; // 25 minutes
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -43,15 +38,12 @@ function Page({ params }: PageProps) {
   const searchParams = useSearchParams();
   const shareToken = searchParams.get('token');
   const isSharedAccess = !!shareToken;
-  
+
   const [shouldAutoSend, setShouldAutoSend] = useState(false);
   const [connectedUsers, setConnectedUsers] = useState<Array<{ id: string; name: string; color: string }>>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
   const [isMounted, setIsMounted] = useState(false);
   const [isSyncingToE2B, setIsSyncingToE2B] = useState(false);
-  
-  // Sandbox expiration constants
-  const SANDBOX_EXPIRY_MS = 25 * 60 * 1000; // 25 minutes
 
   // Generate stable guest credentials for shared sessions
   const guestCredentials = useMemo(() => {
@@ -246,9 +238,8 @@ function Page({ params }: PageProps) {
   }, [sessionId, SANDBOX_EXPIRY_MS]);
   
   const [isStreaming, setIsStreaming] = useState(false);
-  
+
   // Real-time updates
-  const [agentUpdates, setAgentUpdates] = useState<AgentUpdate[]>([]);
   const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
   const activeSessionRef = useRef<string | null>(null);
   const hasAutoSent = useRef(false);
@@ -271,7 +262,6 @@ function Page({ params }: PageProps) {
       },
       onMutate: () => {
         setIsStreaming(true);
-        setAgentUpdates([]);
         toast.loading("Starting AI agent...");
       },
       onSettled: () => {
@@ -297,7 +287,6 @@ function Page({ params }: PageProps) {
       },
       onMutate: () => {
         setIsStreaming(true);
-        setAgentUpdates([]);
         toast.loading("Starting AI agent with sandbox...");
       },
       onSettled: () => {
@@ -316,6 +305,10 @@ function Page({ params }: PageProps) {
       }
     })
   );
+
+  // Ref to access updateSession inside SSE callback without causing re-renders
+  const updateSessionRef = useRef(updateSession);
+  useEffect(() => { updateSessionRef.current = updateSession; }, [updateSession]);
 
   // Types for SSE payload
   type StatusData = { status?: string; message?: string; hasSandbox?: boolean };
@@ -363,26 +356,6 @@ function Page({ params }: PageProps) {
   // Helper to update state only if component still mounted
   const ifMounted = (fn: () => void) => { if (mountedRef.current) fn(); };
 
-  const getContentFromData = useCallback((data: SSEPayload): string => {
-    switch (data.type) {
-      case 'status':
-        return data.data?.message || 'Status update';
-      case 'partial':
-        return data.data?.content || '';
-      case 'tool':
-        return `\uD83D\uDD27 ${data.data?.tool}`; // wrench emoji escaped for safety
-      case 'sandbox':
-        return `\uD83C\uDFD7️ Sandbox ${data.data?.isNew ? 'created' : 'connected'}: ${data.data?.sandboxId}`;
-      case 'complete':
-        return '✅ Task completed';
-      case 'error':
-        return `❌ Error: ${data.data?.error}`;
-      case 'file_update':
-        return `📝 Updating file: ${data.data?.filePath || 'unknown'}`;
-      default:
-        return data.data ? JSON.stringify(data.data) : '';
-    }
-  }, []);
 
   // Start real-time subscription for agent events using Server-Sent Events with reconnection
   const startRealtimeSubscription = useCallback((sess: string) => {
@@ -429,14 +402,6 @@ function Page({ params }: PageProps) {
         if (parsed.type === 'connected') {
           return;
         }
-        
-        const update: AgentUpdate = {
-          type: parsed.type as AgentUpdate['type'],
-          content: getContentFromData(parsed),
-          timestamp: new Date(),
-          data: parsed.data,
-        };
-        ifMounted(() => setAgentUpdates(prev => [...prev, update]));
 
         // Handle file tree sync from agent
         if (parsed.type === 'file_tree_sync') {
@@ -468,7 +433,6 @@ function Page({ params }: PageProps) {
           if (filePath) {
             if (action === 'start') {
               console.log('[Agent] Started editing file:', filePath);
-              // Switch to the file being edited
               ifMounted(() => {
                 setSelectedFile(filePath);
                 if (!openFiles.includes(filePath)) {
@@ -477,33 +441,11 @@ function Page({ params }: PageProps) {
               });
             } else if (action === 'complete') {
               console.log('[Agent] Completed editing file:', filePath);
-              // Sync final content to e2b immediately - content is included in complete event
-              if (content !== undefined && sandboxIdRef.current) {
-                console.log('[Agent] Syncing final content to e2b:', filePath, 'length:', content.length);
-                fetch('/api/write-to-sandbox', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    sandboxId: sandboxIdRef.current,
-                    filePath,
-                    content,
-                  }),
-                })
-                  .then(response => response.json())
-                  .then(data => {
-                    if (data.success) {
-                      console.log('[Agent] ✅ Synced to e2b:', filePath);
-                    } else {
-                      console.error('[Agent] Failed to sync to e2b:', data.error);
-                    }
-                  })
-                  .catch(err => console.error('[Agent] Failed to sync to e2b:', err));
-              } else {
-                console.warn('[Agent] Cannot sync to e2b: content or sandboxId missing');
-              }
+              // E2B sync is handled in 'patch' after Yjs update — nothing to do here
             } else if (action === 'patch' && content !== undefined) {
-              // Apply patch directly to editor state
               console.log('[Agent] Applying code patch to:', filePath, 'content length:', content.length);
+              // Mark as saved to prevent duplicate E2B write from handleCodeChange
+              lastSavedContentRef.current[filePath] = content;
               ifMounted(() => {
                 // Update file tree - add file if it doesn't exist
                 setFileTree(prev => {
@@ -524,7 +466,6 @@ function Page({ params }: PageProps) {
                   
                   const updated = updateFile(prev);
                   
-                  // If file doesn't exist, add it to root
                   if (!fileExists) {
                     console.log('[Agent] File not in tree, adding:', filePath);
                     return [...updated, {
@@ -538,13 +479,36 @@ function Page({ params }: PageProps) {
                   return updated;
                 });
                 
-                // Always update Yjs for the file being edited by agent
-                console.log('[Agent] Updating Yjs document:', filePath);
+                // Update Yjs first, then sync to E2B
                 import('@/lib/collaboration').then(({ updateYjsDocument }) => {
                   const roomId = `${sess}-${filePath}`;
-                  updateYjsDocument(roomId, content).catch((err: Error) => {
-                    console.error('[Agent] Failed to update Yjs document:', err);
-                  });
+                  updateYjsDocument(roomId, content)
+                    .then(() => {
+                      // Now sync to E2B after Yjs is updated
+                      if (sandboxIdRef.current) {
+                        fetch('/api/write-to-sandbox', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            sandboxId: sandboxIdRef.current,
+                            filePath,
+                            content,
+                          }),
+                        })
+                          .then(r => r.json())
+                          .then(data => {
+                            if (data.success) {
+                              console.log('[Agent] Synced to e2b:', filePath);
+                            } else {
+                              console.error('[Agent] Failed to sync to e2b:', data.error);
+                            }
+                          })
+                          .catch(err => console.error('[Agent] E2B sync failed:', err));
+                      }
+                    })
+                    .catch((err: Error) => {
+                      console.error('[Agent] Failed to update Yjs:', err);
+                    });
                 });
               });
             }
@@ -800,7 +764,7 @@ function Page({ params }: PageProps) {
               // If this is replacing a deleted sandbox, update the session in database
               if (replacedOld) {
                 console.log('[Database] Updating session with new sandbox ID');
-                updateSession.mutate({
+                updateSessionRef.current.mutate({
                   id: sess,
                   sandboxId: newSandboxId,
                   sandboxCreatedAt: new Date()
@@ -864,7 +828,7 @@ function Page({ params }: PageProps) {
       toast.error('Failed to start real-time updates');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getContentFromData, updateSession, sandboxId]);
+  }, []);
 
   // Establish SSE connection when sessionId is set
   useEffect(() => {
@@ -1042,7 +1006,7 @@ function Page({ params }: PageProps) {
     timestamp: Date.now(),
     id: 'welcome'
   }]);
-  
+
   // Messages are loaded from database in the session load effect above
   // Notify sidebar to refresh when messages change
   useEffect(() => {
@@ -1052,119 +1016,34 @@ function Page({ params }: PageProps) {
     }
   }, [messages]);
 
-  // Update messages when real-time updates come in - agent activity logic for chat bubbles
+  // Auto-save messages and sandbox data to database (debounced)
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
-    if (agentUpdates.length === 0) return;
-    const latestUpdate = agentUpdates[agentUpdates.length - 1];
-    if (latestUpdate.type === 'partial') {
-      setMessages(prev => {
-        const newMessages = [...prev];
-        // Find the last AI message (should already exist from handleSend)
-        let aiIndex = -1;
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-          if (newMessages[i].role === 'ai') {
-            aiIndex = i;
-            break;
-          }
-        }
-        
-        // If no AI message found, create one (shouldn't happen but safeguard)
-        if (aiIndex === -1) {
-          newMessages.push({ 
-            role: 'ai', 
-            content: '',
-            timestamp: Date.now(),
-            id: `ai-${Date.now()}`
-          });
-          aiIndex = newMessages.length - 1;
-        }
-        
-        // Always use fullContent from the event if available, otherwise append delta
-        const fullFromEvent = (latestUpdate.data?.fullContent as string | undefined) || '';
-        if (fullFromEvent) {
-          // Use the full accumulated content from the server
-          newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullFromEvent, status: 'streaming' };
-        } else {
-          // Fallback: append delta (shouldn't happen with our current implementation)
-          const existing = (newMessages[aiIndex].content === '🔄 Processing...' || !newMessages[aiIndex].content) ? '' : newMessages[aiIndex].content;
-          const delta = latestUpdate.content || '';
-          newMessages[aiIndex] = { ...newMessages[aiIndex], content: existing + delta, status: 'streaming' };
-        }
-        return newMessages;
-      });
-      setIsStreaming(true);
-    } else if (latestUpdate.type === 'complete') {
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        // Find the last AI message and update with final response
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-          if (newMessages[i].role === 'ai') {
-            const responseContent = latestUpdate.data?.response as string | undefined;
-            // Mark all tool calls as complete
-            const updatedToolCalls = newMessages[i].toolCalls?.map(tc => ({
-              ...tc,
-              status: tc.status === 'running' ? 'complete' as const : tc.status
-            }));
+    if (!sessionId || !sessionExistsRef.current || messages.length === 0) return;
 
-            // Always update if we have response content from complete event
-            if (responseContent && responseContent.trim()) {
-              newMessages[i] = { ...newMessages[i], content: responseContent, status: 'complete', toolCalls: updatedToolCalls };
-            } 
-            // If still showing processing or empty, use response or fallback
-            else if (!newMessages[i].content || newMessages[i].content === '🔄 Processing...' || newMessages[i].status === 'thinking') {
-              newMessages[i] = { ...newMessages[i], content: responseContent || 'Task completed', status: 'complete', toolCalls: updatedToolCalls };
-            } else {
-              // Mark as complete even if we're keeping accumulated content
-              newMessages[i] = { ...newMessages[i], status: 'complete', toolCalls: updatedToolCalls };
-            }
-            break;
-          }
-        }
-        return newMessages;
-      });
-      setIsStreaming(false);
-    } else if (latestUpdate.type === 'error') {
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-          if (newMessages[i].role === 'ai') {
-            newMessages[i] = { ...newMessages[i], content: `❌ Error: ${latestUpdate.data?.error || latestUpdate.content}` };
-            break;
-          }
-        }
-        return newMessages;
-      });
-      setIsStreaming(false);
-    }
-  }, [agentUpdates]);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      fetch(`/api/session/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp,
+          })),
+          fileTree: fileTree,
+          sandboxId: sandboxId || undefined,
+          sandboxUrl: sandboxUrl || undefined,
+          sandboxCreatedAt: sandboxCreatedAt ? new Date(sandboxCreatedAt).toISOString() : undefined,
+        }),
+      }).catch(err => console.error('[DB] Failed to save session:', err));
+    }, 2000);
 
-  // Auto-save messages and sandbox data to database
-  useEffect(() => {
-    // Only save if session exists in database
-    if (sessionId && sessionExistsRef.current && messages.length > 0) {
-      // Debounce the save to avoid too many requests
-      const timeoutId = setTimeout(() => {
-        fetch(`/api/session/${sessionId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: messages.map(m => ({
-              role: m.role,
-              content: m.content,
-              timestamp: m.timestamp,
-            })),
-            fileTree: fileTree,
-            sandboxId: sandboxId || undefined,
-            sandboxUrl: sandboxUrl || undefined,
-            sandboxCreatedAt: sandboxCreatedAt ? new Date(sandboxCreatedAt).toISOString() : undefined,
-          }),
-        }).catch(err => console.error('[DB] Failed to save session:', err));
-      }, 1000);
-
-      return () => clearTimeout(timeoutId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, JSON.stringify(messages), JSON.stringify(fileTree), sandboxId, sandboxUrl, sandboxCreatedAt]);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [sessionId, messages, fileTree, sandboxId, sandboxUrl, sandboxCreatedAt]);
 
   // Handler for sending a message
   const handleSend = useCallback(() => {

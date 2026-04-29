@@ -183,3 +183,15 @@ function disconnectRoom(roomId: string): void {
   
   console.log(`[Collaboration] Cleaned up room: ${roomId}`);
 }
+
+/**
+ * Get an existing collaboration session's Y.Text if the room is already open.
+ * Returns null if no session exists for this room.
+ */
+export function getExistingYText(roomId: string): Y.Text | null {
+  const doc = documents.get(roomId);
+  if (!doc) return null;
+  const provider = providers.get(roomId);
+  if (!provider || !provider.synced) return null;
+  return doc.getText('monaco');
+}
