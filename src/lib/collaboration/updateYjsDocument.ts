@@ -1,82 +1,72 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import { getExistingYText } from './initCollaboration';
 
 /**
  * Get the WebSocket URL based on current hostname
- * Must match the logic in initCollaboration.ts
  */
 function getWebSocketUrl(): string {
-  // Check for explicit environment variable first
   if (process.env.NEXT_PUBLIC_WS_URL) {
     return process.env.NEXT_PUBLIC_WS_URL;
   }
-  
-  // In SSR context, use localhost
   if (globalThis.window === undefined) {
     return 'ws://localhost:1234';
   }
-  
   const hostname = globalThis.window.location.hostname;
   const protocol = globalThis.window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  
-  // Use localhost for local access, otherwise use current hostname
-  let finalHostname = hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    finalHostname = 'localhost';
-  }
-  
+  const finalHostname = (hostname === 'localhost' || hostname === '127.0.0.1') ? 'localhost' : hostname;
   return `${protocol}//${finalHostname}:1234`;
 }
 
 /**
- * Update a Yjs document directly from the server/agent
- * This allows pushing content updates without user interaction
+ * Update a Yjs document.
+ * 
+ * If the room already has an active collaboration session (CodeEditor is open),
+ * updates the existing Y.Text directly — no new connection needed.
+ * 
+ * Falls back to a temporary provider for rooms that aren't currently open.
  */
 export async function updateYjsDocument(roomId: string, content: string): Promise<void> {
+  // Fast path: reuse existing session
+  const existingYText = getExistingYText(roomId);
+  if (existingYText) {
+    console.log('[updateYjsDocument] Reusing existing session for room:', roomId);
+    existingYText.doc!.transact(() => {
+      existingYText.delete(0, existingYText.length);
+      existingYText.insert(0, content);
+    });
+    return;
+  }
+
+  // Slow path: create temporary provider for rooms not currently open in editor
+  console.log('[updateYjsDocument] No existing session, creating temporary provider for:', roomId);
   return new Promise((resolve, reject) => {
-    const wsUrl = getWebSocketUrl();
-    console.log('[updateYjsDocument] Connecting to room:', roomId, 'via', wsUrl);
-    
-    // Create a temporary Y.Doc and provider to update the document
     const doc = new Y.Doc();
     const yText = doc.getText('monaco');
-    
+
     const provider = new HocuspocusProvider({
-      url: wsUrl,
+      url: getWebSocketUrl(),
       name: roomId,
       document: doc,
       onSynced: () => {
-        console.log('[updateYjsDocument] Provider synced, updating content');
-        
         try {
-          // Replace entire document content
           doc.transact(() => {
             yText.delete(0, yText.length);
             yText.insert(0, content);
           });
-          
-          console.log('[updateYjsDocument] Content updated successfully');
-          
-          // Wait a bit for sync, then cleanup
           setTimeout(() => {
             provider.destroy();
             resolve();
           }, 100);
         } catch (error) {
-          console.error('[updateYjsDocument] Error updating content:', error);
           provider.destroy();
           reject(error);
         }
       },
-      onClose: () => {
-        console.log('[updateYjsDocument] Provider closed');
-      },
     });
-    
-    // Timeout after 5 seconds
+
     setTimeout(() => {
-      if (provider.synced === false) {
-        console.error('[updateYjsDocument] Timeout waiting for sync');
+      if (!provider.synced) {
         provider.destroy();
         reject(new Error('Timeout waiting for Yjs sync'));
       }

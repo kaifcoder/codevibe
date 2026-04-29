@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import {
-  ClerkProvider
+  ClerkProvider,
+  SignedIn
 } from "@clerk/nextjs";
 import { dark } from "@clerk/themes";
 import { TRPCReactProvider } from "@/trpc/client";
@@ -59,7 +60,9 @@ export default function RootLayout({
                 }
                 className="h-screen"
               >
-                <AppSidebar variant="inset" />
+                <SignedIn>
+                  <AppSidebar variant="inset" />
+                </SignedIn>
                 <SidebarInset className="flex flex-col overflow-hidden">
                     <SiteHeader />
                   <div className="flex-1 overflow-hidden">

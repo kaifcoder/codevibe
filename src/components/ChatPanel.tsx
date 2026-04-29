@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Dispatch, SetStateAction, useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { LucideSend, Bot, User, ChevronDown, ChevronRight, Brain, Loader2, AlertCircle } from "lucide-react";
+import { LucideSend, Bot, User, ChevronDown, ChevronRight, Brain, AlertCircle, Check, Terminal, Pencil, Eye, FolderOpen, Trash2, Globe, Search, Package, Box } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -25,36 +25,42 @@ export interface ChatMessage {
   reasoning?: string;
 }
 
+// Get icon for tool type
+function getToolIcon(toolName: string): React.ReactNode {
+  const name = toolName.toLowerCase();
+  if (name.includes('write_file') || name.includes('writefile') || name.includes('edit_file') || name.includes('editfile')) return <Pencil className="w-3 h-3" />;
+  if (name.includes('read_file') || name.includes('readfile')) return <Eye className="w-3 h-3" />;
+  if (name.includes('list_files') || name.includes('listfiles') || name.includes('list_dir') || name.includes('listdir') || name.includes('list_files_recursive')) return <FolderOpen className="w-3 h-3" />;
+  if (name.includes('run_command') || name.includes('execute') || name.includes('shell')) return <Terminal className="w-3 h-3" />;
+  if (name.includes('delete_file') || name.includes('deletefile') || name.includes('remove')) return <Trash2 className="w-3 h-3" />;
+  if (name.includes('create_directory') || name.includes('mkdir') || name.includes('create_dir')) return <FolderOpen className="w-3 h-3" />;
+  if (name.includes('browser') || name.includes('navigate') || name.includes('screenshot') || name.includes('playwright')) return <Globe className="w-3 h-3" />;
+  if (name.includes('search') || name.includes('query') || name.includes('fetch') || name.includes('get')) return <Search className="w-3 h-3" />;
+  if (name.includes('install')) return <Package className="w-3 h-3" />;
+  if (name.includes('create_sandbox') || name.includes('createsandbox')) return <Box className="w-3 h-3" />;
+  return <Terminal className="w-3 h-3" />;
+}
+
 // Get action verb from tool name
 function getToolAction(toolName: string): string {
   const name = toolName.toLowerCase();
-
-  // E2B tools
   if (name.includes('write_file') || name.includes('writefile')) return 'Wrote';
   if (name.includes('read_file') || name.includes('readfile')) return 'Read';
   if (name.includes('edit_file') || name.includes('editfile')) return 'Edited';
-  if (name.includes('list_files_recursive')) return 'Scanned project files';
-  if (name.includes('list_files') || name.includes('listfiles') || name.includes('list_dir') || name.includes('listdir')) return 'Listed files in';
-  if (name.includes('run_command') || name.includes('execute') || name.includes('shell')) return 'Ran command';
+  if (name.includes('list_files_recursive')) return 'Scanned';
+  if (name.includes('list_files') || name.includes('listfiles') || name.includes('list_dir') || name.includes('listdir')) return 'Listed';
+  if (name.includes('run_command') || name.includes('execute') || name.includes('shell')) return 'Ran';
   if (name.includes('delete_file') || name.includes('deletefile') || name.includes('remove')) return 'Deleted';
-  if (name.includes('create_directory') || name.includes('mkdir') || name.includes('create_dir')) return 'Created directory';
-
-  // Playwright/Browser tools
+  if (name.includes('create_directory') || name.includes('mkdir') || name.includes('create_dir')) return 'Created dir';
   if (name.includes('browser_navigate') || name.includes('navigate')) return 'Navigated to';
   if (name.includes('browser_screenshot') || name.includes('screenshot')) return 'Captured screenshot';
-  if (name.includes('browser_click') || name.includes('click')) return 'Clicked on';
+  if (name.includes('browser_click') || name.includes('click')) return 'Clicked';
   if (name.includes('browser_type') || name.includes('type')) return 'Typed in';
   if (name.includes('browser_') || name.includes('playwright')) return 'Used browser';
-
-  // MCP tools
   if (name.includes('search') || name.includes('query')) return 'Searched';
   if (name.includes('fetch') || name.includes('get')) return 'Fetched';
-
-  // Installation/setup
-  if (name.includes('install')) return 'Installed packages';
+  if (name.includes('install')) return 'Installed';
   if (name.includes('create_sandbox') || name.includes('createsandbox')) return 'Created sandbox';
-
-  // Fallback
   return 'Used tool';
 }
 
@@ -63,43 +69,29 @@ function getToolTarget(tool: ToolCall): string {
   const args = tool.args;
   if (!args) return '';
 
-  // Try common arg names for file paths
   const filePath = args.filePath ?? args.file_path ?? args.path ?? args.filename ?? args.file;
   if (typeof filePath === 'string') {
-    // Show just the filename or last path segment for most operations
     const parts = filePath.split('/');
-    const filename = parts.at(-1) ?? filePath;
-
-    // For directory listing, show the directory name
     const toolName = tool.tool.toLowerCase();
     if (toolName.includes('list_dir') || toolName.includes('listfiles') || toolName.includes('list_files')) {
-      return filePath === '.' || filePath === '/' ? 'current directory' : filePath;
+      return filePath === '.' || filePath === '/' ? 'root' : filePath;
     }
-
-    return filename;
+    return parts.at(-1) ?? filePath;
   }
 
-  // For commands - show the command itself (without "Ran command" prefix to avoid duplication)
   const command = args.command ?? args.cmd;
   if (typeof command === 'string') {
-    return `\`${command.slice(0, 60)}${command.length > 60 ? '...' : ''}\``;
+    return command.slice(0, 50) + (command.length > 50 ? '...' : '');
   }
 
-  // For URLs
   const url = args.url;
   if (typeof url === 'string') {
-    try {
-      const urlObj = new URL(url);
-      return urlObj.hostname;
-    } catch {
-      return url.slice(0, 40);
-    }
+    try { return new URL(url).hostname; } catch { return url.slice(0, 30); }
   }
 
-  // For search queries
   const query = args.query ?? args.q ?? args.search;
   if (typeof query === 'string') {
-    return `"${query.slice(0, 50)}${query.length > 50 ? '...' : ''}"`;
+    return query.slice(0, 40) + (query.length > 40 ? '...' : '');
   }
 
   return '';
@@ -107,12 +99,10 @@ function getToolTarget(tool: ToolCall): string {
 
 // Format tool display with action and target
 function formatToolDisplay(tool: ToolCall): { action: string; target: string } {
-  const action = getToolAction(tool.tool);
-  const target = getToolTarget(tool);
-  return { action, target };
+  return { action: getToolAction(tool.tool), target: getToolTarget(tool) };
 }
 
-// Format tool name for display (used in legacy status indicators)
+// Format tool name for display
 function formatToolName(toolName: string): string {
   return toolName
     .replace(/^e2b_/, '')
@@ -127,7 +117,25 @@ function formatToolName(toolName: string): string {
 // Tool call type helper
 type ToolCall = NonNullable<ChatMessage['toolCalls']>[number];
 
-// Timeline Action Log Component - Simple activity feed style
+// Compact tool line
+function ToolLine({ tool, idx }: { tool: ToolCall; idx: number }) {
+  const { action, target } = formatToolDisplay(tool);
+  const isError = tool.status === 'error';
+
+  return (
+    <div key={`${tool.tool}-${idx}`} className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground">
+      <span className={cn("shrink-0", isError && "text-red-500")}>
+        {isError ? <AlertCircle className="w-3 h-3" /> : getToolIcon(tool.tool)}
+      </span>
+      <span className={cn("truncate", isError && "text-red-500")}>
+        {action}{target ? ` ${target}` : ''}
+      </span>
+      {!isError && <Check className="w-3 h-3 text-emerald-500 shrink-0 ml-auto" />}
+    </div>
+  );
+}
+
+// Action Timeline Component - Collapsible, compact
 function ActionTimeline({
   toolCalls,
   status,
@@ -139,102 +147,94 @@ function ActionTimeline({
   isStreaming?: boolean;
   reasoning?: string;
 }>) {
-  // Separate completed and running tasks
+  const [isOpen, setIsOpen] = useState(false);
   const completedCalls = toolCalls.filter(t => t.status === 'complete' || t.status === 'error');
   const runningCalls = toolCalls.filter(t => t.status === 'running' || t.status === 'pending');
-  const currentRunning = runningCalls[0]; // Show only the first running task
-
-  // Render a single tool call item (completed only)
-  const renderToolItem = (tool: ToolCall, idx: number) => {
-    const toolStatus = tool.status ?? 'pending';
-    const { action, target } = formatToolDisplay(tool);
-
-    // Determine display text with better formatting
-    let displayText = action;
-    if (target) {
-      // Special formatting for commands (already includes backticks)
-      if (action === 'Ran command') {
-        displayText = `${action}: ${target}`;
-      } else {
-        displayText = `${action} ${target}`;
-      }
-    }
-
-    return (
-      <div key={`${tool.tool}-${idx}`} className="flex items-start gap-2 py-1">
-        {/* Status dot - only show for completed/error */}
-        <div className="flex items-center justify-center w-4 h-4 mt-0.5">
-          {toolStatus === 'complete' && (
-            <div className="w-1.5 h-1.5 rounded-full bg-green-600" />
-          )}
-          {toolStatus === 'error' && (
-            <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-          )}
-        </div>
-
-        {/* Action text */}
-        <div className="flex-1 min-w-0">
-          <p className={cn(
-            "text-sm break-words",
-            toolStatus === 'complete' && "text-muted-foreground",
-            toolStatus === 'error' && "text-red-600 dark:text-red-400"
-          )}>
-            {displayText}
-          </p>
-        </div>
-      </div>
-    );
-  };
+  const currentRunning = runningCalls[0];
+  const totalSteps = toolCalls.length;
 
   return (
-    <div className="my-3 space-y-0.5">
-      {/* Show all completed tool calls */}
-      {completedCalls.map((tool, idx) => renderToolItem(tool, idx))}
-
-      {/* Single spinner at bottom showing current running task with shimmer effect */}
-      {currentRunning && (
-        <div className="flex items-start gap-2 py-1.5 rounded-md bg-blue-50/50 dark:bg-blue-950/20 px-2 -mx-2 border-l-2 border-blue-500">
-          <div className="flex items-center justify-center w-4 h-4 mt-0.5">
-            <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm break-words text-blue-700 dark:text-blue-300 font-medium">
-              {(() => {
-                const { action, target } = formatToolDisplay(currentRunning);
-                if (target) {
-                  if (action === 'Ran command') {
-                    return `${action}: ${target}`;
-                  }
-                  return `${action} ${target}`;
-                }
-                return action;
-              })()}
-            </p>
-          </div>
+    <div className="my-2">
+      {/* Collapsible completed tools */}
+      {completedCalls.length > 0 && (
+        <div className="rounded-lg border border-border/40 bg-muted/20 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/40 transition-colors"
+          >
+            {isOpen
+              ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
+              : <ChevronRight className="w-3 h-3 text-muted-foreground" />
+            }
+            <span className="text-xs text-muted-foreground">
+              {currentRunning
+                ? `Used ${completedCalls.length} of ${totalSteps} tools`
+                : `Used ${completedCalls.length} tool${completedCalls.length !== 1 ? 's' : ''}`
+              }
+            </span>
+            {!currentRunning && completedCalls.every(t => t.status === 'complete') && (
+              <Check className="w-3 h-3 text-emerald-500 ml-auto" />
+            )}
+          </button>
+          <AnimatePresence>
+            {isOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.12 }}
+                className="overflow-hidden"
+              >
+                <div className="px-3 pb-2 space-y-0.5 max-h-[200px] overflow-y-auto">
+                  {completedCalls.map((tool, idx) => (
+                    <ToolLine key={`${tool.tool}-${idx}`} tool={tool} idx={idx} />
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 
-      {/* Reasoning step if present */}
+      {/* Current running tool - single inline indicator */}
+      {currentRunning && (
+        <div className="flex items-center gap-2 mt-1.5 px-1">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {(() => {
+              const { action, target } = formatToolDisplay(currentRunning);
+              return target ? `${action} ${target}` : action;
+            })()}
+          </span>
+        </div>
+      )}
+
+      {/* Reasoning */}
       {reasoning && !currentRunning && (
         <CollapsibleSection
-          title="Thinking"
+          title="Reasoning"
           icon={<Brain className="w-3.5 h-3.5" />}
           variant="thinking"
           defaultOpen={false}
         >
-          <div className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap italic">
+          <div className="text-muted-foreground text-xs leading-relaxed whitespace-pre-wrap italic">
             {reasoning}
           </div>
         </CollapsibleSection>
       )}
 
-      {/* Generic processing indicator when generating response (no running tools) */}
+      {/* Generating response - subtle indicator */}
       {isStreaming && !currentRunning && status === 'streaming' && (
-        <div className="flex items-start gap-2 py-1.5 rounded-md bg-green-50/50 dark:bg-green-950/20 px-2 -mx-2 border-l-2 border-green-500">
-          <div className="flex items-center justify-center w-4 h-4 mt-0.5">
-            <Loader2 className="w-3.5 h-3.5 text-green-600 animate-spin" />
-          </div>
-          <p className="text-sm text-green-700 dark:text-green-300 font-medium">Generating response...</p>
+        <div className="flex items-center gap-2 mt-1.5 px-1">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+          </span>
+          <span className="text-xs text-muted-foreground">Writing response...</span>
         </div>
       )}
     </div>
@@ -420,47 +420,35 @@ export function ChatPanel({
                     />
                   )}
 
-                  {/* Status indicators for AI messages when no tool calls (thinking/streaming only) */}
+                  {/* Status indicators for AI messages when no tool calls */}
                   {isAI && msg.status && msg.status !== 'complete' && !msg.toolCalls?.length && (
-                    <div className="mb-3 rounded-lg border border-border/50 bg-muted/30 p-3">
+                    <div className="flex items-center gap-2 my-2 px-1">
                       {msg.status === 'thinking' && (
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-                            <Brain className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-pulse" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-medium text-blue-600 dark:text-blue-400">Thinking...</div>
-                            <div className="text-xs text-muted-foreground">Analyzing your request</div>
-                          </div>
-                        </div>
+                        <>
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500" />
+                          </span>
+                          <span className="text-xs text-muted-foreground">Thinking...</span>
+                        </>
                       )}
                       {msg.status === 'using_tool' && msg.toolName && (
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
-                            <Loader2 className="w-4 h-4 text-purple-600 dark:text-purple-400 animate-spin" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                              Using {formatToolName(msg.toolName)}
-                            </div>
-                            <div className="text-xs text-muted-foreground">Executing tool operation</div>
-                          </div>
-                        </div>
+                        <>
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                          </span>
+                          <span className="text-xs text-muted-foreground">Using {formatToolName(msg.toolName)}</span>
+                        </>
                       )}
                       {msg.status === 'streaming' && (
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                            <div className="flex gap-0.5">
-                              <span className="w-1 h-1 bg-green-600 rounded-full animate-bounce [animation-delay:0ms]" />
-                              <span className="w-1 h-1 bg-green-600 rounded-full animate-bounce [animation-delay:150ms]" />
-                              <span className="w-1 h-1 bg-green-600 rounded-full animate-bounce [animation-delay:300ms]" />
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-sm font-medium text-green-600 dark:text-green-400">Generating response</div>
-                            <div className="text-xs text-muted-foreground">Writing output</div>
-                          </div>
-                        </div>
+                        <>
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                          </span>
+                          <span className="text-xs text-muted-foreground">Writing response...</span>
+                        </>
                       )}
                     </div>
                   )}
@@ -525,7 +513,7 @@ export function ChatPanel({
             </Button>
           </form>
           <p className="text-xs text-muted-foreground mt-2 text-center">
-            {isStreaming ? "⏳ Agent is working on your request..." : "Press Enter to send, Shift+Enter for new line"}
+            {isStreaming ? "Agent is working on your request..." : "Press Enter to send, Shift+Enter for new line"}
           </p>
         </div>
       )}
