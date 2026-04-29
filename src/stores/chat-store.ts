@@ -257,18 +257,3 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return { ...state, ...patch };
   }),
 }));
-
-// ─── Selectors (for render optimization) ────────────────────────────────────
-
-export const useFileTree = () => useChatStore((s) => s.fileTree);
-export const useSelectedFile = () => useChatStore((s) => s.selectedFile);
-export const useOpenFiles = () => useChatStore((s) => s.openFiles);
-export const useMessages = () => useChatStore((s) => s.messages);
-export const useIsStreaming = () => useChatStore((s) => s.isStreaming);
-export const useActiveTab = () => useChatStore((s) => s.activeTab);
-export const useSandbox = () => useChatStore((s) => ({
-  sandboxId: s.sandboxId,
-  sandboxUrl: s.sandboxUrl,
-  sandboxCreatedAt: s.sandboxCreatedAt,
-  isSandboxExpired: s.isSandboxExpired,
-}));

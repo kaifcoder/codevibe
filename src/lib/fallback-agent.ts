@@ -264,7 +264,7 @@ export class FallbackAgent {
       }
 
       // Process the streaming response with conversation history
-      for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages, true, sessionId, sbxUrl)) {
+      for await (const chunk of streamNextJsAgent(prompt, sbxId, previousMessages, sessionId, sbxUrl)) {
         switch (chunk.type) {
           case 'partial': {
             fullResponse += chunk.content;
