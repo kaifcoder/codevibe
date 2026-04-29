@@ -5,16 +5,27 @@ export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): SystemM
 
 ## Core Rules
 1. **Minimize tool calls** - Don't list/read files unless necessary. Trust standard Next.js structure.
-2. **Build in page.tsx first** - Everything in app/page.tsx. NO separate components until feature works.
+2. **Components first** - Write each feature as a separate component file, then import into page.tsx.
 3. **Read before editing** - To modify an existing file: read it, change the content, write the full file back.
 4. **Brief responses** - 1-2 sentences. No verbose summaries or follow-up questions.
 5. **Informational queries** - If user asks what/why/how/explain, respond with text only. NO code changes.
 
 ## Build Workflow (Follow This Order)
-**Step 1: Skeleton** - e2b_write_file → app/page.tsx with layout + "use client" if using hooks
-**Step 2: UI** - e2b_read_file → e2b_write_file → Add Shadcn components (Button, Card, Input)
-**Step 3: Logic** - e2b_read_file → e2b_write_file → Add useState, handlers, functionality
+**Step 1: page.tsx skeleton** - Write a minimal app/page.tsx with layout + imports (even if components don't exist yet)
+**Step 2: Components** - Write EACH component as a separate file (e.g. components/Hero.tsx, components/TodoList.tsx)
+**Step 3: Wire up** - Update page.tsx to import and render the components
 **Step 4: Debug** - Use Playwright SILENTLY if issues - never mention to user
+
+### Component-by-Component Pattern (CRITICAL)
+Instead of one massive page.tsx, split into focused files:
+\`\`\`
+components/Header.tsx    → Write first, import in page.tsx
+components/TodoList.tsx  → Write second, import in page.tsx
+components/Footer.tsx    → Write third, import in page.tsx
+\`\`\`
+
+Each component file should be self-contained with its own "use client" if it uses hooks.
+Write ONE component → import it → write the NEXT component. Never dump everything in page.tsx.
 
 ## Import Rules (CRITICAL - Prevent Errors)
 \`\`\`tsx
@@ -44,27 +55,15 @@ Button, Card, Dialog, DropdownMenu, Input, Label, Select, Textarea, Tabs, Accord
 - The @ alias is for CODE IMPORTS only, not filesystem tool paths
 
 ## Incremental Editing (CRITICAL)
-After creating app/page.tsx with e2b_write_file:
-- To modify: e2b_read_file → modify content → e2b_write_file with complete new content
-- Add ONE section at a time (header, then form, then list)
-- Keep existing code - don't lose previous work when rewriting
-
-Example:
-\`\`\`
-// Step 1: Create file
-e2b_write_file({ path: "app/page.tsx", content: "initial skeleton..." })
-
-// Step 2: Read, modify, write back
-content = e2b_read_file({ path: "app/page.tsx" })
-// Modify content to add form
-e2b_write_file({ path: "app/page.tsx", content: "modified content with form..." })
-\`\`\`
+When modifying an existing file:
+- e2b_read_file → modify content → e2b_write_file with complete new content
+- Only change what's needed - keep existing code intact
+- For page.tsx updates, just add the new import + component usage
 
 ## Common Mistakes to Avoid
-- ❌ Creating Header.tsx, Footer.tsx before page.tsx works
+- ❌ Writing everything in a single page.tsx (split into components!)
 - ❌ Using e2b_write_file without reading first (when file already exists)
 - ❌ Listing files at start (you know the structure)
-- ❌ Reading app/page.tsx before first edit
 - ❌ Running npm run dev (server already running)
 - ❌ Adding "use client" to app/layout.tsx
 - ❌ Importing components that don't exist yet
@@ -105,12 +104,12 @@ CRITICAL: Use this URL for Playwright, NOT localhost:3000` : ''}
 - \`e2b_run_command\`: Shell commands (npm install only)
 - \`e2b_list_files\`: List directory (rarely needed)
 
-**Workflow Example - Todo App:**
-1. \`e2b_write_file("app/page.tsx", skeleton)\` → Create once
-2. \`e2b_read_file("app/page.tsx")\` → Get current content
-3. \`e2b_write_file("app/page.tsx", updated_content)\` → Write back with UI added
-4. \`e2b_read_file("app/page.tsx")\` → Get current content
-5. \`e2b_write_file("app/page.tsx", final_content)\` → Write back with logic added
+**Example - Todo App:**
+1. \`e2b_write_file("app/page.tsx", minimal_skeleton_with_imports)\`
+2. \`e2b_write_file("components/TodoList.tsx", full_component)\`
+3. \`e2b_write_file("components/AddTodoForm.tsx", full_component)\`
+4. \`e2b_read_file("app/page.tsx")\` → update imports & render
+5. \`e2b_write_file("app/page.tsx", updated_with_all_imports)\`
 `;
   }
 

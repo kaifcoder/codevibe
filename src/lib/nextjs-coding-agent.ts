@@ -2,11 +2,12 @@
 import { MemorySaver } from '@langchain/langgraph';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { AzureOpenAiChatClient } from '@sap-ai-sdk/langchain';
-import { HumanMessage, SystemMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
+import { HumanMessage, SystemMessage, AIMessage, ToolMessage, trimMessages } from '@langchain/core/messages';
 import { makeE2BTools } from './e2b-tools';
 import { createSystemPrompt } from './nextjs-agent-prompt';
 import { createPlaywrightMCPTools, createNextJsDocsMCPTools } from './mcp-client';
 import { memoryTools } from './agent-memory';
+import { globalEventEmitter } from './event-emitter';
 
 // ─── Model ───────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,6 @@ async function initializeMCPTools() {
 
 // ─── Agent Factory ───────────────────────────────────────────────────────────
 
-// Cache for the no-sandbox agent (tools are stable)
 let textAgentCache: any = null;
 
 function buildTools(sbxId?: string, sessionId?: string): any[] {
@@ -59,26 +59,31 @@ function buildTools(sbxId?: string, sessionId?: string): any[] {
   return tools;
 }
 
-async function createAgentWorkflow(sbxId?: string, sessionId?: string) {
+async function createAgentWorkflow(sbxId?: string, sessionId?: string, sandboxUrl?: string) {
   await initializeMCPTools();
 
-  // Sandbox agents must be rebuilt (E2B tools capture sessionId in closures)
+  const prompt = (state: any) => {
+    const systemMsg = createSystemPrompt(sbxId, sandboxUrl);
+    return [systemMsg, ...state.messages];
+  };
+
   if (sbxId) {
     const tools = buildTools(sbxId, sessionId);
     return createReactAgent({
       llm: model,
       tools,
+      prompt,
       checkpointer: new MemorySaver(),
     });
   }
 
-  // Text-only agent is cached
   if (textAgentCache) return textAgentCache;
 
   const tools = buildTools();
   textAgentCache = createReactAgent({
     llm: model,
     tools,
+    prompt,
     checkpointer: new MemorySaver(),
   });
   return textAgentCache;
@@ -94,84 +99,154 @@ type StreamResponse = {
   tool_call_output?: any;
 };
 
-// ─── Message Compaction ──────────────────────────────────────────────────────
+// ─── Token Counter ──────────────────────────────────────────────────────────
 
-function compactPrevMessages(prevMessages: MessageArray = []): MessageArray {
-  const maxMessages = 10;
-  const maxContentLen = 1500;
-  if (!prevMessages.length) return prevMessages;
-
-  const normalized = prevMessages.map((m) => {
-    const anyMsg = m as any;
-    if (typeof anyMsg.content === 'string' && anyMsg.content.length > maxContentLen) {
-      anyMsg.content = anyMsg.content.slice(0, maxContentLen) + '...';
-    }
-    return m;
-  });
-
-  if (normalized.length <= maxMessages) return normalized;
-
-  const older = normalized.slice(0, normalized.length - maxMessages);
-  const recent = normalized.slice(-maxMessages);
-
-  const summaryParts = older
-    .filter((m) => m instanceof HumanMessage || m instanceof AIMessage)
-    .map((m) => {
-      const role = m instanceof HumanMessage ? 'User' : 'AI';
-      const anyMsg = m as any;
-      const text = typeof anyMsg.content === 'string' ? anyMsg.content : '';
-      return `- ${role}: ${text.slice(0, 200).replaceAll(/\s+/g, ' ').trim()}`;
-    });
-
-  return [new SystemMessage(`Context (${older.length} prior messages):\n${summaryParts.join('\n')}`), ...recent];
+function estimateTokens(messages: any[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    const content = typeof msg.content === 'string'
+      ? msg.content
+      : JSON.stringify(msg.content || '');
+    total += Math.ceil(content.length / 4);
+  }
+  return total;
 }
 
-// ─── Stream Processing ───────────────────────────────────────────────────────
+// ─── File Content Streamer ──────────────────────────────────────────────────
 
-async function* processStreamChunk(chunk: any, toolCallArgsMap: Map<string, any>): AsyncGenerator<StreamResponse, void, unknown> {
-  // createReactAgent streams as { agent: { messages }, tools: { messages } }
-  const nodeNames = Object.keys(chunk);
+class FileContentStreamer {
+  private activeToolCalls = new Map<string, { toolName: string; argsBuffer: string; filePath: string | null; contentStartIdx: number; lastEmittedIdx: number }>();
+  private sessionId: string | undefined;
 
-  for (const nodeName of nodeNames) {
-    const nodeData = chunk[nodeName];
-    if (!nodeData?.messages) continue;
+  constructor(sessionId?: string) {
+    this.sessionId = sessionId;
+  }
 
-    const messages = Array.isArray(nodeData.messages) ? nodeData.messages : [nodeData.messages];
+  handleToolCallChunk(chunk: { id?: string; name?: string; args?: string; index?: number }) {
+    const id = chunk.id || chunk.index?.toString() || 'default';
 
-    for (const msg of messages) {
-      if (msg instanceof ToolMessage) {
-        const toolName = msg.name || 'unknown_tool';
-        const toolContent = typeof msg.content === 'string'
-          ? msg.content.slice(0, 200)
-          : JSON.stringify(msg.content).slice(0, 200);
+    if (chunk.name) {
+      this.activeToolCalls.set(id, {
+        toolName: chunk.name,
+        argsBuffer: chunk.args || '',
+        filePath: null,
+        contentStartIdx: -1,
+        lastEmittedIdx: -1,
+      });
+      return;
+    }
 
-        const toolCallId = msg.tool_call_id || toolName;
-        const originalArgs = toolCallArgsMap.get(toolCallId);
+    const state = this.activeToolCalls.get(id);
+    if (!state || state.toolName !== 'e2b_write_file') return;
+    if (!chunk.args) return;
 
-        yield {
-          content: toolName,
-          type: 'tool_call',
-          tool_call_output: { tool: toolName, args: originalArgs, result: toolContent, status: 'complete' }
-        };
-        toolCallArgsMap.delete(toolCallId);
-      } else if (msg instanceof AIMessage) {
-        const content = typeof msg.content === 'string' ? msg.content : '';
+    state.argsBuffer += chunk.args;
+    this.tryStreamContent(id, state);
+  }
 
-        if (msg.tool_calls && msg.tool_calls.length > 0) {
-          for (const toolCall of msg.tool_calls) {
-            const toolCallId = toolCall.id || toolCall.name;
-            toolCallArgsMap.set(toolCallId, toolCall.args);
-            yield {
-              content: `Using tool: ${toolCall.name}`,
-              tool_call_output: { tool: toolCall.name, args: toolCall.args, status: 'running' },
-              type: 'tool_call'
-            };
-          }
-        } else if (content.trim()) {
-          yield { content, type: 'partial' };
-        }
+  private tryStreamContent(id: string, state: { argsBuffer: string; filePath: string | null; contentStartIdx: number; lastEmittedIdx: number }) {
+    if (!this.sessionId) return;
+
+    // Extract path if we haven't yet
+    if (!state.filePath) {
+      const pathMatch = state.argsBuffer.match(/"path"\s*:\s*"([^"]+)"/);
+      if (pathMatch) {
+        state.filePath = pathMatch[1];
+        globalEventEmitter.emit('agent:codePatch', {
+          sessionId: this.sessionId,
+          filePath: state.filePath,
+          action: 'streaming_start',
+        });
       }
     }
+
+    if (!state.filePath) return;
+
+    // Find where content value starts
+    if (state.contentStartIdx === -1) {
+      const contentKeyMatch = state.argsBuffer.match(/"content"\s*:\s*"/);
+      if (contentKeyMatch && contentKeyMatch.index !== undefined) {
+        state.contentStartIdx = contentKeyMatch.index + contentKeyMatch[0].length;
+        state.lastEmittedIdx = state.contentStartIdx;
+      }
+    }
+
+    if (state.contentStartIdx === -1) return;
+
+    // Extract new content since last emission (decode JSON escape sequences)
+    const rawSlice = state.argsBuffer.slice(state.lastEmittedIdx);
+    if (rawSlice.length < 80) return; // batch small chunks for fewer renders
+
+    // Find a safe boundary (avoid cutting in middle of escape sequence)
+    let safeEnd = rawSlice.length;
+    for (let i = rawSlice.length - 1; i >= Math.max(0, rawSlice.length - 6); i--) {
+      if (rawSlice[i] === '\\') {
+        safeEnd = i;
+        break;
+      }
+    }
+    if (safeEnd === 0) return;
+
+    const chunk = rawSlice.slice(0, safeEnd);
+    const decoded = decodeJsonString(chunk);
+
+    if (decoded) {
+      state.lastEmittedIdx += safeEnd;
+      globalEventEmitter.emit('agent:codePatch', {
+        sessionId: this.sessionId,
+        filePath: state.filePath,
+        content: decoded,
+        action: 'streaming_chunk',
+      });
+    }
+  }
+
+  // Flush remaining content and mark complete
+  flush(id?: string) {
+    if (!this.sessionId) return;
+
+    for (const [callId, state] of this.activeToolCalls) {
+      if (id && callId !== id) continue;
+      if (state.toolName !== 'e2b_write_file' || !state.filePath) continue;
+
+      // Emit any remaining buffered content
+      if (state.contentStartIdx !== -1 && state.lastEmittedIdx < state.argsBuffer.length) {
+        let remaining = state.argsBuffer.slice(state.lastEmittedIdx);
+        // Strip trailing `"}` or `"}\n` from end of JSON
+        remaining = remaining.replace(/"\s*\}\s*$/, '');
+        const decoded = decodeJsonString(remaining);
+        if (decoded) {
+          globalEventEmitter.emit('agent:codePatch', {
+            sessionId: this.sessionId,
+            filePath: state.filePath,
+            content: decoded,
+            action: 'streaming_chunk',
+          });
+        }
+      }
+
+      globalEventEmitter.emit('agent:codePatch', {
+        sessionId: this.sessionId,
+        filePath: state.filePath,
+        action: 'streaming_end',
+      });
+    }
+
+    if (id) this.activeToolCalls.delete(id);
+    else this.activeToolCalls.clear();
+  }
+}
+
+function decodeJsonString(raw: string): string | null {
+  try {
+    return JSON.parse(`"${raw}"`);
+  } catch {
+    // Fallback: basic unescape for partial strings
+    return raw
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
   }
 }
 
@@ -190,23 +265,77 @@ export async function* streamNextJsAgent(
   }
 
   try {
-    const app = await createAgentWorkflow(sbxId, sessionId);
+    const app = await createAgentWorkflow(sbxId, sessionId, sandboxUrl);
     const config = {
       configurable: { thread_id: sbxId ? `session-${sbxId}` : 'text-session' },
       recursionLimit: 40,
+      streamMode: ['messages', 'custom'] as const,
     };
 
-    const systemPrompt = createSystemPrompt(sbxId, sandboxUrl);
-    const compactedPrev = compactPrevMessages(prevMessages);
-    const messages = [systemPrompt, ...compactedPrev, new HumanMessage(userPrompt)];
+    const trimmed = await trimMessages(prevMessages, {
+      maxTokens: 12000,
+      tokenCounter: estimateTokens,
+      strategy: 'last',
+      startOn: 'human',
+      includeSystem: true,
+    });
 
-    const toolCallArgsMap = new Map<string, any>();
+    const messages = [...trimmed, new HumanMessage(userPrompt)];
     const stream = await app.stream({ messages }, config);
+    const fileStreamer = new FileContentStreamer(sessionId);
 
     for await (const chunk of stream) {
-      yield* processStreamChunk(chunk, toolCallArgsMap);
+      const [mode, data] = chunk as [string, any];
+
+      if (mode === 'messages') {
+        const [messageChunk, metadata] = data;
+
+        // Stream AI text tokens
+        if (
+          messageChunk.content &&
+          typeof messageChunk.content === 'string' &&
+          metadata?.langgraph_node === 'agent'
+        ) {
+          yield { content: messageChunk.content, type: 'partial' };
+        }
+
+        // Process tool call chunks for progressive file streaming
+        if (messageChunk.tool_call_chunks?.length > 0) {
+          for (const toolChunk of messageChunk.tool_call_chunks) {
+            fileStreamer.handleToolCallChunk(toolChunk);
+
+            if (toolChunk.name) {
+              yield {
+                content: `Using tool: ${toolChunk.name}`,
+                type: 'tool_call',
+                tool_call_output: { tool: toolChunk.name, status: 'running' }
+              };
+            }
+          }
+        }
+
+        // When tool node emits a ToolMessage, flush the file streamer
+        if (metadata?.langgraph_node === 'tools' && messageChunk.name === 'e2b_write_file') {
+          fileStreamer.flush();
+        }
+      } else if (mode === 'custom') {
+        if (data?.type === 'tool_progress') {
+          yield {
+            content: data.tool,
+            type: 'tool_call',
+            tool_call_output: { tool: data.tool, args: data.args, result: data.message, status: data.status || 'running' }
+          };
+        } else if (data?.type === 'tool_result') {
+          yield {
+            content: data.tool,
+            type: 'tool_call',
+            tool_call_output: { tool: data.tool, args: data.args, result: data.result, status: 'complete' }
+          };
+        }
+      }
     }
 
+    fileStreamer.flush();
     yield { content: '', type: 'complete' };
   } catch (error) {
     console.error('[Agent] stream error:', error);
@@ -217,5 +346,3 @@ export async function* streamNextJsAgent(
     }
   }
 }
-
-

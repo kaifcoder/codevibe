@@ -44,6 +44,7 @@ export function MobileChatLayout({
   const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
   const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
   const getFileContent = useChatStore(s => s.getFileContent);
+  const streamingFiles = useChatStore(s => s.streamingFiles);
 
   return (
     <div className="h-full flex flex-col">
@@ -132,13 +133,21 @@ export function MobileChatLayout({
                     );
                   })}
                 </div>
-                <div className="flex-1 min-h-0 overflow-hidden">
+                <div className="flex-1 min-h-0 overflow-hidden relative">
+                  {streamingFiles.includes(selectedFile) && (
+                    <div className="absolute inset-0 z-10 pointer-events-none">
+                      <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-background/90 border rounded-md px-2 py-1 z-20">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-[10px] text-muted-foreground font-medium">Writing...</span>
+                      </div>
+                    </div>
+                  )}
                   <CodeEditor
                     key={`${sessionId}-${selectedFile}`}
                     value={getFileContent(selectedFile)}
                     onChange={handleCodeChange}
                     language="typescript"
-                    autoScroll={false}
+                    autoScroll={streamingFiles.includes(selectedFile)}
                     collaborative={true}
                     roomId={`${sessionId}-${selectedFile}`}
                     username={guestCredentials?.username || 'User'}

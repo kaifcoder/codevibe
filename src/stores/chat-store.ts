@@ -73,6 +73,11 @@ interface ChatStore {
   iframeLoading: boolean;
   setIframeLoading: (v: boolean) => void;
 
+  // File streaming (progressive write)
+  streamingFiles: string[];
+  addStreamingFile: (path: string) => void;
+  removeStreamingFile: (path: string) => void;
+
   // Collaboration
   connectionStatus: ConnectionStatus;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -225,6 +230,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setIsSyncingFilesystem: (v) => set({ isSyncingFilesystem: v }),
   iframeLoading: true,
   setIframeLoading: (v) => set({ iframeLoading: v }),
+
+  // File streaming
+  streamingFiles: [],
+  addStreamingFile: (path) => set((state) => ({
+    streamingFiles: state.streamingFiles.includes(path) ? state.streamingFiles : [...state.streamingFiles, path]
+  })),
+  removeStreamingFile: (path) => set((state) => ({
+    streamingFiles: state.streamingFiles.filter(f => f !== path)
+  })),
 
   // Collaboration
   connectionStatus: 'disconnected',
