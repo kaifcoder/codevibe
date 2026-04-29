@@ -19,6 +19,57 @@ import { PreviewShimmer } from "@/components/ui/shimmer";
 import { useChatStore } from "@/stores/chat-store";
 import type { FileNode } from "@/stores/chat-store";
 
+// ─── File tree helpers ───────────────────────────────────────────────────────
+
+function findFileInTree(nodes: FileNode[], path: string): boolean {
+  for (const node of nodes) {
+    if (node.type === 'file' && node.path === path) return true;
+    if (node.type === 'folder' && node.children && findFileInTree(node.children, path)) return true;
+  }
+  return false;
+}
+
+function updateFileInTree(nodes: FileNode[], path: string, updater: (existing: string | undefined) => string): FileNode[] {
+  return nodes.map(node => {
+    if (node.type === 'file' && node.path === path) {
+      return { ...node, content: updater(node.content) };
+    }
+    if (node.type === 'folder' && node.children) {
+      return { ...node, children: updateFileInTree(node.children, path, updater) };
+    }
+    return node;
+  });
+}
+
+function addFileToTree(nodes: FileNode[], filePath: string, content: string): FileNode[] {
+  const segments = filePath.split('/');
+  if (segments.length === 1) {
+    return [...nodes, { name: segments[0], path: filePath, type: 'file' as const, content }];
+  }
+
+  const folderName = segments[0];
+  const remainingPath = segments.slice(1).join('/');
+  const existing = nodes.find(n => n.type === 'folder' && n.name === folderName);
+
+  if (existing && existing.children) {
+    return nodes.map(n => {
+      if (n === existing) {
+        return { ...n, children: addFileToTree(n.children!, remainingPath, content) };
+      }
+      return n;
+    });
+  }
+
+  // Create folder and nest file inside it
+  const newFolder: FileNode = {
+    name: folderName,
+    path: segments.slice(0, -1).join('/'),
+    type: 'folder',
+    children: addFileToTree([], remainingPath, content),
+  };
+  return [...nodes, newFolder];
+}
+
 // Sandbox expiration constant (outside component to avoid re-creation each render)
 const SANDBOX_EXPIRY_MS = 25 * 60 * 1000; // 25 minutes
 
@@ -448,11 +499,49 @@ function Page({ params }: PageProps) {
           const content = patchData?.content;
           const action = patchData?.action;
 
-          console.log('[Agent] code_patch event:', { action, filePath, hasContent: content !== undefined, contentLength: content?.length, hasSandboxId: !!useChatStore.getState().sandboxId });
-
           if (filePath) {
-            if (action === 'start') {
-              console.log('[Agent] Started editing file:', filePath);
+            if (action === 'streaming_start') {
+              // File is about to be written — open tab, show shimmer
+              ifMounted(() => {
+                useChatStore.getState().addStreamingFile(filePath);
+                useChatStore.getState().setSelectedFile(filePath);
+                const currentOpen = useChatStore.getState().openFiles;
+                if (!currentOpen.includes(filePath)) {
+                  useChatStore.getState().setOpenFiles([...currentOpen, filePath]);
+                }
+                // Initialize empty file in tree
+                useChatStore.getState().setFileTree(prev => {
+                  const exists = findFileInTree(prev, filePath);
+                  if (!exists) {
+                    return addFileToTree(prev, filePath, '');
+                  }
+                  return prev;
+                });
+              });
+            } else if (action === 'streaming_chunk' && content !== undefined) {
+              // Progressive content — append to file
+              ifMounted(() => {
+                useChatStore.getState().setFileTree(prev => {
+                  return updateFileInTree(prev, filePath, (existing) => (existing || '') + content);
+                });
+              });
+            } else if (action === 'streaming_end') {
+              // Streaming done — remove shimmer, sync to Yjs
+              ifMounted(() => {
+                useChatStore.getState().removeStreamingFile(filePath);
+                const finalContent = useChatStore.getState().getFileContent(filePath);
+                if (finalContent) {
+                  lastSavedContentRef.current[filePath] = finalContent;
+                  import('@/lib/collaboration').then(({ updateYjsDocument }) => {
+                    const roomId = `${sess}-${filePath}`;
+                    updateYjsDocument(roomId, finalContent).catch((err: Error) => {
+                      console.error('[Agent] Failed to update Yjs:', err);
+                    });
+                  });
+                }
+              });
+            } else if (action === 'start') {
+              // Legacy: tool execution start (e2b_write_file just began)
               ifMounted(() => {
                 useChatStore.getState().setSelectedFile(filePath);
                 const currentOpen = useChatStore.getState().openFiles;
@@ -461,45 +550,23 @@ function Page({ params }: PageProps) {
                 }
               });
             } else if (action === 'complete') {
-              console.log('[Agent] Completed editing file:', filePath);
+              // Legacy: tool execution done
+              ifMounted(() => {
+                useChatStore.getState().removeStreamingFile(filePath);
+              });
             } else if (action === 'patch' && content !== undefined) {
-              console.log('[Agent] Applying code patch to:', filePath, 'content length:', content.length);
-              // Mark as saved to prevent duplicate E2B write from handleCodeChange
+              // Legacy: full content from tool (fallback if streaming didn't happen)
               lastSavedContentRef.current[filePath] = content;
               ifMounted(() => {
-                // Update file tree - add file if it doesn't exist
+                useChatStore.getState().removeStreamingFile(filePath);
                 useChatStore.getState().setFileTree(prev => {
-                  let fileExists = false;
-
-                  function updateFile(nodes: FileNode[]): FileNode[] {
-                    return nodes.map(node => {
-                      if (node.type === 'file' && node.path === filePath) {
-                        fileExists = true;
-                        return { ...node, content };
-                      }
-                      if (node.type === 'folder' && node.children) {
-                        return { ...node, children: updateFile(node.children) };
-                      }
-                      return node;
-                    });
+                  const exists = findFileInTree(prev, filePath);
+                  if (!exists) {
+                    return addFileToTree(prev, filePath, content);
                   }
-
-                  const updated = updateFile(prev);
-
-                  if (!fileExists) {
-                    console.log('[Agent] File not in tree, adding:', filePath);
-                    return [...updated, {
-                      name: filePath.split('/').pop() || filePath,
-                      path: filePath,
-                      type: 'file' as const,
-                      content
-                    }];
-                  }
-
-                  return updated;
+                  return updateFileInTree(prev, filePath, () => content);
                 });
 
-                // Update Yjs so Monaco reflects the change (agent already wrote to E2B)
                 import('@/lib/collaboration').then(({ updateYjsDocument }) => {
                   const roomId = `${sess}-${filePath}`;
                   updateYjsDocument(roomId, content).catch((err: Error) => {

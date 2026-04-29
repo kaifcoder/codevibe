@@ -52,6 +52,7 @@ export function DesktopChatLayout({
   const connectionStatus = useChatStore(s => s.connectionStatus);
   const connectedUsers = useChatStore(s => s.connectedUsers);
   const isSyncingToE2B = useChatStore(s => s.isSyncingToE2B);
+  const streamingFiles = useChatStore(s => s.streamingFiles);
   const setSelectedFile = useChatStore(s => s.setSelectedFile);
   const setOpenFiles = useChatStore(s => s.setOpenFiles);
   const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
@@ -154,6 +155,7 @@ export function DesktopChatLayout({
                           {openFiles.map((filePath) => {
                             const fileName = filePath.split('/').pop() || filePath;
                             const isActive = filePath === selectedFile;
+                            const isFileStreaming = streamingFiles.includes(filePath);
                             return (
                               <div
                                 key={filePath}
@@ -161,6 +163,9 @@ export function DesktopChatLayout({
                                   isActive ? 'bg-background' : 'bg-muted/20'
                                 }`}
                               >
+                                {isFileStreaming && (
+                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                )}
                                 <button
                                   type="button"
                                   className={`hover:text-foreground transition-colors ${isActive ? 'font-medium' : ''}`}
@@ -231,12 +236,22 @@ export function DesktopChatLayout({
                           )}
                         </div>
                       </div>
+                      <div className="relative flex-1 min-h-0">
+                      {streamingFiles.includes(selectedFile) && (
+                        <div className="absolute inset-0 z-10 pointer-events-none">
+                          <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-background/90 border rounded-md px-2 py-1 z-20">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="text-[10px] text-muted-foreground font-medium">Writing...</span>
+                          </div>
+                          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background/60 to-transparent" />
+                        </div>
+                      )}
                       <CodeEditor
                         key={`${sessionId}-${selectedFile}`}
                         value={getFileContent(selectedFile)}
                         onChange={handleCodeChange}
                         language="typescript"
-                        autoScroll={false}
+                        autoScroll={streamingFiles.includes(selectedFile)}
                         collaborative={true}
                         roomId={`${sessionId}-${selectedFile}`}
                         username={guestCredentials?.username || 'User'}
@@ -244,6 +259,7 @@ export function DesktopChatLayout({
                         onUsersChange={setConnectedUsers}
                         onConnectionStatusChange={setConnectionStatus}
                       />
+                      </div>
                     </>
                   )}
                 </div>

@@ -3,6 +3,7 @@ import { getSandbox } from '@/lib/sandbox-utils';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { globalEventEmitter } from '@/lib/event-emitter';
+import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 
 export function makeE2BTools(sbxId: string, sessionId?: string) {
 
@@ -18,13 +19,16 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
   }
 
   const runCommand = tool(
-    async ({ command }: { command: string }) => {
+    async ({ command }: { command: string }, config: LangGraphRunnableConfig) => {
+      config.writer?.({ type: 'tool_progress', tool: 'e2b_run_command', args: { command }, message: `Running: ${command}`, status: 'running' });
       const sbx = await getSandboxSafe();
       const result = await sbx.commands.run(command);
       if (result.exitCode !== 0) {
         throw new Error(`Exit code ${result.exitCode}: ${result.stderr}`);
       }
-      return result.stdout || '(no output)';
+      const output = result.stdout || '(no output)';
+      config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: output.slice(0, 200) });
+      return output;
     },
     {
       name: 'e2b_run_command',
@@ -34,9 +38,10 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
   );
 
   const writeFile = tool(
-    async ({ path, content }: { path: string; content: string }) => {
+    async ({ path, content }: { path: string; content: string }, config: LangGraphRunnableConfig) => {
       try {
         const sbx = await getSandboxSafe();
+        config.writer?.({ type: 'tool_progress', tool: 'e2b_write_file', args: { path }, message: `Writing ${path}...`, status: 'running' });
         if (sessionId) {
           globalEventEmitter.emit('agent:codePatch', { sessionId, filePath: path, action: 'start' });
         }
@@ -45,7 +50,9 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
           globalEventEmitter.emit('agent:codePatch', { sessionId, filePath: path, content, action: 'patch' });
           globalEventEmitter.emit('agent:codePatch', { sessionId, filePath: path, content, action: 'complete' });
         }
-        return `Wrote ${content.length} chars to ${path}`;
+        const result = `Wrote ${content.length} chars to ${path}`;
+        config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result });
+        return result;
       } catch (error) {
         if (sessionId) {
           globalEventEmitter.emit('agent:codePatch', { sessionId, filePath: path, action: 'complete' });
@@ -64,9 +71,12 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
   );
 
   const readFile = tool(
-    async ({ path }: { path: string }) => {
+    async ({ path }: { path: string }, config: LangGraphRunnableConfig) => {
+      config.writer?.({ type: 'tool_progress', tool: 'e2b_read_file', args: { path }, message: `Reading ${path}...`, status: 'running' });
       const sbx = await getSandboxSafe();
-      return await sbx.files.read(path);
+      const content = await sbx.files.read(path);
+      config.writer?.({ type: 'tool_result', tool: 'e2b_read_file', args: { path }, result: `Read ${content.length} chars` });
+      return content;
     },
     {
       name: 'e2b_read_file',
@@ -78,16 +88,19 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
   );
 
   const listFiles = tool(
-    async ({ path = '.' }: { path?: string }) => {
+    async ({ path = '.' }: { path?: string }, config: LangGraphRunnableConfig) => {
+      config.writer?.({ type: 'tool_progress', tool: 'e2b_list_files', args: { path }, message: `Listing ${path}...`, status: 'running' });
       const sbx = await getSandboxSafe();
       const files = await sbx.files.list(path);
-      return files
+      const result = files
         .sort((a: any, b: any) => {
           if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
           return a.name.localeCompare(b.name);
         })
         .map((f: any) => `${f.isDir ? 'd' : 'f'} ${f.name}`)
         .join('\n') || '(empty)';
+      config.writer?.({ type: 'tool_result', tool: 'e2b_list_files', args: { path }, result: result.slice(0, 200) });
+      return result;
     },
     {
       name: 'e2b_list_files',
@@ -99,9 +112,11 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
   );
 
   const deleteFile = tool(
-    async ({ path }: { path: string }) => {
+    async ({ path }: { path: string }, config: LangGraphRunnableConfig) => {
+      config.writer?.({ type: 'tool_progress', tool: 'e2b_delete_file', args: { path }, message: `Deleting ${path}...`, status: 'running' });
       const sbx = await getSandboxSafe();
       await sbx.files.remove(path);
+      config.writer?.({ type: 'tool_result', tool: 'e2b_delete_file', args: { path }, result: `Deleted ${path}` });
       return `Deleted ${path}`;
     },
     {
@@ -117,7 +132,8 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
     async ({ rootPath = '/home/user', excludePaths }: {
       rootPath?: string;
       excludePaths?: string[];
-    }) => {
+    }, config: LangGraphRunnableConfig) => {
+      config.writer?.({ type: 'tool_progress', tool: 'e2b_list_files_recursive', args: { rootPath }, message: 'Scanning file tree...', status: 'running' });
       const sbx = await getSandboxSafe();
       const defaultExcludes = ['node_modules', '.git', '.next', 'dist', 'build', '.cache', 'components/ui', 'nextjs-app'];
       const excludes = new Set([...defaultExcludes, ...(excludePaths || [])]);
@@ -140,10 +156,17 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
         content?: string;
       }
 
+      let scannedDirs = 0;
+
       async function scan(dirPath: string): Promise<FileInfo[]> {
         try {
           const files = await sbx.files.list(dirPath);
           const result: FileInfo[] = [];
+          scannedDirs++;
+
+          if (scannedDirs % 5 === 0) {
+            config.writer?.({ type: 'tool_progress', tool: 'e2b_list_files_recursive', args: { rootPath }, message: `Scanned ${scannedDirs} directories...`, status: 'running' });
+          }
 
           for (const file of files) {
             if (excludes.has(file.name)) continue;
@@ -190,6 +213,7 @@ export function makeE2BTools(sbxId: string, sessionId?: string) {
         globalEventEmitter.emit('agent:fileTreeSync', { sessionId, fileTree });
       }
 
+      config.writer?.({ type: 'tool_result', tool: 'e2b_list_files_recursive', args: { rootPath }, result: `Scanned ${scannedDirs} directories` });
       return JSON.stringify(fileTree, null, 2);
     },
     {
