@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSandbox } from '@/lib/sandbox-utils';
-import { globalEventEmitter } from '@/lib/event-emitter';
 import type { EntryInfo } from 'e2b';
 
 type FileNode = {
@@ -129,16 +128,10 @@ export async function POST(request: NextRequest) {
 
     const fileTree = await listRecursive('/home/user');
 
-    // Emit file tree sync event
-    if (fileTree.length > 0) {
-      globalEventEmitter.emit('agent:fileTreeSync', {
-        sessionId,
-        fileTree
-      });
-    }
-
-    return NextResponse.json({ 
-      success: true, 
+    // Return the file tree directly — frontend handles the state update
+    return NextResponse.json({
+      success: true,
+      fileTree,
       fileCount: fileTree.length,
       message: 'Filesystem synced successfully'
     });

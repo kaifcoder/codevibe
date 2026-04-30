@@ -40,7 +40,7 @@ export default function HomePage() {
   }, [])
 
   const generateChatId = () => {
-    return `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    return crypto.randomUUID()
   }
 
   const handleStartChat = () => {
@@ -187,7 +187,8 @@ export default function HomePage() {
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="Describe an app or site you want to create..."
-                  className="w-full min-h-[120px] sm:min-h-[140px] px-4 sm:px-5 py-4 sm:py-5 text-base sm:text-lg dark:bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                  className="w-full min-h-[120px] sm:min-h-[140px] max-h-[200px] overflow-y-auto px-4 sm:px-5 py-4 sm:py-5 text-base sm:text-lg dark:bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                  style={{ fieldSizing: 'normal' } as React.CSSProperties}
                   rows={4}
                 />
 

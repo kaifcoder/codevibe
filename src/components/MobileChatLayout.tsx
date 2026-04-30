@@ -3,6 +3,7 @@
 import { Dispatch, SetStateAction } from "react";
 import { MessageSquare, Code, Eye } from "lucide-react";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
+import type { MessageQueue } from "@/components/QueueList";
 import { CodeEditor } from "@/components/CodeEditor";
 import { useChatStore } from "@/stores/chat-store";
 
@@ -20,6 +21,7 @@ export interface MobileChatLayoutProps {
   renderPreview: () => React.ReactNode;
   handleCodeChange: (value: string | undefined) => void;
   guestCredentials: { username: string; userId: string } | null;
+  queue?: MessageQueue;
 }
 
 export function MobileChatLayout({
@@ -34,6 +36,7 @@ export function MobileChatLayout({
   renderPreview,
   handleCodeChange,
   guestCredentials,
+  queue,
 }: Readonly<MobileChatLayoutProps>) {
   // Read file/editor state directly from store
   const openFiles = useChatStore(s => s.openFiles);
@@ -43,7 +46,7 @@ export function MobileChatLayout({
   const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
   const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
   const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
-  const getFileContent = useChatStore(s => s.getFileContent);
+  const selectedFileContent = useChatStore(s => s.getFileContent(s.selectedFile));
   const streamingFiles = useChatStore(s => s.streamingFiles);
 
   return (
@@ -96,6 +99,7 @@ export function MobileChatLayout({
               onSend={handleSend}
               isLoading={isLoading}
               isStreaming={isStreaming}
+              queue={queue}
             />
           </div>
         )}
@@ -144,10 +148,11 @@ export function MobileChatLayout({
                   )}
                   <CodeEditor
                     key={`${sessionId}-${selectedFile}`}
-                    value={getFileContent(selectedFile)}
+                    value={selectedFileContent}
                     onChange={handleCodeChange}
                     language="typescript"
                     autoScroll={streamingFiles.includes(selectedFile)}
+                    isStreaming={streamingFiles.includes(selectedFile)}
                     collaborative={true}
                     roomId={`${sessionId}-${selectedFile}`}
                     username={guestCredentials?.username || 'User'}

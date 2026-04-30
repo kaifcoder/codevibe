@@ -44,3 +44,6 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+/.playwright-mcp/
+# LangGraph API
+.langgraph_api
