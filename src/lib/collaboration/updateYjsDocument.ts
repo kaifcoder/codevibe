@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { getExistingYText } from './initCollaboration';
+import { getExistingYText, waitForYText } from './initCollaboration';
 
 /**
  * Get the WebSocket URL based on current hostname
@@ -20,17 +20,16 @@ function getWebSocketUrl(): string {
 
 /**
  * Update a Yjs document.
- * 
- * If the room already has an active collaboration session (CodeEditor is open),
- * updates the existing Y.Text directly — no new connection needed.
- * 
- * Falls back to a temporary provider for rooms that aren't currently open.
+ *
+ * Priority order:
+ * 1. Reuse an already-synced session (instant)
+ * 2. Wait for an existing provider that hasn't synced yet (editor just mounted)
+ * 3. Fall back to a temporary provider for rooms not open in any editor
  */
 export async function updateYjsDocument(roomId: string, content: string): Promise<void> {
-  // Fast path: reuse existing session
+  // Fast path: reuse existing synced session
   const existingYText = getExistingYText(roomId);
   if (existingYText) {
-    console.log('[updateYjsDocument] Reusing existing session for room:', roomId);
     existingYText.doc!.transact(() => {
       existingYText.delete(0, existingYText.length);
       existingYText.insert(0, content);
@@ -38,8 +37,17 @@ export async function updateYjsDocument(roomId: string, content: string): Promis
     return;
   }
 
+  // Medium path: provider exists but not synced yet (editor just opened this file)
+  const pendingYText = await waitForYText(roomId, 3000);
+  if (pendingYText) {
+    pendingYText.doc!.transact(() => {
+      pendingYText.delete(0, pendingYText.length);
+      pendingYText.insert(0, content);
+    });
+    return;
+  }
+
   // Slow path: create temporary provider for rooms not currently open in editor
-  console.log('[updateYjsDocument] No existing session, creating temporary provider for:', roomId);
   return new Promise((resolve, reject) => {
     const doc = new Y.Doc();
     const yText = doc.getText('monaco');

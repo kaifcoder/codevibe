@@ -8,7 +8,7 @@
 
 export { initCollaboration } from './initCollaboration';
 export type { CollaborationConfig, CollaborationSession } from './initCollaboration';
-export { getExistingYText } from './initCollaboration';
+export { getExistingYText, waitForYText } from './initCollaboration';
 
 export { bindMonaco } from './bindMonaco';
 export type { BindMonacoConfig } from './bindMonaco';

@@ -247,30 +247,19 @@
   }
 }
 
-/* AI change highlight animation - subtle yellow/green fade */
-@keyframes ai-change-fade {
-  0% {
-    background-color: rgba(251, 191, 36, 0.3); /* amber-400 with opacity */
-  }
-  100% {
-    background-color: transparent;
-  }
-}
-
+/* AI change highlight — subtle green gutter bar that fades out */
 .monaco-editor .ai-change-highlight {
-  animation: ai-change-fade 2s ease-out forwards;
+  border-left: 3px solid rgba(34, 197, 94, 0.7);
+  animation: ai-gutter-fade 3s ease-out forwards;
 }
 
-/* Dark mode version */
 .dark .monaco-editor .ai-change-highlight {
-  animation: ai-change-fade-dark 2s ease-out forwards;
+  border-left: 3px solid rgba(74, 222, 128, 0.6);
+  animation: ai-gutter-fade 3s ease-out forwards;
 }
 
-@keyframes ai-change-fade-dark {
-  0% {
-    background-color: rgba(234, 179, 8, 0.2); /* yellow-600 with less opacity for dark mode */
-  }
-  100% {
-    background-color: transparent;
-  }
+@keyframes ai-gutter-fade {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
 }

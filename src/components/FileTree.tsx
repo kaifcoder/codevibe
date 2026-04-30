@@ -100,7 +100,7 @@ export function FileTree({ nodes, selected, onSelect, level = 0, streamingFile }
 
   return (
     <div className="w-full flex flex-col h-full overflow-y-auto text-sm bg-muted/20">
-      {nodes.map((node) => {
+      {nodes.filter((node, idx, arr) => arr.findIndex(n => n.path === node.path) === idx).map((node) => {
         const FileIconComponent = node.type === "file" ? getFileIcon(node.name) : null;
         return (
         <div key={node.path} className="select-none">

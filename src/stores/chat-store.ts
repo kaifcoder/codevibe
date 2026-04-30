@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { ChatMessage } from '@/components/ChatPanel';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -18,28 +19,32 @@ type MobilePanel = 'chat' | 'preview' | 'code';
 // ─── Store Interface ────────────────────────────────────────────────────────
 
 interface ChatStore {
-  // Session
+  // Session (persisted)
   sessionId: string;
   setSessionId: (id: string) => void;
+  threadId: string | null;
+  setThreadId: (id: string | null) => void;
+  runId: string | null;
+  setRunId: (id: string | null) => void;
 
-  // Messages
+  // Messages (managed by useStream — not persisted, hydrated from LangGraph thread)
   messages: ChatMessage[];
   setMessages: (msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   addMessage: (msg: ChatMessage) => void;
 
-  // Input
+  // Input (transient)
   message: string;
   setMessage: (msg: string) => void;
 
-  // Streaming
+  // Streaming (transient)
   isStreaming: boolean;
   setIsStreaming: (v: boolean) => void;
 
-  // File tree
+  // File tree (persisted)
   fileTree: FileNode[];
   setFileTree: (tree: FileNode[] | ((prev: FileNode[]) => FileNode[])) => void;
 
-  // Editor
+  // Editor (persisted)
   selectedFile: string;
   setSelectedFile: (file: string) => void;
   openFiles: string[];
@@ -47,7 +52,7 @@ interface ChatStore {
   openFile: (path: string) => void;
   closeFile: (path: string) => void;
 
-  // Sandbox
+  // Sandbox (persisted)
   sandboxId: string | null;
   setSandboxId: (id: string | null) => void;
   sandboxUrl: string | null;
@@ -57,7 +62,7 @@ interface ChatStore {
   isSandboxExpired: boolean;
   setIsSandboxExpired: (v: boolean) => void;
 
-  // UI panels
+  // UI panels (persisted)
   activeTab: string;
   setActiveTab: (tab: string) => void;
   showSecondPanel: boolean;
@@ -65,7 +70,7 @@ interface ChatStore {
   mobileActivePanel: MobilePanel;
   setMobileActivePanel: (panel: MobilePanel) => void;
 
-  // Sync status
+  // Sync status (transient)
   isSyncingToE2B: boolean;
   setIsSyncingToE2B: (v: boolean) => void;
   isSyncingFilesystem: boolean;
@@ -73,12 +78,12 @@ interface ChatStore {
   iframeLoading: boolean;
   setIframeLoading: (v: boolean) => void;
 
-  // File streaming (progressive write)
+  // File streaming (transient)
   streamingFiles: string[];
   addStreamingFile: (path: string) => void;
   removeStreamingFile: (path: string) => void;
 
-  // Collaboration
+  // Collaboration (transient)
   connectionStatus: ConnectionStatus;
   setConnectionStatus: (status: ConnectionStatus) => void;
   connectedUsers: ConnectedUser[];
@@ -99,6 +104,9 @@ interface ChatStore {
     selectedFile?: string;
     openFiles?: string[];
   }) => void;
+
+  // Reset store to fresh state for a new session
+  reset: (sessionId: string) => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -124,150 +132,176 @@ function updateNodeContent(nodes: FileNode[], path: string, content: string): Fi
   });
 }
 
-// ─── Default file tree ──────────────────────────────────────────────────────
-
-const DEFAULT_FILE_TREE: FileNode[] = [
-  {
-    name: 'app',
-    path: 'app',
-    type: 'folder',
-    children: [
-      { name: 'page.tsx', path: 'app/page.tsx', type: 'file', content: '// Home page code\n' },
-    ],
-  },
-  {
-    name: 'lib',
-    path: 'lib',
-    type: 'folder',
-    children: [
-      { name: 'utils.ts', path: 'lib/utils.ts', type: 'file', content: 'export function sum(a, b) { return a + b; }\n' },
-    ],
-  },
-  {
-    name: 'components',
-    path: 'components',
-    type: 'folder',
-    children: [
-      { name: 'Button.tsx', path: 'components/Button.tsx', type: 'file', content: 'export const Button = () => <button>Click</button>;\n' },
-    ],
-  },
-];
-
 // ─── Store ──────────────────────────────────────────────────────────────────
 
-export const useChatStore = create<ChatStore>((set, get) => ({
-  // Session
-  sessionId: `session-${Date.now()}`,
-  setSessionId: (id) => set({ sessionId: id }),
+export const useChatStore = create<ChatStore>()(
+  persist(
+    (set, get) => ({
+      // Session
+      sessionId: '',
+      setSessionId: (id) => set({ sessionId: id }),
+      threadId: null,
+      setThreadId: (id) => set({ threadId: id }),
+      runId: null,
+      setRunId: (id) => set({ runId: id }),
 
-  // Messages
-  messages: [{
-    role: 'ai',
-    content: "Welcome to CodeVibe! I can help you generate code. Try asking me to 'generate some code' or 'create components' to see live file streaming in action!",
-    timestamp: Date.now(),
-    id: 'welcome',
-  }],
-  setMessages: (msgs) => set((state) => ({
-    messages: typeof msgs === 'function' ? msgs(state.messages) : msgs,
-  })),
-  addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
+      // Messages (not persisted — comes from LangGraph thread on reconnect)
+      messages: [],
+      setMessages: (msgs) => set((state) => ({
+        messages: typeof msgs === 'function' ? msgs(state.messages) : msgs,
+      })),
+      addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
 
-  // Input
-  message: '',
-  setMessage: (msg) => set({ message: msg }),
+      // Input
+      message: '',
+      setMessage: (msg) => set({ message: msg }),
 
-  // Streaming
-  isStreaming: false,
-  setIsStreaming: (v) => set({ isStreaming: v }),
+      // Streaming
+      isStreaming: false,
+      setIsStreaming: (v) => set({ isStreaming: v }),
 
-  // File tree
-  fileTree: DEFAULT_FILE_TREE,
-  setFileTree: (tree) => set((state) => ({
-    fileTree: typeof tree === 'function' ? tree(state.fileTree) : tree,
-  })),
+      // File tree
+      fileTree: [],
+      setFileTree: (tree) => set((state) => ({
+        fileTree: typeof tree === 'function' ? tree(state.fileTree) : tree,
+      })),
 
-  // Editor
-  selectedFile: 'app/page.tsx',
-  setSelectedFile: (file) => set({ selectedFile: file }),
-  openFiles: ['app/page.tsx'],
-  setOpenFiles: (files) => set((state) => ({
-    openFiles: typeof files === 'function' ? files(state.openFiles) : files,
-  })),
-  openFile: (path) => set((state) => {
-    const newOpen = state.openFiles.includes(path) ? state.openFiles : [...state.openFiles, path];
-    return { selectedFile: path, openFiles: newOpen };
-  }),
-  closeFile: (path) => set((state) => {
-    const newOpen = state.openFiles.filter(f => f !== path);
-    const newSelected = path === state.selectedFile
-      ? (newOpen.at(-1) ?? state.selectedFile)
-      : state.selectedFile;
-    return { openFiles: newOpen, selectedFile: newSelected };
-  }),
+      // Editor
+      selectedFile: '',
+      setSelectedFile: (file) => set({ selectedFile: file }),
+      openFiles: [],
+      setOpenFiles: (files) => set((state) => ({
+        openFiles: typeof files === 'function' ? files(state.openFiles) : files,
+      })),
+      openFile: (path) => set((state) => {
+        const newOpen = state.openFiles.includes(path) ? state.openFiles : [...state.openFiles, path];
+        return { selectedFile: path, openFiles: newOpen };
+      }),
+      closeFile: (path) => set((state) => {
+        const newOpen = state.openFiles.filter(f => f !== path);
+        const newSelected = path === state.selectedFile
+          ? (newOpen.at(-1) ?? '')
+          : state.selectedFile;
+        return { openFiles: newOpen, selectedFile: newSelected };
+      }),
 
-  // Sandbox
-  sandboxId: null,
-  setSandboxId: (id) => set({ sandboxId: id }),
-  sandboxUrl: null,
-  setSandboxUrl: (url) => set({ sandboxUrl: url }),
-  sandboxCreatedAt: null,
-  setSandboxCreatedAt: (ts) => set({ sandboxCreatedAt: ts }),
-  isSandboxExpired: false,
-  setIsSandboxExpired: (v) => set({ isSandboxExpired: v }),
+      // Sandbox
+      sandboxId: null,
+      setSandboxId: (id) => set({ sandboxId: id }),
+      sandboxUrl: null,
+      setSandboxUrl: (url) => set({ sandboxUrl: url }),
+      sandboxCreatedAt: null,
+      setSandboxCreatedAt: (ts) => set({ sandboxCreatedAt: ts }),
+      isSandboxExpired: false,
+      setIsSandboxExpired: (v) => set({ isSandboxExpired: v }),
 
-  // UI panels
-  activeTab: 'live preview',
-  setActiveTab: (tab) => set({ activeTab: tab }),
-  showSecondPanel: false,
-  setShowSecondPanel: (v) => set({ showSecondPanel: v }),
-  mobileActivePanel: 'chat',
-  setMobileActivePanel: (panel) => set({ mobileActivePanel: panel }),
+      // UI panels
+      activeTab: 'live preview',
+      setActiveTab: (tab) => set({ activeTab: tab }),
+      showSecondPanel: false,
+      setShowSecondPanel: (v) => set({ showSecondPanel: v }),
+      mobileActivePanel: 'chat',
+      setMobileActivePanel: (panel) => set({ mobileActivePanel: panel }),
 
-  // Sync status
-  isSyncingToE2B: false,
-  setIsSyncingToE2B: (v) => set({ isSyncingToE2B: v }),
-  isSyncingFilesystem: false,
-  setIsSyncingFilesystem: (v) => set({ isSyncingFilesystem: v }),
-  iframeLoading: true,
-  setIframeLoading: (v) => set({ iframeLoading: v }),
+      // Sync status
+      isSyncingToE2B: false,
+      setIsSyncingToE2B: (v) => set({ isSyncingToE2B: v }),
+      isSyncingFilesystem: false,
+      setIsSyncingFilesystem: (v) => set({ isSyncingFilesystem: v }),
+      iframeLoading: true,
+      setIframeLoading: (v) => set({ iframeLoading: v }),
 
-  // File streaming
-  streamingFiles: [],
-  addStreamingFile: (path) => set((state) => ({
-    streamingFiles: state.streamingFiles.includes(path) ? state.streamingFiles : [...state.streamingFiles, path]
-  })),
-  removeStreamingFile: (path) => set((state) => ({
-    streamingFiles: state.streamingFiles.filter(f => f !== path)
-  })),
+      // File streaming
+      streamingFiles: [],
+      addStreamingFile: (path) => set((state) => ({
+        streamingFiles: state.streamingFiles.includes(path) ? state.streamingFiles : [...state.streamingFiles, path]
+      })),
+      removeStreamingFile: (path) => set((state) => ({
+        streamingFiles: state.streamingFiles.filter(f => f !== path)
+      })),
 
-  // Collaboration
-  connectionStatus: 'disconnected',
-  setConnectionStatus: (status) => set({ connectionStatus: status }),
-  connectedUsers: [],
-  setConnectedUsers: (users) => set({ connectedUsers: users }),
+      // Collaboration
+      connectionStatus: 'disconnected',
+      setConnectionStatus: (status) => set({ connectionStatus: status }),
+      connectedUsers: [],
+      setConnectedUsers: (users) => set({ connectedUsers: users }),
 
-  // File content helpers — stable references that don't depend on component closures
-  getFileContent: (path) => {
-    const all = flattenFiles(get().fileTree);
-    return all.find(f => f.path === path)?.content ?? '';
-  },
-  updateFileContent: (path, content) => set((state) => ({
-    fileTree: updateNodeContent(state.fileTree, path, content),
-  })),
+      // File content helpers
+      getFileContent: (path) => {
+        const all = flattenFiles(get().fileTree);
+        return all.find(f => f.path === path)?.content ?? '';
+      },
+      updateFileContent: (path, content) => set((state) => ({
+        fileTree: updateNodeContent(state.fileTree, path, content),
+      })),
 
-  // Batch hydration
-  hydrate: (data) => set((state) => {
-    const patch: Partial<ChatStore> = {};
-    if (data.sessionId) patch.sessionId = data.sessionId;
-    if (data.messages) patch.messages = data.messages;
-    if (data.fileTree) patch.fileTree = data.fileTree;
-    if (data.sandboxId !== undefined) patch.sandboxId = data.sandboxId;
-    if (data.sandboxUrl !== undefined) patch.sandboxUrl = data.sandboxUrl;
-    if (data.sandboxCreatedAt !== undefined) patch.sandboxCreatedAt = data.sandboxCreatedAt;
-    if (data.selectedFile) patch.selectedFile = data.selectedFile;
-    if (data.openFiles) patch.openFiles = data.openFiles;
-    // Auto-show second panel if sandbox exists
-    if (data.sandboxId || data.sandboxUrl) patch.showSecondPanel = true;
-    return { ...state, ...patch };
-  }),
-}));
+      // Batch hydration
+      hydrate: (data) => set((state) => {
+        const patch: Partial<ChatStore> = {};
+        if (data.sessionId) patch.sessionId = data.sessionId;
+        if (data.messages) patch.messages = data.messages;
+        if (data.fileTree) patch.fileTree = data.fileTree;
+        if (data.sandboxId !== undefined) patch.sandboxId = data.sandboxId;
+        if (data.sandboxUrl !== undefined) patch.sandboxUrl = data.sandboxUrl;
+        if (data.sandboxCreatedAt !== undefined) patch.sandboxCreatedAt = data.sandboxCreatedAt;
+        if (data.selectedFile) patch.selectedFile = data.selectedFile;
+        if (data.openFiles) patch.openFiles = data.openFiles;
+        if (data.sandboxId || data.sandboxUrl) patch.showSecondPanel = true;
+        return { ...state, ...patch };
+      }),
+
+      // Reset to fresh state
+      reset: (sessionId) => set({
+        sessionId,
+        threadId: null,
+        runId: null,
+        messages: [],
+        message: '',
+        isStreaming: false,
+        fileTree: [],
+        selectedFile: '',
+        openFiles: [],
+        sandboxId: null,
+        sandboxUrl: null,
+        sandboxCreatedAt: null,
+        isSandboxExpired: false,
+        activeTab: 'live preview',
+        showSecondPanel: false,
+        mobileActivePanel: 'chat' as MobilePanel,
+        isSyncingToE2B: false,
+        isSyncingFilesystem: false,
+        iframeLoading: true,
+        streamingFiles: [],
+        connectionStatus: 'disconnected' as ConnectionStatus,
+        connectedUsers: [],
+      }),
+    }),
+    {
+      name: 'codevibe-session',
+      storage: createJSONStorage(() => {
+        if (typeof window === 'undefined') {
+          // SSR: return a no-op storage
+          return {
+            getItem: () => null,
+            setItem: () => {},
+            removeItem: () => {},
+          };
+        }
+        return sessionStorage;
+      }),
+      partialize: (state) => ({
+        sessionId: state.sessionId,
+        threadId: state.threadId,
+        runId: state.runId,
+        fileTree: state.fileTree,
+        selectedFile: state.selectedFile,
+        openFiles: state.openFiles,
+        sandboxId: state.sandboxId,
+        sandboxUrl: state.sandboxUrl,
+        sandboxCreatedAt: state.sandboxCreatedAt,
+        showSecondPanel: state.showSecondPanel,
+        activeTab: state.activeTab,
+      }),
+    }
+  )
+);

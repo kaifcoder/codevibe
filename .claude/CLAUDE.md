@@ -4,6 +4,7 @@
 
 ```bash
 npm run dev          # Next.js dev server on port 3000
+npm run agent        # LangGraph Agent Server on port 2024 (MUST run separately)
 npm run yjs          # Yjs WebSocket server on port 1234 (MUST run separately)
 npm run build        # Production build
 npm run lint         # ESLint
@@ -13,9 +14,9 @@ npx prisma migrate dev --name <name>  # Create migration + regenerate client
 
 ## Project Summary
 
-CodeVibe is a collaborative AI-powered code editor with real-time synchronization. Users type prompts, an AI agent (GPT-5 via SAP AI SDK) generates Next.js code in an E2B sandbox, and multiple users can edit simultaneously via Yjs CRDTs.
+CodeVibe is a collaborative AI-powered code editor with real-time synchronization. Users type prompts, an AI agent (Claude via @langchain/anthropic) generates Next.js code in an E2B sandbox, and multiple users can edit simultaneously via Yjs CRDTs.
 
-**Tech Stack**: Next.js 16 (App Router, React 19, Turbopack) | TypeScript | tRPC | Prisma (PostgreSQL) | Clerk Auth | Zustand | Yjs + Hocuspocus | E2B Sandboxes | LangGraph | MCP
+**Tech Stack**: Next.js 16 (App Router, React 19, Turbopack) | TypeScript | tRPC | Prisma (PostgreSQL) | Clerk Auth | Zustand | Yjs + Hocuspocus | E2B Sandboxes | LangGraph Agent Server | useStream | MCP
 
 ## Architecture
 
@@ -23,34 +24,35 @@ CodeVibe is a collaborative AI-powered code editor with real-time synchronizatio
 User/Agent Edits → Monaco Editor → Yjs Document (source of truth) → E2B Filesystem
                                           ↓
                                   Other Users' Editors
+
+Frontend (useStream) ←→ LangGraph Agent Server (port 2024) → Agent (createAgent) → E2B Tools
 ```
 
-Three-way sync: Monaco ↔ Yjs ↔ E2B. Yjs is the single source of truth.
+The frontend connects directly to the LangGraph Agent Server via `useStream` hook. No SSE routes or event emitters needed.
 
 ## Key Directories
 
 ```
 src/
 ├── app/                    # Next.js App Router pages & API routes
-│   ├── chat/[id]/page.tsx  # Main editor interface
-│   ├── api/stream/         # SSE for real-time events
+│   ├── chat/[id]/page.tsx  # Main editor interface (uses useStream hook)
 │   ├── api/sync-filesystem/# E2B → Frontend sync
 │   ├── api/write-to-sandbox/# Monaco → E2B write
 │   ├── api/session/[token]/# Session CRUD
 │   └── api/trpc/           # tRPC handler
 ├── lib/
-│   ├── nextjs-coding-agent.ts   # LangGraph agent (createReactAgent)
+│   ├── agent.ts                 # LangGraph agent (createAgent, exported for langgraph dev)
 │   ├── nextjs-agent-prompt.ts   # Agent system prompt
-│   ├── e2b-tools.ts             # 6 E2B sandbox tools
-│   ├── fallback-agent.ts        # Direct agent invocation
+│   ├── e2b-tools.ts             # 6 E2B sandbox tools + create_sandbox
 │   ├── mcp-client.ts            # MCP client factory (Playwright, Next.js Docs)
-│   ├── agent-memory.ts          # InMemoryStore + memory tools
-│   ├── event-emitter.ts         # Global singleton event emitter
 │   ├── sandbox-utils.ts         # E2B connection helpers
 │   └── collaboration/           # Yjs + Monaco binding
+├── hooks/
+│   ├── use-agent-stream.ts  # useStream wrapper (handles custom events)
+│   └── use-mobile.ts       # Mobile detection
 ├── components/              # React components (ChatPanel, CodeEditor, FileTree)
 ├── stores/chat-store.ts     # Zustand state management
-├── trpc/                    # tRPC routers, client, server
+├── trpc/                    # tRPC routers (session only), client, server
 ├── generated/prisma/        # Auto-generated Prisma client (DO NOT EDIT)
 └── server/db.ts             # Prisma singleton
 ```
@@ -75,10 +77,10 @@ import { api } from "@/trpc/server"   // server-side (RSC)
 - **Always sanitize null bytes**: `JSON.parse(JSON.stringify(data).replace(/\\u0000/g, ''))`
 - Never use raw Prisma queries in components - use tRPC procedures
 
-### Event System
-- All cross-module communication via `globalEventEmitter` singleton
-- Events use `Symbol.for('codevibe.globalEventEmitter')` to survive hot reloads
-- Never create new EventEmitter instances
+### Event System (via config.writer in tools → useStream onCustomEvent)
+- All cross-module communication via `config.writer()` in LangGraph tools
+- Frontend receives events via `useStream`'s `onCustomEvent` callback
+- No EventEmitter, no SSE routes needed
 
 ### Yjs Collaboration
 - Room naming: `${sessionId}-${filePath}` (one Y.Doc per file)
@@ -86,11 +88,15 @@ import { api } from "@/trpc/server"   // server-side (RSC)
 - WebSocket on port 1234 (`npm run yjs`)
 
 ### Agent Pattern
-- Uses `createReactAgent()` from LangChain (prebuilt, not custom StateGraph)
-- Model: GPT-5 (2025-08-07) via `AzureOpenAiChatClient`, fixed `temperature: 1`
-- Tools: memory tools + E2B tools + Playwright MCP + Next.js Docs MCP
+- Uses `createAgent()` from LangChain (served by LangGraph Agent Server on port 2024)
+- Model: Claude Sonnet 4 via `ChatAnthropic` with extended thinking
+- Tools: create_sandbox + E2B tools + Playwright MCP + Next.js Docs MCP
 - MCP tools cached globally - never recreate
-- Recursion limit: 40; Message compaction: last 10 msgs, max 1500 chars each
+- Frontend connects via `useStream` from `@langchain/langgraph-sdk/react`
+- Custom events (codePatch, fileTreeSync, sandboxCreated) emitted via `config.writer()` in tools
+- Sandbox lifecycle: `create_sandbox` tool creates sandbox, registered in thread-scoped registry
+- Recursion limit: 80; Message compaction: last 10 msgs via middleware
+- Summarization: triggers at 12,000 tokens, keeps 6 messages
 
 ### File Sync Boundaries
 - **Include**: `.ts`, `.tsx`, `.js`, `.jsx`, `.css`, `.md`, `.json`, `.toml`
@@ -107,20 +113,16 @@ import { api } from "@/trpc/server"   // server-side (RSC)
 | `e2b_delete_file` | Delete files/directories |
 | `e2b_list_files_recursive` | Full file tree scan |
 
-## Event System
+## Custom Events (config.writer → onCustomEvent)
 
-| Event | Payload |
-|-------|---------|
-| `agent:status` | `{ status, message, hasSandbox }` |
-| `agent:partial` | `{ content, fullContent }` |
-| `agent:tool` | `{ tool, args, result, status }` |
-| `agent:sandbox` | `{ sandboxId, sandboxUrl, isNew }` |
-| `agent:complete` | `{ response, sandboxUrl, hasSandbox }` |
-| `agent:error` | `{ error }` |
-| `agent:reasoning` | `{ reasoning }` |
-| `agent:codePatch` | `{ filePath, content, action }` |
-| `agent:fileTreeSync` | `{ fileTree }` |
-| `heartbeat` | `{ timestamp }` |
+| Event Type | Payload |
+|-----------|---------|
+| `sandboxCreated` | `{ sandboxId, sandboxUrl, isNew }` |
+| `sandboxExpired` | `{ sandboxId }` |
+| `codePatch` | `{ filePath, content?, action }` |
+| `fileTreeSync` | `{ fileTree }` |
+| `tool_progress` | `{ tool, args, message, status }` |
+| `tool_result` | `{ tool, args, result }` |
 
 ## Environment Variables
 
@@ -130,6 +132,7 @@ E2B_API_KEY=...
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
 CLERK_SECRET_KEY=...
 NEXT_PUBLIC_WS_URL=ws://...          # Optional, defaults to ws://localhost:1234
+NEXT_PUBLIC_LANGGRAPH_URL=...        # Optional, defaults to http://localhost:2024
 NEXT_PUBLIC_APP_URL=...              # For share links
 ```
 
@@ -138,12 +141,12 @@ NEXT_PUBLIC_APP_URL=...              # For share links
 1. **Null bytes**: PostgreSQL rejects `\0` in JSON - always sanitize before Prisma writes
 2. **Sandbox TTL**: E2B kills sandboxes after 25 minutes - UI shows countdown
 3. **Yjs server**: Must run separately (`npm run yjs`) - it's NOT part of `npm run dev`
-4. **Prisma imports**: Use `@/generated/prisma`, NOT `@prisma/client`
-5. **Temperature**: GPT-5 only supports `temperature: 1` (hardcoded)
-6. **SSE heartbeat**: 30s interval in `/api/stream` - don't remove (prevents timeout)
+4. **Agent server**: Must run separately (`npm run agent`) - serves agent on port 2024
+5. **Prisma imports**: Use `@/generated/prisma`, NOT `@prisma/client`
+6. **useStream**: Frontend connects directly to LangGraph server, not through Next.js API
 7. **MCP clients**: Singletons with auto-reconnect - never recreate manually
-8. **InMemoryStore**: Clears on server restart - use PostgresSaver for production
-9. **Message compaction**: Last 10 messages, max 1500 chars - prevents recursion limit
+8. **Sandbox registry**: Thread-scoped (Map<threadId, sandboxInfo>) — clears on agent server restart
+9. **config.writer**: Only available inside LangGraph tools/nodes — use for custom events to frontend
 10. **Recursive scan excludes**: `node_modules`, `.git`, `.next`, `dist`, `build`, `.cache`, `components/ui`
 
 ## Debugging

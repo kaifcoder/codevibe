@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
+import type { MessageQueue } from "@/components/QueueList";
 import { CodeEditor } from "@/components/CodeEditor";
 import { FileTree } from "@/components/FileTree";
 import { useChatStore } from "@/stores/chat-store";
@@ -27,6 +28,7 @@ export interface DesktopChatLayoutProps {
   handleCodeChange: (value: string | undefined) => void;
   guestCredentials: { username: string; userId: string } | null;
   renderPreview: () => React.ReactNode;
+  queue?: MessageQueue;
 }
 
 export function DesktopChatLayout({
@@ -41,6 +43,7 @@ export function DesktopChatLayout({
   handleCodeChange,
   guestCredentials,
   renderPreview,
+  queue,
 }: Readonly<DesktopChatLayoutProps>) {
   // Read file/editor state directly from store — survives tab switches
   const fileTree = useChatStore(s => s.fileTree);
@@ -57,7 +60,7 @@ export function DesktopChatLayout({
   const setOpenFiles = useChatStore(s => s.setOpenFiles);
   const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
   const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
-  const getFileContent = useChatStore(s => s.getFileContent);
+  const selectedFileContent = useChatStore(s => s.getFileContent(s.selectedFile));
 
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full">
@@ -70,6 +73,7 @@ export function DesktopChatLayout({
             onSend={handleSend}
             isLoading={isLoading}
             isStreaming={isStreaming}
+            queue={queue}
           />
         </div>
       </ResizablePanel>
@@ -248,10 +252,11 @@ export function DesktopChatLayout({
                       )}
                       <CodeEditor
                         key={`${sessionId}-${selectedFile}`}
-                        value={getFileContent(selectedFile)}
+                        value={selectedFileContent}
                         onChange={handleCodeChange}
                         language="typescript"
                         autoScroll={streamingFiles.includes(selectedFile)}
+                        isStreaming={streamingFiles.includes(selectedFile)}
                         collaborative={true}
                         roomId={`${sessionId}-${selectedFile}`}
                         username={guestCredentials?.username || 'User'}

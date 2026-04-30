@@ -3,75 +3,24 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useTRPC } from "@/trpc/client";
-import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState, useCallback, useRef, useMemo, type Dispatch, type SetStateAction } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import { ShareButton } from "@/components/ShareButton";
-import { Users } from "lucide-react";
+import { Users, Unplug, Plug } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useAgentStream } from "@/hooks/use-agent-stream";
 import { MobileChatLayout } from "@/components/MobileChatLayout";
 import { DesktopChatLayout } from "@/components/DesktopChatLayout";
 import { PreviewShimmer } from "@/components/ui/shimmer";
 import { useChatStore } from "@/stores/chat-store";
-import type { FileNode } from "@/stores/chat-store";
+import { useTRPC } from "@/trpc/client";
+import { useMutation } from "@tanstack/react-query";
 
-// ─── File tree helpers ───────────────────────────────────────────────────────
-
-function findFileInTree(nodes: FileNode[], path: string): boolean {
-  for (const node of nodes) {
-    if (node.type === 'file' && node.path === path) return true;
-    if (node.type === 'folder' && node.children && findFileInTree(node.children, path)) return true;
-  }
-  return false;
-}
-
-function updateFileInTree(nodes: FileNode[], path: string, updater: (existing: string | undefined) => string): FileNode[] {
-  return nodes.map(node => {
-    if (node.type === 'file' && node.path === path) {
-      return { ...node, content: updater(node.content) };
-    }
-    if (node.type === 'folder' && node.children) {
-      return { ...node, children: updateFileInTree(node.children, path, updater) };
-    }
-    return node;
-  });
-}
-
-function addFileToTree(nodes: FileNode[], filePath: string, content: string): FileNode[] {
-  const segments = filePath.split('/');
-  if (segments.length === 1) {
-    return [...nodes, { name: segments[0], path: filePath, type: 'file' as const, content }];
-  }
-
-  const folderName = segments[0];
-  const remainingPath = segments.slice(1).join('/');
-  const existing = nodes.find(n => n.type === 'folder' && n.name === folderName);
-
-  if (existing && existing.children) {
-    return nodes.map(n => {
-      if (n === existing) {
-        return { ...n, children: addFileToTree(n.children!, remainingPath, content) };
-      }
-      return n;
-    });
-  }
-
-  // Create folder and nest file inside it
-  const newFolder: FileNode = {
-    name: folderName,
-    path: segments.slice(0, -1).join('/'),
-    type: 'folder',
-    children: addFileToTree([], remainingPath, content),
-  };
-  return [...nodes, newFolder];
-}
-
-// Sandbox expiration constant (outside component to avoid re-creation each render)
-const SANDBOX_EXPIRY_MS = 25 * 60 * 1000; // 25 minutes
+// Sandbox expiration constant
+const SANDBOX_EXPIRY_MS = 25 * 60 * 1000;
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -83,36 +32,35 @@ function Page({ params }: PageProps) {
   const shareToken = searchParams.get('token');
   const isSharedAccess = !!shareToken;
 
-  // --- Local-only state (component-specific, not shared) ---
-  const [shouldAutoSend, setShouldAutoSend] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
+  const [shouldAutoSend, setShouldAutoSend] = useState(false);
   const [isCheckingExpiration, setIsCheckingExpiration] = useState(false);
+  const hasAutoSent = useRef(false);
+  const sessionCheckRef = useRef<Set<string>>(new Set());
+  const sessionExistsRef = useRef(false);
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSavedContentRef = useRef<Record<string, string>>({});
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Generate stable guest credentials for shared sessions
   const guestCredentials = useMemo(() => {
     if (!isSharedAccess) return null;
     const randomId = Math.floor(Math.random() * 10000);
-    return {
-      username: `Guest-${randomId}`,
-      userId: `guest-${Date.now()}-${randomId}`,
-    };
+    return { username: `Guest-${randomId}`, userId: `guest-${Date.now()}-${randomId}` };
   }, [isSharedAccess]);
 
-  // --- Zustand store state ---
+  const isMobile = useIsMobile();
+
+  // --- Zustand store ---
   const sessionId = useChatStore(s => s.sessionId);
   const setSessionId = useChatStore(s => s.setSessionId);
+  const threadId = useChatStore(s => s.threadId);
   const messages = useChatStore(s => s.messages);
   const setMessages = useChatStore(s => s.setMessages);
   const message = useChatStore(s => s.message);
   const setMessage = useChatStore(s => s.setMessage);
   const isStreaming = useChatStore(s => s.isStreaming);
-  const setIsStreaming = useChatStore(s => s.setIsStreaming);
   const fileTree = useChatStore(s => s.fileTree);
   const setFileTree = useChatStore(s => s.setFileTree);
-  const selectedFile = useChatStore(s => s.selectedFile);
-  const setSelectedFile = useChatStore(s => s.setSelectedFile);
-  const openFiles = useChatStore(s => s.openFiles);
-  const setOpenFiles = useChatStore(s => s.setOpenFiles);
   const sandboxId = useChatStore(s => s.sandboxId);
   const setSandboxId = useChatStore(s => s.setSandboxId);
   const sandboxUrl = useChatStore(s => s.sandboxUrl);
@@ -127,941 +75,433 @@ function Page({ params }: PageProps) {
   const setShowSecondPanel = useChatStore(s => s.setShowSecondPanel);
   const mobileActivePanel = useChatStore(s => s.mobileActivePanel);
   const setMobileActivePanel = useChatStore(s => s.setMobileActivePanel);
-  const isSyncingToE2B = useChatStore(s => s.isSyncingToE2B);
-  const setIsSyncingToE2B = useChatStore(s => s.setIsSyncingToE2B);
-  const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
   const setIsSyncingFilesystem = useChatStore(s => s.setIsSyncingFilesystem);
   const iframeLoading = useChatStore(s => s.iframeLoading);
   const setIframeLoading = useChatStore(s => s.setIframeLoading);
-  const connectionStatus = useChatStore(s => s.connectionStatus);
-  const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
   const connectedUsers = useChatStore(s => s.connectedUsers);
-  const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
+  const runId = useChatStore(s => s.runId);
 
-  // --- Refs (component-local concerns) ---
-  const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
-  const activeSessionRef = useRef<string | null>(null);
-  const hasAutoSent = useRef(false);
-  const isSending = useRef(false);
-  const sessionCheckRef = useRef<Set<string>>(new Set());
-  const sessionExistsRef = useRef(false);
-  const mountedRef = useRef(true);
-  const retriesRef = useRef(0);
-  const MAX_RETRIES = 5;
-  const lastSavedContentRef = useRef<{ [filePath: string]: string }>({});
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // --- useStream hook (replaces tRPC + SSE) ---
+  const stream = useAgentStream(threadId);
 
-  const isMobile = useIsMobile();
+  // --- Sync stream.messages → Zustand store (ChatMessage format) ---
+  const prevSnapshotRef = useRef('');
 
-  // Mutation to create session in database
+  useEffect(() => {
+    if (!stream.messages || stream.messages.length === 0) return;
+
+    // Build a lightweight snapshot to detect real changes
+    // Include content length within array blocks to catch streaming token updates
+    const toolSnapshot = stream.toolCalls
+      ? stream.toolCalls.map((tc: any) => `${tc.call?.id}:${tc.state}`).join(',')
+      : '';
+    const snapshot = stream.messages.map((msg: any) => {
+      const c = msg.content;
+      let len = 0;
+      if (typeof c === 'string') {
+        len = c.length;
+      } else if (Array.isArray(c)) {
+        for (const block of c) {
+          if (block.type === 'text') len += (block.text?.length || 0);
+          else if (block.type === 'thinking' || block.type === 'reasoning') len += (block.thinking?.length || block.reasoning?.length || 0);
+          else len += 1;
+        }
+      }
+      return `${msg.id ?? ''}:${len}`;
+    }).join('|') + `|loading:${stream.isLoading}|tc:${toolSnapshot}`;
+
+    if (snapshot === prevSnapshotRef.current) return;
+    prevSnapshotRef.current = snapshot;
+
+    // Build consolidated messages: merge consecutive AI messages into single turns
+    const mapped: ChatMessage[] = [];
+    let currentAiTurn: { content: string; reasoning: string; toolCalls: NonNullable<ChatMessage['toolCalls']>; id: string; lastIndex: number } | null = null;
+
+    const flushAiTurn = () => {
+      if (!currentAiTurn) return;
+      const isLast = currentAiTurn.lastIndex === stream.messages.length - 1;
+      mapped.push({
+        role: 'ai',
+        content: currentAiTurn.content,
+        reasoning: currentAiTurn.reasoning || undefined,
+        timestamp: Date.now() - (stream.messages.length - currentAiTurn.lastIndex) * 1000,
+        id: currentAiTurn.id,
+        status: (stream.isLoading && isLast) ? 'streaming' : 'complete',
+        toolCalls: currentAiTurn.toolCalls.length > 0 ? currentAiTurn.toolCalls : undefined,
+      });
+      currentAiTurn = null;
+    };
+
+    for (let i = 0; i < stream.messages.length; i++) {
+      const msg = stream.messages[i] as any;
+      const msgType = msg.type as string;
+
+      if (msgType === 'tool') continue;
+
+      if (msgType === 'human') {
+        flushAiTurn();
+        let content = '';
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          for (const block of msg.content as any[]) {
+            if (block.type === 'text') content += block.text || '';
+          }
+        }
+        if (content) {
+          mapped.push({
+            role: 'user',
+            content,
+            timestamp: Date.now() - (stream.messages.length - i) * 1000,
+            id: msg.id || `msg-${i}`,
+            status: 'complete',
+          });
+        }
+        continue;
+      }
+
+      if (msgType === 'ai') {
+        if (!currentAiTurn) {
+          currentAiTurn = { content: '', reasoning: '', toolCalls: [], id: msg.id || `msg-${i}`, lastIndex: i };
+        }
+        currentAiTurn.lastIndex = i;
+
+        // Extract text and reasoning
+        if (typeof msg.content === 'string') {
+          if (msg.content) currentAiTurn.content += (currentAiTurn.content ? '\n\n' : '') + msg.content;
+        } else if (Array.isArray(msg.content)) {
+          for (const block of msg.content as any[]) {
+            if (block.type === 'text' && block.text) {
+              currentAiTurn.content += (currentAiTurn.content ? '\n\n' : '') + block.text;
+            }
+            if (block.type === 'thinking' || block.type === 'reasoning') {
+              currentAiTurn.reasoning += (block.thinking || block.reasoning || '');
+            }
+          }
+        }
+
+        // Collect tool calls
+        if (stream.toolCalls) {
+          const msgToolCalls = msg.tool_calls as Array<{ id?: string; name: string; args: Record<string, unknown> }> | undefined;
+          if (msgToolCalls) {
+            for (const tc of msgToolCalls) {
+              const match = stream.toolCalls.find((stc: any) => stc.call.id === tc.id);
+              currentAiTurn.toolCalls.push({
+                tool: tc.name,
+                args: tc.args,
+                result: match?.result?.content as string | undefined,
+                status: match?.state === 'pending' ? 'running' : match?.state === 'error' ? 'error' : match?.state === 'completed' ? 'complete' : 'running',
+              });
+            }
+          }
+        }
+        continue;
+      }
+    }
+
+    flushAiTurn();
+
+    // Filter out empty AI messages and summary messages from summarization middleware
+    const filtered = mapped.filter((msg: ChatMessage) => {
+      if (msg.role === 'ai' && !msg.content && !msg.toolCalls?.length && !msg.reasoning && msg.status !== 'streaming') {
+        return false;
+      }
+      // Filter out summarization middleware output
+      if (msg.role === 'ai' && msg.content && msg.content.startsWith('Here is a summary of the conversation')) {
+        return false;
+      }
+      return true;
+    });
+
+    // Merge with existing messages: keep old messages, append only genuinely new ones
+    const existingMessages = useChatStore.getState().messages;
+    if (existingMessages.length > 0 && filtered.length > 0) {
+      // Find the last user message ID in filtered to anchor the merge
+      const lastExistingUserMsg = [...existingMessages].reverse().find(m => m.role === 'user');
+      const lastFilteredUserMsg = [...filtered].reverse().find(m => m.role === 'user');
+
+      // If the stream still has the same recent user message, merge properly
+      if (lastExistingUserMsg && lastFilteredUserMsg && lastExistingUserMsg.content === lastFilteredUserMsg.content) {
+        // Find where this user message is in filtered
+        const anchorIdx = filtered.findLastIndex(m => m.role === 'user' && m.content === lastExistingUserMsg.content);
+        const anchorIdxExisting = existingMessages.findLastIndex(m => m.role === 'user' && m.content === lastExistingUserMsg.content);
+
+        if (anchorIdx >= 0 && anchorIdxExisting >= 0) {
+          // Keep all existing messages up to (but not including) the anchor's AI response,
+          // then take anchor + everything after from filtered (which has the latest streaming state)
+          const preserved = existingMessages.slice(0, anchorIdxExisting);
+          const fromStream = filtered.slice(anchorIdx);
+          const merged = [...preserved, ...fromStream];
+          useChatStore.getState().setMessages(merged);
+          return;
+        }
+      }
+
+      // If filtered has fewer messages than existing (summarization happened),
+      // keep old messages and only update/append the tail
+      if (filtered.length < existingMessages.length) {
+        // Find new messages not in existing (by matching last few)
+        const lastExisting = existingMessages[existingMessages.length - 1];
+        const lastFiltered = filtered[filtered.length - 1];
+        if (lastFiltered && lastExisting &&
+            lastFiltered.role === lastExisting.role &&
+            lastFiltered.content === lastExisting.content) {
+          // Same last message — just update status of last AI message
+          const updated = [...existingMessages];
+          updated[updated.length - 1] = { ...lastFiltered, timestamp: lastExisting.timestamp };
+          useChatStore.getState().setMessages(updated);
+          return;
+        }
+        // New AI response after summarization — append it
+        const newMessages = filtered.filter(fm =>
+          !existingMessages.some(em => em.role === fm.role && em.content === fm.content)
+        );
+        if (newMessages.length > 0) {
+          useChatStore.getState().setMessages([...existingMessages, ...newMessages]);
+          return;
+        }
+        // Fallback: keep existing (don't shrink)
+        return;
+      }
+    }
+
+    useChatStore.getState().setMessages(filtered);
+  }, [stream.messages, stream.toolCalls, stream.isLoading]);
+
+  // --- DB session creation ---
   const createDbSession = useMutation(
     trpc.session.createSession.mutationOptions({
       onSuccess: (data) => {
+        sessionExistsRef.current = true;
         console.log('[DB] Session created:', data.id);
       },
-      onError: (error) => {
-        console.error('[DB] Failed to create session:', error);
-      },
+      onError: (error) => { console.error('[DB] Failed to create session:', error); },
     })
   );
-
-  // Use ref for createDbSession to avoid useEffect dependency issues
   const createDbSessionRef = useRef(createDbSession);
   createDbSessionRef.current = createDbSession;
 
   // Extract chat ID from params
   useEffect(() => {
     let mounted = true;
-
     params.then(async ({ id }) => {
       if (!mounted) return;
 
+      const currentId = useChatStore.getState().sessionId;
+      // Only reset if navigating to a genuinely different session
+      // (empty string means store hasn't hydrated yet — don't reset)
+      if (currentId && currentId !== id) {
+        useChatStore.getState().reset(id);
+      }
       setSessionId(id);
 
-      // Check if we've already processed this session ID
-      if (sessionCheckRef.current.has(id)) {
-        console.log('[DB] Session already processed:', id);
-        return;
-      }
-
-      // Mark this session as being processed
+      if (sessionCheckRef.current.has(id)) return;
       sessionCheckRef.current.add(id);
 
-      // Check if session exists in database, if not create it (only once)
       try {
         const response = await fetch(`/api/session/${id}`);
         if (!mounted) return;
-
         if (response.status === 404) {
-          // Session doesn't exist, create it with the chat ID
-          console.log('[DB] Creating new session:', id);
-          createDbSessionRef.current.mutate({
-            id,
-            title: `Chat ${new Date().toLocaleString()}`,
-          });
-          sessionExistsRef.current = true;
-        } else {
-          console.log('[DB] Session already exists:', id);
+          createDbSessionRef.current.mutate({ id, title: `Chat ${new Date().toLocaleString()}` });
+        } else if (response.ok) {
           sessionExistsRef.current = true;
         }
       } catch (error) {
         console.error('[DB] Error checking session:', error);
-        // Remove from set on error so it can be retried
         sessionCheckRef.current.delete(id);
       }
 
-      // Check for initial prompt from home page
       if (typeof globalThis !== 'undefined') {
         const initialPrompt = sessionStorage.getItem(`chat_${id}_initial`);
         if (initialPrompt) {
           useChatStore.getState().setMessage(initialPrompt);
           setShouldAutoSend(true);
-          // Clean up sessionStorage
           sessionStorage.removeItem(`chat_${id}_initial`);
         }
       }
     });
-
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [params, setSessionId]);
 
-  // Load session data from database when sessionId changes
+  // Load session data from database
   useEffect(() => {
-    if (!sessionId || sessionId.startsWith('session-')) return;
+    if (!sessionId) return;
 
     const loadSession = async () => {
       try {
-        console.log('[DB] Loading session data for:', sessionId);
         const response = await fetch(`/api/session/${sessionId}`);
         if (response.ok) {
           const session = await response.json();
-          console.log('[DB] Session loaded:', session);
-
-          // Mark session as existing since we successfully loaded it
           sessionExistsRef.current = true;
 
-          // Load messages from database
-          if (session.messages && Array.isArray(session.messages)) {
-            setMessages(session.messages);
-          }
-
-          // Load file tree from database
           if (session.fileTree && Array.isArray(session.fileTree)) {
             setFileTree(session.fileTree);
           }
 
-          // Load sandbox data from database
           if (session.sandboxId) {
             setSandboxId(session.sandboxId);
-            console.log('[DB] Loaded sandboxId:', session.sandboxId);
-
-            // Auto-sync filesystem when sandbox is loaded
-            // Block code tab until sync completes
             setIsSyncingFilesystem(true);
             setTimeout(async () => {
               try {
-                const response = await fetch('/api/sync-filesystem', {
+                const res = await fetch('/api/sync-filesystem', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    sandboxId: session.sandboxId,
-                    sessionId: sessionId
-                  }),
+                  body: JSON.stringify({ sandboxId: session.sandboxId, sessionId }),
                 });
-                if (response.ok) {
-                  console.log('[Sync] Filesystem sync completed');
-                } else {
-                  console.error('[Sync] Filesystem sync failed');
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.fileTree) {
+                    useChatStore.getState().setFileTree(data.fileTree);
+                  }
                 }
               } catch (err) {
                 console.error('[Sync] Auto-sync failed:', err);
               } finally {
-                // Sync complete, unblock code tab
                 useChatStore.getState().setIsSyncingFilesystem(false);
               }
-            }, 1000); // Wait 1s for sandbox to be ready
+            }, 1000);
           }
+
           if (session.sandboxUrl) {
             setSandboxUrl(session.sandboxUrl);
             setShowSecondPanel(true);
-            // Load sandbox creation timestamp from database
             if (session.sandboxCreatedAt) {
               setIsCheckingExpiration(true);
               const createdTime = new Date(session.sandboxCreatedAt).getTime();
               setSandboxCreatedAt(createdTime);
-              // Check if already expired
               const elapsed = Date.now() - createdTime;
               setTimeout(() => {
                 if (elapsed >= SANDBOX_EXPIRY_MS) {
                   useChatStore.getState().setIsSandboxExpired(true);
-                  console.log('[DB] Sandbox already expired');
                 }
                 setIsCheckingExpiration(false);
-              }, 500); // Small delay to show loader
+              }, 500);
             } else {
-              // Fallback: if no timestamp in DB, use current time (new sandbox, not expired)
               setSandboxCreatedAt(Date.now());
-              setIsCheckingExpiration(false);
             }
-            console.log('[DB] Loaded sandboxUrl:', session.sandboxUrl);
           }
-        } else {
-          console.log('[DB] Session not found, will be created');
         }
       } catch (error) {
         console.error('[DB] Failed to load session:', error);
       }
     };
-
     loadSession();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // --- tRPC Mutations ---
-  const invoke = useMutation(
-    trpc.invoke.mutationOptions({
-      onSuccess: ({ sessionId: newSessionId }) => {
-        toast.success('Agent started successfully!');
-        if (newSessionId && newSessionId !== useChatStore.getState().sessionId) {
-          useChatStore.getState().setSessionId(newSessionId);
-        }
-        isSending.current = false;
-      },
-      onError: (error) => {
-        toast.error(`Error invoking agent: ${error.message}`);
-        useChatStore.getState().setIsStreaming(false);
-        isSending.current = false;
-      },
-      onMutate: () => {
-        useChatStore.getState().setIsStreaming(true);
-        toast.loading("Starting AI agent...");
-      },
-      onSettled: () => {
-        toast.dismiss();
+  useEffect(() => { setIsMounted(true); }, []);
+
+  // --- Send message via useStream ---
+  const handleSend = useCallback(() => {
+    const { message: msg } = useChatStore.getState();
+    if (!msg.trim()) return;
+
+    useChatStore.getState().setMessage("");
+
+    stream.submit(
+      { messages: [{ type: "human", content: msg.trim() }] },
+      {
+        onDisconnect: "continue",
+        streamResumable: true,
       }
-    })
-  );
+    );
+  }, [stream]);
 
-  const invokeWithSandbox = useMutation(
-    trpc.invokeWithSandbox.mutationOptions({
-      onSuccess: ({ sessionId: newSessionId }) => {
-        toast.success('Agent started with sandbox!');
-        if (newSessionId && newSessionId !== useChatStore.getState().sessionId) {
-          useChatStore.getState().setSessionId(newSessionId);
-        }
-        isSending.current = false;
-      },
-      onError: (error) => {
-        toast.error(`Error invoking agent: ${error.message}`);
-        useChatStore.getState().setIsStreaming(false);
-        isSending.current = false;
-      },
-      onMutate: () => {
-        useChatStore.getState().setIsStreaming(true);
-        toast.loading("Starting AI agent with sandbox...");
-      },
-      onSettled: () => {
-        toast.dismiss();
-      }
-    })
-  );
+  // --- Disconnect / Rejoin ---
+  const handleDisconnect = useCallback(() => {
+    if (stream.stop) {
+      stream.stop();
+    }
+  }, [stream]);
 
-  const updateSession = useMutation(
-    trpc.session.updateSession.mutationOptions({
-      onSuccess: () => {
-        console.log('[DB] Session updated successfully');
-      },
-      onError: (error) => {
-        console.error('[DB] Failed to update session:', error);
-      }
-    })
-  );
+  const handleRejoin = useCallback(() => {
+    const { runId: rid } = useChatStore.getState();
+    if (rid && stream.joinStream) {
+      stream.joinStream(rid);
+    }
+  }, [stream]);
 
-  // Ref to access updateSession inside SSE callback without causing re-renders
-  const updateSessionRef = useRef(updateSession);
-  useEffect(() => { updateSessionRef.current = updateSession; }, [updateSession]);
-
-  // Types for SSE payload
-  type StatusData = { status?: string; message?: string; hasSandbox?: boolean };
-  type PartialData = { content?: string; fullContent?: string };
-  type ToolData = {
-    tool?: string;
-    args?: Record<string, unknown>;
-    result?: string;
-    status?: "pending" | "running" | "complete" | "error";
-  };
-  type SandboxData = { sandboxId?: string; sandboxUrl?: string; isNew?: boolean; replacedOld?: string };
-  type CompleteData = { response?: string; sandboxUrl?: string; hasSandbox?: boolean };
-  type ErrorData = { error?: string; sandboxUrl?: string };
-  type FileUpdateData = { filePath?: string; content?: string; action?: 'start' | 'update' | 'complete' };
-  type CodePatchData = { filePath?: string; content?: string; action?: 'start' | 'patch' | 'complete' };
-  type FileTreeSyncData = { fileTree: FileNode[] };
-  interface SSEPayloadBase { sessionId?: string }
-  type SSEPayload =
-    | (SSEPayloadBase & { type: 'status'; data?: StatusData })
-    | (SSEPayloadBase & { type: 'partial'; data?: PartialData })
-    | (SSEPayloadBase & { type: 'tool'; data?: ToolData })
-    | (SSEPayloadBase & { type: 'sandbox'; data?: SandboxData })
-    | (SSEPayloadBase & { type: 'complete'; data?: CompleteData })
-    | (SSEPayloadBase & { type: 'error'; data?: ErrorData })
-    | (SSEPayloadBase & { type: 'file_update'; data?: FileUpdateData })
-    | (SSEPayloadBase & { type: 'code_patch'; data?: CodePatchData })
-    | (SSEPayloadBase & { type: 'file_tree_sync'; data?: FileTreeSyncData })
-    | (SSEPayloadBase & { type: 'connected'; data?: Record<string, unknown> })
-    | (SSEPayloadBase & { type: 'heartbeat'; data?: Record<string, unknown> });
-
+  // Auto-send initial message
   useEffect(() => {
-    mountedRef.current = true;
-    setIsMounted(true);
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  // Helper to update state only if component still mounted
-  const ifMounted = (fn: () => void) => { if (mountedRef.current) fn(); };
-
-  // Start real-time subscription for agent events using Server-Sent Events with reconnection
-  const startRealtimeSubscription = useCallback((sess: string) => {
-    if (!sess) {
-      console.warn('Attempted to start SSE without sessionId');
-      return;
+    if (shouldAutoSend && message.trim() && !hasAutoSent.current && messages.length <= 1) {
+      hasAutoSent.current = true;
+      setShouldAutoSend(false);
+      setTimeout(() => handleSend(), 100);
     }
+  }, [shouldAutoSend, message, messages.length, handleSend]);
 
-    // Don't recreate if already connected to this session
-    if (activeSessionRef.current === sess && subscriptionRef.current) {
-      return;
-    }
-
-    // Close existing connection if switching sessions
-    if (subscriptionRef.current) {
-      subscriptionRef.current.unsubscribe();
-      subscriptionRef.current = null;
-      activeSessionRef.current = null;
-    }
-
-    try {
-      const url = `/api/stream?sessionId=${encodeURIComponent(sess)}`;
-      const eventSource = new EventSource(url);
-      activeSessionRef.current = sess;
-
-      subscriptionRef.current = { unsubscribe: () => eventSource.close() };
-
-      eventSource.onopen = () => {
-        retriesRef.current = 0;
-      };
-
-      eventSource.onmessage = (event) => {
-        let parsed: SSEPayload | null = null;
-        try {
-            parsed = JSON.parse(event.data) as SSEPayload;
-        } catch {
-          console.warn('[SSE] Non-JSON message', event.data);
-          return;
-        }
-        if (!parsed) return;
-
-        // Use store.getState() inside the handler to avoid stale closures
-        const store = useChatStore.getState();
-
-        // Heartbeat / connection notifications
-        if (parsed.type === 'heartbeat') return;
-        if (parsed.type === 'connected') {
-          return;
-        }
-
-        // Handle file tree sync from agent
-        if (parsed.type === 'file_tree_sync') {
-          const syncData = parsed.data as FileTreeSyncData | undefined;
-          if (syncData?.fileTree && Array.isArray(syncData.fileTree)) {
-            console.log('[Agent] Syncing complete file tree from e2b filesystem');
-            const newFileTree = syncData.fileTree;
-            ifMounted(() => {
-              useChatStore.getState().setFileTree(newFileTree);
-              // Auto-select first file if none selected
-              const currentSelected = useChatStore.getState().selectedFile;
-              const firstFile = findFirstFile(newFileTree);
-              if (firstFile && !currentSelected) {
-                useChatStore.getState().setSelectedFile(firstFile);
-                useChatStore.getState().setOpenFiles([firstFile]);
-              }
-            });
-          }
-        }
-
-        // Handle code patches from agent
-        if (parsed.type === 'code_patch') {
-          const patchData = parsed.data as { filePath?: string; content?: string; action?: string } | undefined;
-          const filePath = patchData?.filePath;
-          const content = patchData?.content;
-          const action = patchData?.action;
-
-          if (filePath) {
-            if (action === 'streaming_start') {
-              // File is about to be written — open tab, show shimmer
-              ifMounted(() => {
-                useChatStore.getState().addStreamingFile(filePath);
-                useChatStore.getState().setSelectedFile(filePath);
-                const currentOpen = useChatStore.getState().openFiles;
-                if (!currentOpen.includes(filePath)) {
-                  useChatStore.getState().setOpenFiles([...currentOpen, filePath]);
-                }
-                // Initialize empty file in tree
-                useChatStore.getState().setFileTree(prev => {
-                  const exists = findFileInTree(prev, filePath);
-                  if (!exists) {
-                    return addFileToTree(prev, filePath, '');
-                  }
-                  return prev;
-                });
-              });
-            } else if (action === 'streaming_chunk' && content !== undefined) {
-              // Progressive content — append to file
-              ifMounted(() => {
-                useChatStore.getState().setFileTree(prev => {
-                  return updateFileInTree(prev, filePath, (existing) => (existing || '') + content);
-                });
-              });
-            } else if (action === 'streaming_end') {
-              // Streaming done — remove shimmer, sync to Yjs
-              ifMounted(() => {
-                useChatStore.getState().removeStreamingFile(filePath);
-                const finalContent = useChatStore.getState().getFileContent(filePath);
-                if (finalContent) {
-                  lastSavedContentRef.current[filePath] = finalContent;
-                  import('@/lib/collaboration').then(({ updateYjsDocument }) => {
-                    const roomId = `${sess}-${filePath}`;
-                    updateYjsDocument(roomId, finalContent).catch((err: Error) => {
-                      console.error('[Agent] Failed to update Yjs:', err);
-                    });
-                  });
-                }
-              });
-            } else if (action === 'start') {
-              // Legacy: tool execution start (e2b_write_file just began)
-              ifMounted(() => {
-                useChatStore.getState().setSelectedFile(filePath);
-                const currentOpen = useChatStore.getState().openFiles;
-                if (!currentOpen.includes(filePath)) {
-                  useChatStore.getState().setOpenFiles([...currentOpen, filePath]);
-                }
-              });
-            } else if (action === 'complete') {
-              // Legacy: tool execution done
-              ifMounted(() => {
-                useChatStore.getState().removeStreamingFile(filePath);
-              });
-            } else if (action === 'patch' && content !== undefined) {
-              // Legacy: full content from tool (fallback if streaming didn't happen)
-              lastSavedContentRef.current[filePath] = content;
-              ifMounted(() => {
-                useChatStore.getState().removeStreamingFile(filePath);
-                useChatStore.getState().setFileTree(prev => {
-                  const exists = findFileInTree(prev, filePath);
-                  if (!exists) {
-                    return addFileToTree(prev, filePath, content);
-                  }
-                  return updateFileInTree(prev, filePath, () => content);
-                });
-
-                import('@/lib/collaboration').then(({ updateYjsDocument }) => {
-                  const roomId = `${sess}-${filePath}`;
-                  updateYjsDocument(roomId, content).catch((err: Error) => {
-                    console.error('[Agent] Failed to update Yjs:', err);
-                  });
-                });
-              });
-            }
-          }
-        }
-
-        // Handle legacy file_update events (rare cases where agent writes to e2b directly)
-        if (parsed.type === 'file_update') {
-          const fileData = parsed.data as FileUpdateData | undefined;
-          const filePath = fileData?.filePath;
-          const content = fileData?.content;
-
-          if (filePath && content !== undefined) {
-            console.log('[Agent] File written directly to e2b, syncing to Yjs:', filePath);
-            // Mark as saved to prevent handleCodeChange from writing back to E2B
-            lastSavedContentRef.current[filePath] = content;
-            // Immediately sync to Yjs
-            import('@/lib/collaboration').then(({ updateYjsDocument }) => {
-              const roomId = `${sess}-${filePath}`;
-              updateYjsDocument(roomId, content).catch((err: Error) => {
-                console.error('[Agent] Failed to sync e2b write to Yjs:', err);
-              });
-            });
-
-            // Update file tree
-            ifMounted(() => {
-              useChatStore.getState().setFileTree(prev => {
-                function updateFile(nodes: FileNode[]): FileNode[] {
-                  return nodes.map(node => {
-                    if (node.type === 'file' && node.path === filePath) {
-                      return { ...node, content };
-                    }
-                    if (node.type === 'folder' && node.children) {
-                      return { ...node, children: updateFile(node.children) };
-                    }
-                    return node;
-                  });
-                }
-                return updateFile(prev);
-              });
-            });
-          }
-        }
-
-        // Update messages directly based on event type
-        if (parsed.type === 'tool') {
-          const toolData = parsed.data as ToolData | undefined;
-          ifMounted(() => {
-            useChatStore.getState().setMessages(prev => {
-              const newMessages = [...prev];
-              // Find last AI message and update tool calls
-              for (let i = newMessages.length - 1; i >= 0; i--) {
-                if (newMessages[i].role === 'ai') {
-                  const existingToolCalls = newMessages[i].toolCalls || [];
-
-                  // Helper to extract file path from args for matching
-                  const getFilePath = (args?: Record<string, unknown>) => {
-                    if (!args) return null;
-                    return args.filePath ?? args.file_path ?? args.path ?? args.filename ?? args.file ?? null;
-                  };
-
-                  const incomingFilePath = getFilePath(toolData?.args);
-
-                  // Find existing tool call by matching tool name AND file path (if available)
-                  const toolCallIndex = existingToolCalls.findIndex(tc => {
-                    if (tc.tool !== toolData?.tool) return false;
-
-                    if (toolData?.status === 'complete' || toolData?.status === 'error') {
-                      if (tc.status !== 'running' && tc.status !== 'pending') return false;
-                      const existingFilePath = getFilePath(tc.args);
-                      if (incomingFilePath && existingFilePath) {
-                        return existingFilePath === incomingFilePath;
-                      }
-                      return true;
-                    }
-
-                    if (toolData?.status === 'running' || toolData?.status === 'pending') {
-                      const existingFilePath = getFilePath(tc.args);
-                      if (incomingFilePath && existingFilePath) {
-                        return existingFilePath === incomingFilePath;
-                      }
-                      return (tc.status === 'running' || tc.status === 'pending');
-                    }
-
-                    return false;
-                  });
-
-                  if (toolCallIndex >= 0) {
-                    existingToolCalls[toolCallIndex] = {
-                      ...existingToolCalls[toolCallIndex],
-                      ...toolData,
-                      status: toolData?.status ?? existingToolCalls[toolCallIndex].status
-                    };
-                  } else {
-                    existingToolCalls.push({
-                      tool: toolData?.tool || 'unknown',
-                      args: toolData?.args,
-                      result: toolData?.result,
-                      status: toolData?.status || 'running'
-                    });
-                  }
-
-                  newMessages[i] = {
-                    ...newMessages[i],
-                    toolCalls: existingToolCalls,
-                    status: 'using_tool',
-                    toolName: toolData?.tool
-                  };
-                  break;
-                }
-              }
-              return newMessages;
-            });
-          });
-        } else if (parsed.type === 'partial') {
-          const fullContent = parsed.data?.fullContent as string | undefined;
-          ifMounted(() => {
-            useChatStore.getState().setMessages(prev => {
-              const newMessages = [...prev];
-              let aiIndex = -1;
-              for (let i = newMessages.length - 1; i >= 0; i--) {
-                if (newMessages[i].role === 'ai') {
-                  aiIndex = i;
-                  break;
-                }
-              }
-
-              if (aiIndex !== -1 && fullContent) {
-                newMessages[aiIndex] = { ...newMessages[aiIndex], content: fullContent, status: 'streaming' };
-              }
-
-              return newMessages;
-            });
-          });
-        } else if (parsed.type === 'complete') {
-          const response = parsed.data?.response as string | undefined;
-          ifMounted(() => {
-            useChatStore.getState().setMessages(prev => {
-              const newMessages = [...prev];
-              for (let i = newMessages.length - 1; i >= 0; i--) {
-                if (newMessages[i].role === 'ai') {
-                  const updatedToolCalls = newMessages[i].toolCalls?.map(tc => ({
-                    ...tc,
-                    status: tc.status === 'running' ? 'complete' as const : tc.status
-                  }));
-
-                  if (response && response.trim()) {
-                    newMessages[i] = {
-                      ...newMessages[i],
-                      content: response,
-                      status: 'complete',
-                      toolCalls: updatedToolCalls
-                    };
-                  } else {
-                    newMessages[i] = {
-                      ...newMessages[i],
-                      status: 'complete',
-                      toolCalls: updatedToolCalls
-                    };
-                  }
-                  break;
-                }
-              }
-              return newMessages;
-            });
-          });
-        } else if (parsed.type === 'error') {
-          const error = parsed.data?.error as string | undefined;
-          ifMounted(() => {
-            useChatStore.getState().setMessages(prev => {
-              const newMessages = [...prev];
-              for (let i = newMessages.length - 1; i >= 0; i--) {
-                if (newMessages[i].role === 'ai') {
-                  newMessages[i] = { ...newMessages[i], content: `Error: ${error}` };
-                  break;
-                }
-              }
-              return newMessages;
-            });
-          });
-        }
-
-        if (parsed.type === 'status') {
-          const status = parsed.data?.status;
-          ifMounted(() => useChatStore.getState().setIsStreaming(status === 'started' || status === 'processing'));
-        } else if (parsed.type === 'partial') {
-          ifMounted(() => useChatStore.getState().setIsStreaming(true));
-        } else if (parsed.type === 'sandbox') {
-          if (parsed.data?.sandboxId) {
-            const newSandboxId = parsed.data.sandboxId;
-            const replacedOld = parsed.data?.replacedOld as string | undefined;
-            console.log('[SSE] Received sandbox event:', { newSandboxId, sessionId: sess, isNew: parsed.data?.isNew, replacedOld });
-
-            ifMounted(() => {
-              console.log('[State] Setting sandboxId to:', newSandboxId);
-              useChatStore.getState().setSandboxId(newSandboxId);
-              useChatStore.getState().setShowSecondPanel(true);
-
-              // Trigger filesystem sync immediately when sandbox is created
-              useChatStore.getState().setIsSyncingFilesystem(true);
-              setTimeout(async () => {
-                try {
-                  const response = await fetch('/api/sync-filesystem', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      sandboxId: newSandboxId,
-                      sessionId: sess
-                    }),
-                  });
-                  if (response.ok) {
-                    console.log('[Sync] Filesystem sync completed after sandbox creation');
-                  } else {
-                    console.error('[Sync] Filesystem sync failed');
-                  }
-                } catch (err) {
-                  console.error('[Sync] Auto-sync failed:', err);
-                } finally {
-                  useChatStore.getState().setIsSyncingFilesystem(false);
-                }
-              }, 500);
-
-              // If this is replacing a deleted sandbox, update the session in database
-              if (replacedOld) {
-                console.log('[Database] Updating session with new sandbox ID');
-                updateSessionRef.current.mutate({
-                  id: sess,
-                  sandboxId: newSandboxId,
-                  sandboxCreatedAt: new Date()
-                });
-              }
-            });
-          }
-          if (parsed.data?.sandboxUrl) {
-            const newSandboxUrl = parsed.data.sandboxUrl;
-            ifMounted(() => {
-              const currentUrl = useChatStore.getState().sandboxUrl;
-              if (currentUrl !== newSandboxUrl) {
-                console.log('[Sandbox URL] Updating from', currentUrl, 'to', newSandboxUrl);
-                useChatStore.getState().setSandboxUrl(newSandboxUrl);
-                useChatStore.getState().setShowSecondPanel(true);
-                useChatStore.getState().setActiveTab('live preview');
-                useChatStore.getState().setIframeLoading(true);
-                useChatStore.getState().setSandboxCreatedAt(Date.now());
-                useChatStore.getState().setIsSandboxExpired(false);
-              } else {
-                console.log('[Sandbox URL] No change, keeping existing:', currentUrl);
-              }
-            });
-          }
-        } else if (parsed.type === 'complete' || parsed.type === 'error') {
-          ifMounted(() => useChatStore.getState().setIsStreaming(false));
-          if (parsed.data?.sandboxUrl) {
-            const newSandboxUrl = parsed.data.sandboxUrl;
-            ifMounted(() => {
-              const currentUrl = useChatStore.getState().sandboxUrl;
-              if (currentUrl !== newSandboxUrl) {
-                useChatStore.getState().setSandboxUrl(newSandboxUrl);
-                useChatStore.getState().setSandboxCreatedAt(Date.now());
-                useChatStore.getState().setIsSandboxExpired(false);
-              }
-            });
-          }
-        }
-      };
-
-      eventSource.onerror = () => {
-        ifMounted(() => useChatStore.getState().setIsStreaming(false));
-        if (retriesRef.current < MAX_RETRIES && mountedRef.current) {
-          const retryIn = 500 * 2 ** retriesRef.current;
-          retriesRef.current += 1;
-          setTimeout(() => {
-            if (mountedRef.current) startRealtimeSubscription(sess);
-          }, retryIn);
-        } else {
-          toast.error('Real-time connection failed');
-        }
-      };
-
-    } catch (error) {
-      console.error('Failed to start subscription:', error);
-      toast.error('Failed to start real-time updates');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Establish SSE connection when sessionId is set
-  useEffect(() => {
-    if (sessionId && !sessionId.startsWith('session-')) {
-      startRealtimeSubscription(sessionId);
-    }
-  }, [sessionId, startRealtimeSubscription]);
-
-  // Cleanup subscription on unmount
-  useEffect(() => {
-    return () => {
-      if (subscriptionRef.current) {
-        subscriptionRef.current.unsubscribe();
-      }
-    };
-  }, []);
-
-  // --- handleCodeChange: reads from store.getState() so never stale ---
+  // --- Code editor changes ---
   const handleCodeChange = useCallback((val: string | undefined) => {
-    const { selectedFile, sandboxId, isStreaming, updateFileContent } = useChatStore.getState();
+    const { selectedFile: file, sandboxId: sbx, isStreaming: streaming, updateFileContent } = useChatStore.getState();
     const newContent = val ?? "";
+    updateFileContent(file, newContent);
 
-    // Update file tree with new content
-    updateFileContent(selectedFile, newContent);
+    if (sbx && file && !streaming) {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      if (lastSavedContentRef.current[file] === newContent) return;
 
-    // Debounced sync to e2b filesystem (skip when agent is writing)
-    if (sandboxId && selectedFile && !isStreaming) {
-      // Cancel previous timeout
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-
-      // Check if content actually changed
-      if (lastSavedContentRef.current[selectedFile] === newContent) {
-        return;
-      }
-
-      // Set new timeout to save after 1 second of inactivity
       saveTimeoutRef.current = setTimeout(async () => {
-        // Re-read latest state at save time
-        const latestState = useChatStore.getState();
-        const currentFile = latestState.selectedFile;
-
         try {
           useChatStore.getState().setIsSyncingToE2B(true);
-          lastSavedContentRef.current[selectedFile] = newContent;
-
-          const response = await fetch('/api/write-to-sandbox', {
+          lastSavedContentRef.current[file] = newContent;
+          await fetch('/api/write-to-sandbox', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sandboxId,
-              filePath: selectedFile,
-              content: newContent,
-            }),
+            body: JSON.stringify({ sandboxId: sbx, filePath: file, content: newContent }),
           });
-
-          const data = await response.json();
-          if (response.ok) {
-            console.log('[Sync] Saved to e2b:', selectedFile);
-          } else {
-            console.error('[Sync] Failed to write to e2b:', data.error);
-            toast.error('Failed to sync to sandbox');
-          }
         } catch (error) {
           console.error('[Sync] Error writing to e2b:', error);
-          toast.error('Sync error');
         } finally {
           useChatStore.getState().setIsSyncingToE2B(false);
         }
       }, 1000);
     }
-  }, []); // Empty deps! Reads from store.getState() so never stale
+  }, []);
 
-  // Notify sidebar to refresh when messages change
+  // Check sandbox expiration
   useEffect(() => {
-    const hasUserMessages = messages.some(m => m.role === 'user');
-    if (hasUserMessages && typeof globalThis !== 'undefined') {
-      globalThis.dispatchEvent(new CustomEvent('chatUpdated'));
-    }
-  }, [messages]);
+    if (!sandboxCreatedAt || !sandboxUrl) return;
+    const checkExpiration = () => {
+      if (Date.now() - sandboxCreatedAt >= SANDBOX_EXPIRY_MS) setIsSandboxExpired(true);
+    };
+    checkExpiration();
+    const interval = setInterval(checkExpiration, 60000);
+    return () => clearInterval(interval);
+  }, [sandboxCreatedAt, sandboxUrl, setIsSandboxExpired]);
 
-  // Auto-save messages and sandbox data to database (debounced)
   useEffect(() => {
-    if (!sessionId || !sessionExistsRef.current || messages.length === 0) return;
+    if (isSandboxExpired) setActiveTab('code');
+  }, [isSandboxExpired, setActiveTab]);
 
+  // Auto-save session to database (file tree + sandbox state + threadId)
+  useEffect(() => {
+    if (!sessionId || !sessionExistsRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      const currentThreadId = useChatStore.getState().threadId;
       fetch(`/api/session/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: messages.map(m => ({
-            role: m.role,
-            content: m.content,
-            timestamp: m.timestamp,
-          })),
-          fileTree: fileTree,
+          threadId: currentThreadId || undefined,
+          fileTree: fileTree.length > 0 ? fileTree : undefined,
           sandboxId: sandboxId || undefined,
           sandboxUrl: sandboxUrl || undefined,
           sandboxCreatedAt: sandboxCreatedAt ? new Date(sandboxCreatedAt).toISOString() : undefined,
         }),
       }).catch(err => console.error('[DB] Failed to save session:', err));
     }, 2000);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [sessionId, fileTree, sandboxId, sandboxUrl, sandboxCreatedAt]);
 
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
-  }, [sessionId, messages, fileTree, sandboxId, sandboxUrl, sandboxCreatedAt]);
-
-  // Handler for sending a message
-  const handleSend = useCallback(() => {
-    const { message, sessionId, sandboxId } = useChatStore.getState();
-
-    if (!message.trim()) return;
-    if (isSending.current) {
-      return;
-    }
-
-    isSending.current = true;
-    const userMessage = message;
-    useChatStore.getState().setMessage("");
-
-    // Add user message to chat and ensure AI response placeholder
-    useChatStore.getState().setMessages((prev) => {
-      const newMessages: ChatMessage[] = [
-        ...prev,
-        {
-          role: "user",
-          content: userMessage,
-          timestamp: Date.now(),
-          id: `user-${Date.now()}`
-        }
-      ];
-      newMessages.push({
-        role: 'ai',
-        content: '',
-        timestamp: Date.now(),
-        id: `ai-${Date.now()}`,
-        status: 'thinking'
-      });
-      return newMessages;
-    });
-
-    // Start streaming mode
-    useChatStore.getState().setIsStreaming(true);
-
-    // IMPORTANT: Start SSE subscription BEFORE sending the message
-    startRealtimeSubscription(sessionId);
-
-    console.log('[handleSend] Current state - sandboxId:', sandboxId, 'sessionId:', sessionId);
-    if (sandboxId) {
-      useChatStore.getState().setShowSecondPanel(true);
-      console.log('[handleSend] Reusing existing sandbox:', sandboxId, 'for session:', sessionId);
-      invokeWithSandbox.mutate({
-        message: userMessage,
-        sandboxId,
-        sessionId
-      });
-    } else {
-      invoke.mutate({
-        message: userMessage,
-        sessionId
-      });
-    }
-  }, [invoke, invokeWithSandbox, startRealtimeSubscription]);
-
-  // Check sandbox expiration
+  // Notify sidebar
   useEffect(() => {
-    if (!sandboxCreatedAt || !sandboxUrl) return;
-
-    const checkExpiration = () => {
-      const elapsed = Date.now() - sandboxCreatedAt;
-      if (elapsed >= SANDBOX_EXPIRY_MS) {
-        setIsSandboxExpired(true);
-      }
-    };
-
-    // Check immediately
-    checkExpiration();
-
-    // Check every minute
-    const interval = setInterval(checkExpiration, 60000);
-    return () => clearInterval(interval);
-  }, [sandboxCreatedAt, sandboxUrl, setIsSandboxExpired]);
-
-  // Switch to code tab when sandbox expires
-  useEffect(() => {
-    if (isSandboxExpired) {
-      setActiveTab('code');
+    if (messages.some(m => m.role === 'user') && typeof globalThis !== 'undefined') {
+      globalThis.dispatchEvent(new CustomEvent('chatUpdated'));
     }
-  }, [isSandboxExpired, setActiveTab]);
+  }, [messages]);
 
-  // Auto-send initial message from home page
-  useEffect(() => {
-    if (shouldAutoSend && message.trim() && !hasAutoSent.current && messages.length === 1) {
-      hasAutoSent.current = true;
-      setShouldAutoSend(false);
-      setTimeout(() => {
-        handleSend();
-      }, 100);
-    }
-  }, [shouldAutoSend, message, messages.length, handleSend]);
-
-  // Extracted nested ternary rendering into an independent function for clarity
+  // --- Render ---
   const renderPreview = () => {
     if (isCheckingExpiration) {
       return (
@@ -1075,9 +515,7 @@ function Page({ params }: PageProps) {
     if (sandboxUrl && !isSandboxExpired) {
       return (
         <div className="relative w-full h-full flex flex-col bg-background">
-          {/* Browser Chrome */}
           <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 shrink-0">
-            {/* Navigation Buttons */}
             <div className="flex items-center gap-1 mr-2">
               <button
                 type="button"
@@ -1085,11 +523,7 @@ function Page({ params }: PageProps) {
                 onClick={() => {
                   setIframeLoading(true);
                   const iframe = document.querySelector('iframe[title="Sandbox Preview"]') as HTMLIFrameElement;
-                  if (iframe) {
-                    const currentSrc = iframe.src;
-                    iframe.src = '';
-                    setTimeout(() => { iframe.src = currentSrc; }, 0);
-                  }
+                  if (iframe) { const s = iframe.src; iframe.src = ''; setTimeout(() => { iframe.src = s; }, 0); }
                 }}
                 title="Refresh"
               >
@@ -1098,22 +532,15 @@ function Page({ params }: PageProps) {
                 </svg>
               </button>
             </div>
-
-            {/* URL Bar */}
             <div className="flex-1 flex items-center gap-2 px-3 py-1.5 bg-background rounded-md border text-sm">
               <svg className="w-3.5 h-3.5 text-green-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
               </svg>
-              <span className="text-muted-foreground truncate font-mono text-xs">
-                {sandboxUrl}
-              </span>
+              <span className="text-muted-foreground truncate font-mono text-xs">{sandboxUrl}</span>
               <button
                 type="button"
                 className="ml-auto p-0.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                onClick={() => {
-                  navigator.clipboard.writeText(sandboxUrl);
-                  toast.success('URL copied to clipboard');
-                }}
+                onClick={() => { navigator.clipboard.writeText(sandboxUrl); toast.success('URL copied'); }}
                 title="Copy URL"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1121,8 +548,6 @@ function Page({ params }: PageProps) {
                 </svg>
               </button>
             </div>
-
-            {/* External Link Button */}
             <button
               type="button"
               className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -1134,14 +559,8 @@ function Page({ params }: PageProps) {
               </svg>
             </button>
           </div>
-
-          {/* Iframe Container */}
           <div className="relative flex-1 min-h-0">
-            {iframeLoading && (
-              <div className="absolute inset-0 z-10">
-                <PreviewShimmer />
-              </div>
-            )}
+            {iframeLoading && <div className="absolute inset-0 z-10"><PreviewShimmer /></div>}
             <iframe
               src={sandboxUrl}
               className={`w-full h-full border-0 transition-opacity duration-300 ${iframeLoading ? 'opacity-0' : 'opacity-100'}`}
@@ -1161,9 +580,7 @@ function Page({ params }: PageProps) {
           <div className="text-6xl">⏱️</div>
           <div className="space-y-3">
             <h3 className="text-xl font-semibold text-foreground">Sandbox Expired</h3>
-            <p className="text-sm text-muted-foreground max-w-md">
-              This sandbox has expired after 25 minutes of inactivity.
-            </p>
+            <p className="text-sm text-muted-foreground max-w-md">This sandbox has expired after 25 minutes of inactivity.</p>
           </div>
         </div>
       );
@@ -1172,7 +589,6 @@ function Page({ params }: PageProps) {
     return null;
   };
 
-  // Render main content based on panel state and device type
   const renderMainContent = () => {
     if (!showSecondPanel) {
       return (
@@ -1183,8 +599,9 @@ function Page({ params }: PageProps) {
               message={message}
               setMessage={setMessage as Dispatch<SetStateAction<string>>}
               onSend={handleSend}
-              isLoading={invoke.isPending || invokeWithSandbox.isPending}
+              isLoading={stream.isLoading}
               isStreaming={isStreaming}
+              queue={stream.queue}
             />
           </div>
         </div>
@@ -1200,11 +617,12 @@ function Page({ params }: PageProps) {
           message={message}
           setMessage={setMessage as Dispatch<SetStateAction<string>>}
           handleSend={handleSend}
-          isLoading={invoke.isPending || invokeWithSandbox.isPending}
+          isLoading={stream.isLoading}
           isStreaming={isStreaming}
           renderPreview={renderPreview}
           handleCodeChange={handleCodeChange}
           guestCredentials={guestCredentials}
+          queue={stream.queue}
         />
       );
     }
@@ -1215,13 +633,14 @@ function Page({ params }: PageProps) {
         message={message}
         setMessage={setMessage as Dispatch<SetStateAction<string>>}
         handleSend={handleSend}
-        isLoading={invoke.isPending || invokeWithSandbox.isPending}
+        isLoading={stream.isLoading}
         isStreaming={isStreaming}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         handleCodeChange={handleCodeChange}
         guestCredentials={guestCredentials}
         renderPreview={renderPreview}
+        queue={stream.queue}
       />
     );
   };
@@ -1231,9 +650,9 @@ function Page({ params }: PageProps) {
       {/* Status Bar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex items-center gap-3">
-          <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-muted-foreground/30'}`} />
+          <div className={`w-2 h-2 rounded-full ${stream.isLoading ? 'bg-green-500 animate-pulse' : runId ? 'bg-amber-500' : 'bg-muted-foreground/30'}`} />
           <span className="text-sm font-medium">
-            {isStreaming ? 'AI is thinking...' : 'Ready'}
+            {stream.isLoading ? 'AI is thinking...' : runId ? 'Disconnected — agent may still be running' : 'Ready'}
           </span>
           {isSharedAccess && (
             <Badge variant="secondary" className="text-xs">
@@ -1242,21 +661,39 @@ function Page({ params }: PageProps) {
             </Badge>
           )}
           {messages.length > 1 && (
-            <span className="text-xs text-muted-foreground">
-              {messages.length} messages
-            </span>
+            <span className="text-xs text-muted-foreground">{messages.length} messages</span>
           )}
           {sandboxUrl && (
             <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-              {' '}
-              Sandbox Active
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> Sandbox Active
             </span>
           )}
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Tab Switcher */}
+          {/* Disconnect / Rejoin buttons */}
+          {stream.isLoading && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/20"
+              onClick={handleDisconnect}
+            >
+              <Unplug className="w-3 h-3 mr-1" />
+              Disconnect
+            </Button>
+          )}
+          {!stream.isLoading && runId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-950/20"
+              onClick={handleRejoin}
+            >
+              <Plug className="w-3 h-3 mr-1" />
+              Rejoin
+            </Button>
+          )}
           {showSecondPanel && (
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList className="h-7 bg-muted/50">
@@ -1266,7 +703,6 @@ function Page({ params }: PageProps) {
             </Tabs>
           )}
 
-          {/* Connected Users Avatars */}
           {connectedUsers.length > 0 && (
             <TooltipProvider>
               <div className="flex items-center gap-1">
@@ -1279,14 +715,13 @@ function Page({ params }: PageProps) {
                         </AvatarFallback>
                       </Avatar>
                     </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">{user.name}</p>
-                    </TooltipContent>
+                    <TooltipContent><p className="text-xs">{user.name}</p></TooltipContent>
                   </Tooltip>
                 ))}
               </div>
             </TooltipProvider>
           )}
+
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
           {messages.length > 1 && (
             <Button
@@ -1301,7 +736,6 @@ function Page({ params }: PageProps) {
                     id: 'clear-' + Date.now()
                   }];
                   setMessages(newMessages);
-                  // Clear in database
                   try {
                     await fetch(`/api/session/${sessionId}`, {
                       method: 'PATCH',
@@ -1326,18 +760,6 @@ function Page({ params }: PageProps) {
       </div>
     </div>
   );
-}
-
-// Helper to find first file path in a tree (used in SSE handler)
-function findFirstFile(nodes: FileNode[]): string | null {
-  for (const node of nodes) {
-    if (node.type === 'file') return node.path;
-    if (node.type === 'folder' && node.children) {
-      const found = findFirstFile(node.children);
-      if (found) return found;
-    }
-  }
-  return null;
 }
 
 export default Page;

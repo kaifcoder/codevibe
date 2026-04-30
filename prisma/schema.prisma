@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
   output   = "../src/generated/prisma"
@@ -15,21 +9,20 @@ datasource db {
 }
 
 model Session {
-  id          String   @id @default(cuid())
-  title       String   @default("Untitled Session")
-  code        String   @default("")
-  language    String   @default("typescript")
-  messages    Json     @default("[]")
-  fileTree    Json     @default("[]")
-  shareToken  String   @unique @default(cuid())
-  isPublic          Boolean   @default(false)
-  sandboxId         String?
-  sandboxUrl        String?
-  sandboxCreatedAt  DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  userId      String?   // Clerk user ID
-  
+  id               String    @id
+  title            String    @default("Untitled Session")
+  threadId         String?   // LangGraph thread ID — messages stored by PG checkpointer
+  fileTree         Json      @default("[]") // File tree with content — survives sandbox expiry
+  shareToken       String    @unique @default(cuid())
+  isPublic         Boolean   @default(false)
+  sandboxId        String?
+  sandboxUrl       String?
+  sandboxCreatedAt DateTime?
+  userId           String?   // Clerk user ID
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
   @@index([shareToken])
   @@index([userId])
+  @@index([threadId])
 }

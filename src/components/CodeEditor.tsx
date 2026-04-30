@@ -1,8 +1,8 @@
 "use client";
 
-import * as monaco from "monaco-editor";
+import type * as MonacoTypes from "monaco-editor";
 import { useRef, useEffect, useState } from "react";
-import MonacoEditor from "@monaco-editor/react";
+import MonacoEditor, { type Monaco } from "@monaco-editor/react";
 import { Card } from "./ui/card";
 import { useTheme } from "next-themes";
 import { initCollaboration } from "@/lib/collaboration/initCollaboration";
@@ -15,6 +15,7 @@ interface CodeEditorProps {
   language?: string;
   label?: string;
   autoScroll?: boolean;
+  isStreaming?: boolean;
   collaborative?: boolean;
   roomId?: string;
   username?: string;
@@ -29,6 +30,7 @@ export function CodeEditor({
   language = "typescript",
   label,
   autoScroll = false,
+  isStreaming = false,
   collaborative = false,
   roomId,
   username,
@@ -36,7 +38,7 @@ export function CodeEditor({
   onUsersChange,
   onConnectionStatusChange,
 }: Readonly<CodeEditorProps>) {
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const editorRef = useRef<MonacoTypes.editor.IStandaloneCodeEditor | null>(null);
   const bindingRef = useRef<{ destroy: () => void } | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
   const [activeUsers, setActiveUsers] = useState(0);
@@ -44,8 +46,9 @@ export function CodeEditor({
   const setupInProgressRef = useRef(false);
   const currentRoomRef = useRef<string>('');
   const { resolvedTheme } = useTheme();
-  const decorationsCollectionRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+  const decorationsCollectionRef = useRef<MonacoTypes.editor.IEditorDecorationsCollection | null>(null);
   const highlightTimeoutsRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
+  const monacoRef = useRef<Monaco | null>(null);
 
   // Function to highlight changed lines with fade effect
   const highlightChangedLines = (startLine: number, endLine: number) => {
@@ -69,24 +72,23 @@ export function CodeEditor({
     const newDecorations = [];
     for (let line = startLine; line <= endLine; line++) {
       newDecorations.push({
-        range: new monaco.Range(line, 1, line, 1),
+        range: new (monacoRef.current!.Range)(line, 1, line, 1),
         options: {
           isWholeLine: true,
           className: 'ai-change-highlight',
-          inlineClassName: 'ai-change-highlight-inline'
         }
       });
     }
 
     decorationsCollectionRef.current.append(newDecorations);
 
-    // Set timeout to fade out after 2 seconds
+    // Set timeout to remove decorations after animation completes
     const timeout = setTimeout(() => {
       if (decorationsCollectionRef.current) {
         decorationsCollectionRef.current.clear();
       }
       highlightTimeoutsRef.current.clear();
-    }, 2000);
+    }, 3000);
 
     // Store timeout reference
     for (let line = startLine; line <= endLine; line++) {
@@ -106,6 +108,26 @@ export function CodeEditor({
       }
     }
   }, [value, autoScroll]);
+
+  // Fallback: push value into editor when Yjs hasn't delivered content
+  // (only needed when NOT streaming — streaming uses Monaco's value prop directly)
+  useEffect(() => {
+    if (!collaborative || isStreaming || !editorRef.current || !value) return;
+    const model = editorRef.current.getModel();
+    if (!model) return;
+    const currentContent = model.getValue();
+    if (currentContent.length === 0 && value.length > 0) {
+      model.setValue(value);
+    }
+  }, [collaborative, value, isStreaming]);
+
+  // Pause Yjs binding during streaming to prevent feedback loops
+  useEffect(() => {
+    if (isStreaming && bindingRef.current) {
+      bindingRef.current.destroy();
+      bindingRef.current = null;
+    }
+  }, [isStreaming]);
 
   // Setup Yjs collaborative editing
   useEffect(() => {
@@ -348,14 +370,15 @@ export function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collaborative, roomId, editorMounted]);
 
-  const handleEditorDidMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
+  const handleEditorDidMount = (editor: MonacoTypes.editor.IStandaloneCodeEditor, monacoInstance: Monaco) => {
     console.log('[CodeEditor] Editor mounted, collaborative:', collaborative, 'roomId:', roomId);
     editorRef.current = editor;
+    monacoRef.current = monacoInstance;
     setEditorMounted(true);
   };
 
   // Configure Monaco diagnostics before mount
-  const handleEditorWillMount = (monacoInstance: typeof monaco) => {
+  const handleEditorWillMount = (monacoInstance: Monaco) => {
     // Disable unreachable code warnings for TypeScript
     monacoInstance.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
       noSemanticValidation: false,
@@ -381,15 +404,16 @@ export function CodeEditor({
     });
   };
   
-  // Update editor read-only state dynamically when agentEditing changes
+  // Update editor read-only state dynamically
   useEffect(() => {
-    if (editorRef.current && collaborative) {
-      // In collaborative mode, only disable editing when not connected
-      editorRef.current.updateOptions({
-        readOnly: connectionStatus !== 'connected',
-      });
+    if (editorRef.current) {
+      if (isStreaming) {
+        editorRef.current.updateOptions({ readOnly: true });
+      } else if (collaborative) {
+        editorRef.current.updateOptions({ readOnly: connectionStatus !== 'connected' });
+      }
     }
-  }, [collaborative, connectionStatus]);
+  }, [collaborative, connectionStatus, isStreaming]);
   return (
     <Card className="w-full h-full flex-1 flex flex-col p-0 overflow-hidden border-0 shadow-none rounded-none">
       {label && (
@@ -420,8 +444,8 @@ export function CodeEditor({
       )}
       <div className="flex-1 h-full">
         <MonacoEditor
-          value={collaborative ? undefined : value}
-          onChange={collaborative ? undefined : onChange}
+          value={isStreaming ? value : (collaborative ? undefined : value)}
+          onChange={isStreaming ? undefined : (collaborative ? undefined : onChange)}
           language={language}
           height="100%"
           theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
@@ -433,7 +457,7 @@ export function CodeEditor({
             scrollBeyondLastLine: false,
             wordWrap: "on",
             automaticLayout: true,
-            readOnly: collaborative ? connectionStatus !== 'connected' : false,
+            readOnly: isStreaming ? true : (collaborative ? connectionStatus !== 'connected' : false),
             cursorStyle: 'line',
           }}
         />

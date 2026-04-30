@@ -125,20 +125,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         
         // Map to ChatSession format
         const chats: ChatSession[] = sessions
-          .filter((session: any) => {
-            // Only show chats that have user messages
-            const messages = Array.isArray(session.messages) ? session.messages : []
-            return messages.some((m: any) => m.role === 'user')
-          })
           .map((session: any) => {
-            const messages = Array.isArray(session.messages) ? session.messages : []
-            const firstMessage = messages.find((m: any) => m.role === 'user')
-            const title = session.title || firstMessage?.content?.slice(0, 50) || 'New Chat'
-            const timestamp = new Date(session.createdAt).getTime()
-            
+            const title = session.title || 'New Chat'
+            const timestamp = new Date(session.updatedAt || session.createdAt).getTime()
+
             return {
               id: session.id,
-              title: title.length > 50 ? title + '...' : title,
+              title: title.length > 50 ? title.slice(0, 50) + '...' : title,
               timestamp
             }
           })

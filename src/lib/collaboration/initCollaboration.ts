@@ -195,3 +195,33 @@ export function getExistingYText(roomId: string): Y.Text | null {
   if (!provider || !provider.synced) return null;
   return doc.getText('monaco');
 }
+
+/**
+ * Wait for an existing provider to sync, then return its Y.Text.
+ * Returns null if no provider exists for this room.
+ * Times out after the specified ms.
+ */
+export function waitForYText(roomId: string, timeoutMs = 5000): Promise<Y.Text | null> {
+  const doc = documents.get(roomId);
+  const provider = providers.get(roomId);
+  if (!doc || !provider) return Promise.resolve(null);
+  if (provider.synced) return Promise.resolve(doc.getText('monaco'));
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const onSynced = () => {
+      if (settled) return;
+      settled = true;
+      provider.off('synced', onSynced);
+      resolve(doc.getText('monaco'));
+    };
+    provider.on('synced', onSynced);
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        provider.off('synced', onSynced);
+        resolve(null);
+      }
+    }, timeoutMs);
+  });
+}
