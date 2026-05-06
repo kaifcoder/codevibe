@@ -14,6 +14,7 @@ import type { MessageQueue } from "@/components/QueueList";
 import { CodeEditor } from "@/components/CodeEditor";
 import { FileTree } from "@/components/FileTree";
 import { useChatStore } from "@/stores/chat-store";
+import { useCollaboration } from "@/hooks/use-collaboration";
 import type { Dispatch, SetStateAction } from "react";
 
 export interface DesktopChatLayoutProps {
@@ -26,7 +27,6 @@ export interface DesktopChatLayoutProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   handleCodeChange: (value: string | undefined) => void;
-  guestCredentials: { username: string; userId: string } | null;
   renderPreview: () => React.ReactNode;
   queue?: MessageQueue;
 }
@@ -41,27 +41,20 @@ export function DesktopChatLayout({
   activeTab,
   setActiveTab,
   handleCodeChange,
-  guestCredentials,
   renderPreview,
   queue,
 }: Readonly<DesktopChatLayoutProps>) {
-  // Read file/editor state directly from store — survives tab switches
   const fileTree = useChatStore(s => s.fileTree);
   const selectedFile = useChatStore(s => s.selectedFile);
   const openFiles = useChatStore(s => s.openFiles);
   const sandboxId = useChatStore(s => s.sandboxId);
   const sessionId = useChatStore(s => s.sessionId);
   const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
-  const connectionStatus = useChatStore(s => s.connectionStatus);
-  const connectedUsers = useChatStore(s => s.connectedUsers);
-  const isSyncingToE2B = useChatStore(s => s.isSyncingToE2B);
   const streamingFiles = useChatStore(s => s.streamingFiles);
   const setSelectedFile = useChatStore(s => s.setSelectedFile);
   const setOpenFiles = useChatStore(s => s.setOpenFiles);
-  const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
-  const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
   const selectedFileContent = useChatStore(s => s.getFileContent(s.selectedFile));
-
+  const { yText, provider } = useCollaboration(sessionId, selectedFile);
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full">
       <ResizablePanel defaultSize={30} minSize={20}>
@@ -202,40 +195,18 @@ export function DesktopChatLayout({
                         </div>
                         {/* Connection Status and Sync Indicator */}
                         <div className="flex items-center gap-3 px-3 py-1.5 text-xs border-l shrink-0">
-                          {/* Yjs Connection Status */}
-                          <div className="flex items-center gap-1">
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                              (() => {
-                                switch (connectionStatus) {
-                                  case 'connected': return 'bg-green-500';
-                                  case 'connecting': return 'bg-yellow-500 animate-pulse';
-                                  default: return 'bg-gray-400';
-                                }
-                              })()
-                            }`} />
-                            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                              {(() => {
-                                switch (connectionStatus) {
-                                  case 'connected': return 'Live';
-                                  case 'connecting': return 'Connecting';
-                                  default: return 'Offline';
-                                }
-                              })()}
-                            </span>
-                          </div>
-                          {connectionStatus === 'connected' && (
-                            <span className="text-[10px] text-muted-foreground">
-                              • {connectedUsers.length + 1} {connectedUsers.length + 1 === 1 ? 'user' : 'users'}
-                            </span>
+                          {streamingFiles.length > 0 && (
+                            <div className="flex items-center gap-1 text-emerald-500">
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <span className="text-[10px] uppercase tracking-wide">AI Writing</span>
+                            </div>
                           )}
-                          {/* E2B Sync Status */}
-                          {isSyncingToE2B && (
+                          {provider && (
                             <div className="flex items-center gap-1 text-blue-500">
-                              <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                              </svg>
-                              <span className="text-[10px] uppercase tracking-wide">Syncing to E2B</span>
+                              <div className={`w-1.5 h-1.5 rounded-full ${provider.synced ? 'bg-blue-500' : 'bg-yellow-500 animate-pulse'}`} />
+                              <span className="text-[10px] uppercase tracking-wide">
+                                {provider.synced ? 'Synced' : 'Syncing'}
+                              </span>
                             </div>
                           )}
                         </div>
@@ -247,22 +218,16 @@ export function DesktopChatLayout({
                             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                             <span className="text-[10px] text-muted-foreground font-medium">Writing...</span>
                           </div>
-                          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background/60 to-transparent" />
                         </div>
                       )}
                       <CodeEditor
-                        key={`${sessionId}-${selectedFile}`}
                         value={selectedFileContent}
                         onChange={handleCodeChange}
                         language="typescript"
                         autoScroll={streamingFiles.includes(selectedFile)}
                         isStreaming={streamingFiles.includes(selectedFile)}
-                        collaborative={true}
-                        roomId={`${sessionId}-${selectedFile}`}
-                        username={guestCredentials?.username || 'User'}
-                        userId={guestCredentials?.userId || sessionId}
-                        onUsersChange={setConnectedUsers}
-                        onConnectionStatusChange={setConnectionStatus}
+                        yText={yText}
+                        provider={provider}
                       />
                       </div>
                     </>

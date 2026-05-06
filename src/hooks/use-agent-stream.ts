@@ -167,6 +167,17 @@ export function useAgentStream(threadId: string | null) {
             store.setFileTree(prev =>
               updateFileInTree(prev, filePath, () => content)
             );
+            // Push chunk to Yjs for real-time collaboration
+            const roomId = `${store.sessionId}-${filePath}`;
+            import("@/lib/collaboration").then(({ getExistingYText }) => {
+              const yText = getExistingYText(roomId);
+              if (yText) {
+                yText.doc!.transact(() => {
+                  yText.delete(0, yText.length);
+                  yText.insert(0, content);
+                });
+              }
+            });
           }
         } else if (action === 'streaming_end') {
           store.removeStreamingFile(filePath);
@@ -178,13 +189,12 @@ export function useAgentStream(threadId: string | null) {
               }
               return updateFileInTree(prev, filePath, () => content);
             });
-            // Sync to Yjs
-            import('@/lib/collaboration').then(({ updateYjsDocument }) => {
-              const sessionId = useChatStore.getState().sessionId;
-              const roomId = `${sessionId}-${filePath}`;
-              updateYjsDocument(roomId, content).catch((err: Error) => {
-                console.error('[Agent] Failed to update Yjs:', err);
-              });
+            // Push final content to Yjs
+            const roomId = `${store.sessionId}-${filePath}`;
+            import("@/lib/collaboration/updateYjsDocument").then(({ updateYjsDocument }) => {
+              updateYjsDocument(roomId, content).catch(err =>
+                console.warn('[Yjs] Failed to sync file content:', err)
+              );
             });
           }
         }
