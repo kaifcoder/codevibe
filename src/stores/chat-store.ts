@@ -280,14 +280,19 @@ export const useChatStore = create<ChatStore>()(
       name: 'codevibe-session',
       storage: createJSONStorage(() => {
         if (typeof window === 'undefined') {
-          // SSR: return a no-op storage
           return {
             getItem: () => null,
             setItem: () => {},
             removeItem: () => {},
           };
         }
-        return sessionStorage;
+        // Per-chat storage: key includes the chat ID from the URL
+        const chatId = window.location.pathname.split('/chat/')[1]?.split('/')[0]?.split('?')[0] || '';
+        return {
+          getItem: (name: string) => sessionStorage.getItem(`${name}-${chatId}`),
+          setItem: (name: string, value: string) => sessionStorage.setItem(`${name}-${chatId}`, value),
+          removeItem: (name: string) => sessionStorage.removeItem(`${name}-${chatId}`),
+        };
       }),
       partialize: (state) => ({
         sessionId: state.sessionId,

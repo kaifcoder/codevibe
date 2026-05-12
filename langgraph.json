@@ -1,5 +1,6 @@
 {
   "node_version": "22",
+  "dependencies": ["."],
   "graphs": {
     "agent": "./src/lib/agent.ts:agent"
   },

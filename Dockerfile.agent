@@ -1,0 +1,11 @@
+FROM langchain/langgraphjs-api:22
+
+WORKDIR /deps/codevibe
+
+# Copy only dependency manifests first for layer caching
+COPY package.json package-lock.json ./
+
+RUN npm ci
+
+# Copy the rest of the source code (cache-busting only rebuilds from here)
+COPY . .

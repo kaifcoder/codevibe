@@ -9,7 +9,9 @@
     "start": "next start",
     "lint": "next lint",
     "yjs": "node yjs-server.js",
-    "agent": "npx @langchain/langgraph-cli dev"
+    "agent": "npx @langchain/langgraph-cli dev",
+    "agent:docker": "docker compose up --build",
+    "agent:docker:down": "docker compose down"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.36.10",
