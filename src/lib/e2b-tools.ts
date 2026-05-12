@@ -13,7 +13,6 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
   if (entry) {
     const sbx = await getSandbox(entry.sandboxId);
     if (sbx) return sbx;
-    // Sandbox expired — fall through to create a new one
     config.writer?.({ type: 'sandboxExpired', sandboxId: entry.sandboxId });
   }
 
@@ -23,16 +22,64 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
   const sandboxUrl = `https://${host}`;
   registerSandbox(threadId, sbx.sandboxId, sandboxUrl);
   config.writer?.({ type: 'sandboxCreated', sandboxId: sbx.sandboxId, sandboxUrl, isNew: true });
+
+  // Emit initial file tree so frontend shows the structure immediately
+  scanAndEmitFileTree(sbx, config).catch(() => {});
+
   return sbx;
+}
+
+async function scanAndEmitFileTree(sbx: Sandbox, config: LangGraphRunnableConfig) {
+  const excludes = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.cache', 'components/ui', 'nextjs-app']);
+  const binaryExtensions = new Set([
+    '.ico', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp',
+    '.mp4', '.mov', '.avi', '.mp3', '.wav',
+    '.zip', '.tar', '.gz', '.rar',
+    '.exe', '.dll', '.so', '.dylib',
+    '.pdf', '.doc', '.docx',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot'
+  ]);
+  const lockFiles = new Set(['.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
+
+  interface FileInfo { name: string; path: string; type: 'file' | 'folder'; children?: FileInfo[]; content?: string; }
+
+  async function scan(dirPath: string): Promise<FileInfo[]> {
+    try {
+      const files = await sbx.files.list(dirPath);
+      const result: FileInfo[] = [];
+      for (const file of files) {
+        if (excludes.has(file.name)) continue;
+        const fullPath = dirPath === '/' ? `/${file.name}` : `${dirPath}/${file.name}`;
+        const relativePath = fullPath.startsWith('/home/user/') ? fullPath.substring('/home/user/'.length) : fullPath;
+        if (Array.from(excludes).some(exc => relativePath.includes(exc + '/'))) continue;
+        if (file.type === 'dir') {
+          const children = await scan(fullPath);
+          if (children.length > 0) result.push({ name: file.name, path: relativePath, type: 'folder', children });
+        } else {
+          const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+          if (binaryExtensions.has(ext) || lockFiles.has(file.name)) continue;
+          let content = '';
+          try { if (file.size < 100000) content = (await sbx.files.read(fullPath)).replaceAll('\x00', ''); } catch {}
+          result.push({ name: file.name, path: relativePath, type: 'file', content });
+        }
+      }
+      return result.sort((a, b) => { if (a.type !== b.type) return a.type === 'folder' ? -1 : 1; return a.name.localeCompare(b.name); });
+    } catch { return []; }
+  }
+
+  const fileTree = await scan('/home/user');
+  config.writer?.({ type: 'fileTreeSync', fileTree });
 }
 
 const runCommand = tool(
   async ({ command }: { command: string }, config: LangGraphRunnableConfig) => {
     config.writer?.({ type: 'tool_progress', tool: 'e2b_run_command', args: { command }, message: `Running: ${command}`, status: 'running' });
     const sbx = await resolveSandbox(config);
-    const result = await sbx.commands.run(command);
+    const result = await sbx.commands.run(command, { timeoutMs: 60000 });
     if (result.exitCode !== 0) {
-      throw new Error(`Exit code ${result.exitCode}: ${result.stderr}`);
+      const errorOutput = `ERROR (exit ${result.exitCode}):\n${result.stderr || result.stdout || 'Unknown error'}`;
+      config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: `FAILED: ${errorOutput.slice(0, 200)}` });
+      return errorOutput;
     }
     const output = result.stdout || '(no output)';
     config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: output.slice(0, 200) });
@@ -40,7 +87,7 @@ const runCommand = tool(
   },
   {
     name: 'e2b_run_command',
-    description: 'Run a shell command in the sandbox. Requires create_sandbox to have been called first.',
+    description: 'Run a shell command in the sandbox. Returns error output (instead of failing) so you can fix issues.',
     schema: z.object({ command: z.string().min(1).describe('Shell command to run') }),
   }
 );
@@ -52,21 +99,54 @@ const writeFile = tool(
     config.writer?.({ type: 'tool_progress', tool: 'e2b_write_file', args: { path }, message: `Writing ${path}...`, status: 'running' });
 
     // Emit content in chunks for typing effect
-    const CHUNK_SIZE = 80;
+    const CHUNK_SIZE = 200;
     for (let i = 0; i < content.length; i += CHUNK_SIZE) {
       config.writer?.({ type: 'codePatch', filePath: path, content: content.slice(0, i + CHUNK_SIZE), action: 'streaming_chunk' });
+      if (i + CHUNK_SIZE < content.length) {
+        await new Promise(r => setTimeout(r, 15));
+      }
     }
 
     await sbx.files.write(path, content);
 
     config.writer?.({ type: 'codePatch', filePath: path, content, action: 'streaming_end' });
+
+    // Check for compilation errors after writing .tsx/.ts/.jsx/.js files
+    const ext = path.substring(path.lastIndexOf('.'));
+    if (['.tsx', '.ts', '.jsx', '.js'].includes(ext)) {
+      try {
+        const check = await sbx.commands.run(
+          `curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 2>/dev/null && cat /tmp/next-error 2>/dev/null || true`,
+          { timeoutMs: 5000 }
+        );
+        // Also check Next.js compilation by requesting the page
+        const pageCheck = await sbx.commands.run(
+          `curl -s http://localhost:3000 2>/dev/null | grep -o 'Server Error\\|Unhandled Runtime Error\\|Module not found\\|SyntaxError\\|TypeError\\|Cannot find module' | head -1`,
+          { timeoutMs: 5000 }
+        );
+        if (pageCheck.stdout && pageCheck.stdout.trim()) {
+          // Get more details about the error
+          const errorDetail = await sbx.commands.run(
+            `curl -s http://localhost:3000 2>/dev/null | grep -A5 -o 'Error:.*' | head -10`,
+            { timeoutMs: 5000 }
+          );
+          const errorMsg = errorDetail.stdout?.trim() || pageCheck.stdout.trim();
+          const result = `Wrote ${content.length} chars to ${path}\n\n⚠️ COMPILATION ERROR DETECTED:\n${errorMsg}\n\nPlease fix this error before continuing.`;
+          config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result: `WROTE but ERROR: ${errorMsg.slice(0, 100)}` });
+          return result;
+        }
+      } catch {
+        // Ignore check failures — dev server might still be compiling
+      }
+    }
+
     const result = `Wrote ${content.length} chars to ${path}`;
     config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result });
     return result;
   },
   {
     name: 'e2b_write_file',
-    description: 'Create or overwrite a file. Directories are created automatically. To edit a file, read it first, modify the content, then write the full file back. Requires create_sandbox first.',
+    description: 'Create or overwrite a file. Directories are created automatically. To edit a file, read it first, modify the content, then write the full file back. After writing .ts/.tsx files, checks for compilation errors and reports them.',
     schema: z.object({
       path: z.string().min(1).describe('File path (e.g. "app/page.tsx")'),
       content: z.string().describe('Complete file content')

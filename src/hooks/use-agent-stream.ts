@@ -112,6 +112,8 @@ function updateFileInTree(nodes: FileNode[], path: string, updater: (existing: s
 
 export function useAgentStream(threadId: string | null) {
   const lastSavedContentRef = useRef<Record<string, string>>({});
+  const streamingLengthRef = useRef<Record<string, number>>({});
+  const yjsFlushTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const handleCustomEvent = useCallback((event: CustomEvent) => {
     const store = useChatStore.getState();
@@ -150,6 +152,7 @@ export function useAgentStream(threadId: string | null) {
         if (!filePath) break;
 
         if (action === 'streaming_start') {
+          streamingLengthRef.current[filePath] = 0;
           store.addStreamingFile(filePath);
           store.setSelectedFile(filePath);
           const currentOpen = store.openFiles;
@@ -162,25 +165,59 @@ export function useAgentStream(threadId: string | null) {
             }
             return prev;
           });
+          // Clear Yjs doc at start for a fresh write
+          const roomId = `${store.sessionId}-${filePath}`;
+          import("@/lib/collaboration").then(({ getExistingYText }) => {
+            const yText = getExistingYText(roomId);
+            if (yText && yText.length > 0) {
+              yText.doc!.transact(() => {
+                yText.delete(0, yText.length);
+              });
+            }
+          });
         } else if (action === 'streaming_chunk') {
           if (content) {
             store.setFileTree(prev =>
               updateFileInTree(prev, filePath, () => content)
             );
-            // Push chunk to Yjs for real-time collaboration
-            const roomId = `${store.sessionId}-${filePath}`;
-            import("@/lib/collaboration").then(({ getExistingYText }) => {
-              const yText = getExistingYText(roomId);
-              if (yText) {
-                yText.doc!.transact(() => {
-                  yText.delete(0, yText.length);
-                  yText.insert(0, content);
-                });
+            // Incremental append to Yjs — only insert the new delta
+            const prevLength = streamingLengthRef.current[filePath] || 0;
+            const delta = content.slice(prevLength);
+            streamingLengthRef.current[filePath] = content.length;
+
+            if (delta.length > 0) {
+              // Debounce Yjs updates: batch rapid chunks into ~50ms windows
+              if (yjsFlushTimerRef.current[filePath]) {
+                clearTimeout(yjsFlushTimerRef.current[filePath]);
               }
-            });
+              const capturedContent = content;
+              const capturedPrevLength = prevLength;
+              yjsFlushTimerRef.current[filePath] = setTimeout(() => {
+                delete yjsFlushTimerRef.current[filePath];
+                const roomId = `${store.sessionId}-${filePath}`;
+                import("@/lib/collaboration").then(({ getExistingYText }) => {
+                  const yText = getExistingYText(roomId);
+                  if (yText) {
+                    const appendDelta = capturedContent.slice(capturedPrevLength);
+                    if (appendDelta.length > 0) {
+                      yText.doc!.transact(() => {
+                        // Append at end — avoids expensive delete+reinsert
+                        yText.insert(yText.length, appendDelta);
+                      });
+                    }
+                  }
+                });
+              }, 50);
+            }
           }
         } else if (action === 'streaming_end') {
           store.removeStreamingFile(filePath);
+          delete streamingLengthRef.current[filePath];
+          // Cancel any pending debounced flush
+          if (yjsFlushTimerRef.current[filePath]) {
+            clearTimeout(yjsFlushTimerRef.current[filePath]);
+            delete yjsFlushTimerRef.current[filePath];
+          }
           if (content) {
             lastSavedContentRef.current[filePath] = content;
             store.setFileTree(prev => {
@@ -189,7 +226,7 @@ export function useAgentStream(threadId: string | null) {
               }
               return updateFileInTree(prev, filePath, () => content);
             });
-            // Push final content to Yjs
+            // Final reconciliation: ensure Yjs matches the final content exactly
             const roomId = `${store.sessionId}-${filePath}`;
             import("@/lib/collaboration/updateYjsDocument").then(({ updateYjsDocument }) => {
               updateYjsDocument(roomId, content).catch(err =>

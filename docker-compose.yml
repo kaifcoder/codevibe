@@ -1,0 +1,32 @@
+services:
+  langgraph-redis:
+    image: redis:6
+    pull_policy: missing
+    healthcheck:
+      test: "redis-cli ping"
+      interval: 5s
+      timeout: 1s
+      retries: 5
+
+  langgraph-api:
+    ports:
+      - "2024:8000"
+    depends_on:
+      langgraph-redis:
+        condition: service_healthy
+    environment:
+      REDIS_URI: "redis://langgraph-redis:6379"
+      POSTGRES_URI: "postgres://postgres:password@host.docker.internal:5433/langgraph?sslmode=disable"
+      LANGSERVE_GRAPHS: '{"agent": "./src/lib/agent.ts:agent"}'
+      DOCKER_CONTAINER: "true"
+    env_file:
+      - .env
+    pull_policy: missing
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    healthcheck:
+      test: "python /api/healthcheck.py"
+      interval: 60s
+      start_interval: 1s
+      start_period: 10s

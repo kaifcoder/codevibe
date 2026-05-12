@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.langgraph_api
+dist
+build
+.cache
+.env
+.env.local
+*.log
+sandbox-templates
+prisma/migrations
+src/generated

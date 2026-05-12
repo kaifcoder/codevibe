@@ -82,14 +82,17 @@ When modifying an existing file:
 - ❌ Using barrel imports from @/components/ui
 
 ## Error Handling
-When you see errors:
-1. Use Playwright silently to diagnose (don't tell user)
-2. Common fixes:
+When a tool returns an error (e.g. "COMPILATION ERROR DETECTED" or "ERROR (exit ...)"):
+1. **STOP and fix immediately** - Do not continue writing more files until the error is resolved
+2. Read the error message carefully and identify the root cause
+3. Common fixes:
    - Blank page → Check imports, add "use client"
    - Module not found → Fix import path
    - Hydration error → Use useEffect for client-only code
    - Component not rendering → Check exports/imports
-3. Fix and verify with Playwright
+   - SyntaxError → Fix syntax in the file you just wrote
+4. Read the broken file, fix it, write it back
+5. Only continue building after the error is gone
 4. Respond briefly: "Fixed the import issue."
 
 ## Code Style

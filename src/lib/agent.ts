@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createAgent, dynamicSystemPromptMiddleware, summarizationMiddleware, tool } from 'langchain';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { Sandbox } from '@e2b/code-interpreter';
@@ -17,6 +16,9 @@ const model = new ChatAnthropic({
   apiKey: 'test-key-1',
   clientOptions: {
     baseURL: 'http://0.0.0.0:3030',
+  ...(process.env.DOCKER_CONTAINER === 'true'
+    ? { baseURL: 'http://host.docker.internal:3030' }
+    : {}),
   },
   maxTokens: 16000,
   thinking: {
@@ -24,20 +26,6 @@ const model = new ChatAnthropic({
     budget_tokens: 5000,
   },
 });
-
-// ─── PostgreSQL Checkpointer (singleton) ────────────────────────────────────
-
-const CHECKPOINTER_KEY = Symbol.for('codevibe.checkpointer');
-
-async function getCheckpointer(): Promise<PostgresSaver> {
-  if (!(globalThis as any)[CHECKPOINTER_KEY]) {
-    const connectionString = process.env.DATABASE_URL!;
-    const checkpointer = PostgresSaver.fromConnString(connectionString);
-    await checkpointer.setup();
-    (globalThis as any)[CHECKPOINTER_KEY] = checkpointer;
-  }
-  return (globalThis as any)[CHECKPOINTER_KEY];
-}
 
 // ─── Create Sandbox Tool (legacy - sandbox auto-creates via e2b tools) ─────
 
@@ -88,12 +76,9 @@ const sandboxAwarePrompt = dynamicSystemPromptMiddleware(
 
 // ─── Default exported agent (for langgraph.json) ────────────────────────────
 
-const checkpointer = await getCheckpointer();
-
 export const agent = createAgent({
   model,
   tools: [createSandboxTool, ...e2bTools],
-  checkpointer,
   middleware: [
     sandboxAwarePrompt,
     summarizationMiddleware({

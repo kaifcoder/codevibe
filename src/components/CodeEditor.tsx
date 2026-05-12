@@ -32,6 +32,8 @@ export function CodeEditor({
   const prevStreamValueRef = useRef<string>('');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bindingRef = useRef<any>(null);
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const { resolvedTheme } = useTheme();
 
   const isCollaborative = !!yText && !!provider;
@@ -82,10 +84,31 @@ export function CodeEditor({
     if (!editorRef.current || !yText || !provider) return;
 
     let cancelled = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const attach = async () => {
       const { bindMonaco } = await import("@/lib/collaboration/bindMonaco");
       if (cancelled) return;
+
+      // Wait for provider sync before binding so we know the true doc state
+      if (!provider.synced) {
+        await new Promise<void>((resolve) => {
+          const onSync = () => { provider.off('synced', onSync); resolve(); };
+          provider.on('synced', onSync);
+          setTimeout(() => { provider.off('synced', onSync); resolve(); }, 2000);
+        });
+      }
+      if (cancelled) return;
+
+      // Seed Yjs with store content if the doc is empty but we have content
+      // (happens when user opens code tab after agent finished writing)
+      const storeValue = valueRef.current;
+      if (yText.length === 0 && storeValue && storeValue.length > 0) {
+        yText.doc!.transact(() => {
+          yText.insert(0, storeValue);
+        });
+      }
+
       const binding = await bindMonaco({
         editor: editorRef.current!,
         yText,
@@ -96,23 +119,27 @@ export function CodeEditor({
 
     attach();
 
-    // Observe Yjs changes to sync back to store/E2B
+    // Observe Yjs changes to sync back to store/E2B (debounced to avoid feedback loops during streaming)
     const observer = () => {
-      if (cancelled) return;
-      const content = yText.toString();
-      onChange(content);
+      if (cancelled || isStreaming) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (cancelled) return;
+        onChange(yText.toString());
+      }, 100);
     };
     yText.observe(observer);
 
     return () => {
       cancelled = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
       yText.unobserve(observer);
       if (bindingRef.current) {
         bindingRef.current.destroy();
         bindingRef.current = null;
       }
     };
-  }, [yText, provider, onChange]);
+  }, [yText, provider, onChange, isStreaming]);
 
   const handleEditorDidMount = useCallback((editor: MonacoTypes.editor.IStandaloneCodeEditor, monaco: Monaco) => {
     editorRef.current = editor;

@@ -288,9 +288,8 @@ function Page({ params }: PageProps) {
       if (!mounted) return;
 
       const currentId = useChatStore.getState().sessionId;
-      // Only reset if navigating to a genuinely different session
-      // (empty string means store hasn't hydrated yet — don't reset)
-      if (currentId && currentId !== id) {
+      // Reset if navigating to a different session or if store has stale data
+      if (currentId !== id) {
         useChatStore.getState().reset(id);
       }
       setSessionId(id);
@@ -621,7 +620,6 @@ function Page({ params }: PageProps) {
           isStreaming={isStreaming}
           renderPreview={renderPreview}
           handleCodeChange={handleCodeChange}
-          guestCredentials={guestCredentials}
           queue={stream.queue}
         />
       );
@@ -638,7 +636,6 @@ function Page({ params }: PageProps) {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         handleCodeChange={handleCodeChange}
-        guestCredentials={guestCredentials}
         renderPreview={renderPreview}
         queue={stream.queue}
       />
