@@ -93,9 +93,10 @@ function getTimestampCache(sessionId: string): Map<string, number> {
   return cache;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deriveChatMessages(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   streamMessages: any[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   toolCalls: any[] | undefined,
   isLoading: boolean,
   timestampCache: Map<string, number>,
@@ -258,8 +259,6 @@ function ChatPage() {
   const didInitRef = useRef(false);
   const sessionExistsRef = useRef(false);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSavedContentRef = useRef<Record<string, string>>({});
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasAutoSentRef = useRef(false);
   const switchedThreadRef = useRef(false);
   const titleSetRef = useRef(false);
@@ -305,9 +304,13 @@ function ChatPage() {
     hasUserInteractedRef.current = true;
     stream.submit(
       { messages: [{ type: "human", content: text }] },
-      { onDisconnect: "continue", streamResumable: true } as Record<string, unknown>,
+      {
+        onDisconnect: "continue",
+        streamResumable: true,
+        config: { configurable: { sessionId } },
+      } as Record<string, unknown>,
     );
-  }, [message, stream]);
+  }, [message, stream, sessionId]);
 
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
@@ -467,38 +470,7 @@ function ChatPage() {
     setTimeout(() => attemptSend(), 300);
   }, [message, messages.length, promptParam]);
 
-  // --- Code editor changes ---
-  const handleCodeChange = useCallback(
-    (val: string | undefined) => {
-      const newContent = val ?? "";
-      const file = ctx.selectedFile;
-      const sbx = ctx.sandboxId;
-      const streaming = stream.isLoading;
-      ctx.updateFileContent(file, newContent);
-
-      if (sbx && file && !streaming) {
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-        if (lastSavedContentRef.current[file] === newContent) return;
-
-        saveTimeoutRef.current = setTimeout(async () => {
-          try {
-            ctx.setIsSyncingToE2B(true);
-            lastSavedContentRef.current[file] = newContent;
-            await fetch("/api/write-to-sandbox", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ sandboxId: sbx, filePath: file, content: newContent }),
-            });
-          } catch (error) {
-            console.error("[Sync] Error writing to e2b:", error);
-          } finally {
-            ctx.setIsSyncingToE2B(false);
-          }
-        }, 1000);
-      }
-    },
-    [ctx, stream.isLoading],
-  );
+  // --- Code editor changes are handled inside useCollaboration via yText.observe ---
 
   // --- Sandbox expiration check ---
   useEffect(() => {
@@ -724,7 +696,6 @@ function ChatPage() {
           isLoading={stream.isLoading}
           isStreaming={stream.isLoading}
           renderPreview={renderPreview}
-          handleCodeChange={handleCodeChange}
           queue={stream.queue}
         />
       );
@@ -738,7 +709,6 @@ function ChatPage() {
         handleSend={handleSend}
         isLoading={stream.isLoading}
         isStreaming={stream.isLoading}
-        handleCodeChange={handleCodeChange}
         renderPreview={renderPreview}
         queue={stream.queue}
       />
@@ -804,30 +774,6 @@ function ChatPage() {
           )}
 
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
-          {messages.length > 1 && stream.switchThread && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={async () => {
-                if (!confirm("Clear all messages? This starts a fresh thread.")) return;
-                const newThreadId = crypto.randomUUID();
-                ctx.setThreadId(newThreadId);
-                stream.switchThread(newThreadId);
-                try {
-                  await fetch(`/api/session/${sessionId}`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ threadId: newThreadId }),
-                  });
-                } catch (error) {
-                  console.error("[DB] Failed to clear messages:", error);
-                }
-              }}
-              className="text-xs"
-            >
-              Clear Chat
-            </Button>
-          )}
         </div>
       </div>
 

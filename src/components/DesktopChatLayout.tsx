@@ -24,7 +24,6 @@ export interface DesktopChatLayoutProps {
   handleSend: () => void;
   isLoading: boolean;
   isStreaming: boolean;
-  handleCodeChange: (value: string | undefined) => void;
   renderPreview: () => React.ReactNode;
   queue?: MessageQueue;
 }
@@ -36,7 +35,6 @@ export function DesktopChatLayout({
   handleSend,
   isLoading,
   isStreaming,
-  handleCodeChange,
   renderPreview,
   queue,
 }: Readonly<DesktopChatLayoutProps>) {
@@ -49,7 +47,6 @@ export function DesktopChatLayout({
     setOpenFiles,
     sandboxId,
     isSyncingFilesystem,
-    streamingFiles,
     activeTab,
     setActiveTab,
     getFileContent,
@@ -154,7 +151,6 @@ export function DesktopChatLayout({
                           {openFiles.map((filePath) => {
                             const fileName = filePath.split('/').pop() || filePath;
                             const isActive = filePath === selectedFile;
-                            const isFileStreaming = streamingFiles.includes(filePath);
                             return (
                               <div
                                 key={filePath}
@@ -162,9 +158,6 @@ export function DesktopChatLayout({
                                   isActive ? 'bg-background' : 'bg-muted/20'
                                 }`}
                               >
-                                {isFileStreaming && (
-                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                )}
                                 <button
                                   type="button"
                                   className={`hover:text-foreground transition-colors ${isActive ? 'font-medium' : ''}`}
@@ -196,12 +189,6 @@ export function DesktopChatLayout({
                           })}
                         </div>
                         <div className="flex items-center gap-3 px-3 py-1.5 text-xs border-l shrink-0">
-                          {streamingFiles.length > 0 && (
-                            <div className="flex items-center gap-1 text-emerald-500">
-                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                              <span className="text-[10px] uppercase tracking-wide">AI Writing</span>
-                            </div>
-                          )}
                           {provider && (
                             <div className="flex items-center gap-1 text-blue-500">
                               <div className={`w-1.5 h-1.5 rounded-full ${provider.synced ? 'bg-blue-500' : 'bg-yellow-500 animate-pulse'}`} />
@@ -213,22 +200,11 @@ export function DesktopChatLayout({
                         </div>
                       </div>
                       <div className="relative flex-1 min-h-0">
-                      {streamingFiles.includes(selectedFile) && (
-                        <div className="absolute inset-0 z-10 pointer-events-none">
-                          <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-background/90 border rounded-md px-2 py-1 z-20">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                            <span className="text-[10px] text-muted-foreground font-medium">Writing...</span>
-                          </div>
-                        </div>
-                      )}
                       <CodeEditor
-                        value={selectedFileContent}
-                        onChange={handleCodeChange}
-                        language="typescript"
-                        autoScroll={streamingFiles.includes(selectedFile)}
-                        isStreaming={streamingFiles.includes(selectedFile)}
                         yText={yText}
                         provider={provider}
+                        language="typescript"
+                        initialContent={selectedFileContent}
                       />
                       </div>
                     </>

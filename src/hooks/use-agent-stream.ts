@@ -7,13 +7,6 @@ import type { FileNode } from "@/contexts/chat-context";
 
 const AGENT_URL = process.env.NEXT_PUBLIC_LANGGRAPH_URL || "http://localhost:2024";
 
-interface CodePatchEvent {
-  type: "codePatch";
-  filePath: string;
-  content?: string;
-  action: "streaming_start" | "streaming_chunk" | "streaming_end";
-}
-
 interface FileTreeSyncEvent {
   type: "fileTreeSync";
   fileTree: FileNode[];
@@ -47,70 +40,11 @@ interface ToolResultEvent {
 }
 
 type CustomEvent =
-  | CodePatchEvent
   | FileTreeSyncEvent
   | SandboxCreatedEvent
   | SandboxExpiredEvent
   | ToolProgressEvent
   | ToolResultEvent;
-
-function findFileInTree(nodes: FileNode[], path: string): boolean {
-  for (const node of nodes) {
-    if (node.type === "file" && node.path === path) return true;
-    if (node.type === "folder" && node.children && findFileInTree(node.children, path)) return true;
-  }
-  return false;
-}
-
-function addFileToTree(nodes: FileNode[], filePath: string, content: string): FileNode[] {
-  const segments = filePath.split("/");
-  if (segments.length === 1) {
-    if (nodes.some((n) => n.type === "file" && n.name === segments[0])) {
-      return nodes.map((n) =>
-        n.type === "file" && n.name === segments[0] ? { ...n, content } : n,
-      );
-    }
-    return [...nodes, { name: segments[0], path: filePath, type: "file" as const, content }];
-  }
-
-  const folderName = segments[0];
-  const remainingPath = segments.slice(1).join("/");
-  const existing = nodes.find((n) => n.type === "folder" && n.name === folderName);
-
-  if (existing && existing.children) {
-    return nodes.map((n) => {
-      if (n === existing) {
-        return { ...n, children: addFileToTree(n.children!, remainingPath, content) };
-      }
-      return n;
-    });
-  }
-
-  const folderPath = segments.slice(0, segments.length - 1).join("/");
-  const newFolder: FileNode = {
-    name: folderName,
-    path: folderPath.includes("/") ? folderPath : folderName,
-    type: "folder",
-    children: addFileToTree([], remainingPath, content),
-  };
-  return [...nodes, newFolder];
-}
-
-function updateFileInTree(
-  nodes: FileNode[],
-  path: string,
-  updater: (existing: string | undefined) => string,
-): FileNode[] {
-  return nodes.map((node) => {
-    if (node.type === "file" && node.path === path) {
-      return { ...node, content: updater(node.content) };
-    }
-    if (node.type === "folder" && node.children) {
-      return { ...node, children: updateFileInTree(node.children, path, updater) };
-    }
-    return node;
-  });
-}
 
 function findFirstFile(nodes: FileNode[]): string | null {
   for (const node of nodes) {
@@ -142,8 +76,6 @@ export function useAgentStream() {
     };
   }, []);
 
-  const streamingLengthRef = useRef<Record<string, number>>({});
-  const yjsFlushTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   // Tracks the threadId we've already persisted for this session so we don't
   // re-PATCH (and bump updatedAt) when useStream emits onThreadId with the
   // same id on every revisit. Updated synchronously in render to mirror the
@@ -179,81 +111,6 @@ export function useAgentStream() {
           if (firstFile && !c.selectedFile) {
             c.setSelectedFile(firstFile);
             c.setOpenFiles([firstFile]);
-          }
-        }
-        break;
-      }
-
-      case "codePatch": {
-        const { filePath, content, action } = event;
-        if (!filePath) break;
-
-        if (action === "streaming_start") {
-          streamingLengthRef.current[filePath] = 0;
-          c.setStreamingFiles((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
-          c.setSelectedFile(filePath);
-          c.setOpenFiles((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
-          c.setFileTree((prev) =>
-            findFileInTree(prev, filePath) ? prev : addFileToTree(prev, filePath, ""),
-          );
-          const roomId = `${sessionIdRef.current}-${filePath}`;
-          import("@/lib/collaboration").then(({ getExistingYText }) => {
-            const yText = getExistingYText(roomId);
-            if (yText && yText.length > 0) {
-              yText.doc!.transact(() => {
-                yText.delete(0, yText.length);
-              });
-            }
-          });
-        } else if (action === "streaming_chunk") {
-          if (content) {
-            c.setFileTree((prev) => updateFileInTree(prev, filePath, () => content));
-            const prevLength = streamingLengthRef.current[filePath] || 0;
-            const delta = content.slice(prevLength);
-            streamingLengthRef.current[filePath] = content.length;
-
-            if (delta.length > 0) {
-              if (yjsFlushTimerRef.current[filePath]) {
-                clearTimeout(yjsFlushTimerRef.current[filePath]);
-              }
-              const capturedContent = content;
-              const capturedPrevLength = prevLength;
-              yjsFlushTimerRef.current[filePath] = setTimeout(() => {
-                delete yjsFlushTimerRef.current[filePath];
-                const roomId = `${sessionIdRef.current}-${filePath}`;
-                import("@/lib/collaboration").then(({ getExistingYText }) => {
-                  const yText = getExistingYText(roomId);
-                  if (yText) {
-                    const appendDelta = capturedContent.slice(capturedPrevLength);
-                    if (appendDelta.length > 0) {
-                      yText.doc!.transact(() => {
-                        yText.insert(yText.length, appendDelta);
-                      });
-                    }
-                  }
-                });
-              }, 50);
-            }
-          }
-        } else if (action === "streaming_end") {
-          c.setStreamingFiles((prev) => prev.filter((f) => f !== filePath));
-          delete streamingLengthRef.current[filePath];
-          if (yjsFlushTimerRef.current[filePath]) {
-            clearTimeout(yjsFlushTimerRef.current[filePath]);
-            delete yjsFlushTimerRef.current[filePath];
-          }
-          if (content) {
-            c.setFileTree((prev) =>
-              findFileInTree(prev, filePath)
-                ? updateFileInTree(prev, filePath, () => content)
-                : addFileToTree(prev, filePath, content),
-            );
-            const roomId = `${sessionIdRef.current}-${filePath}`;
-            import("@/lib/collaboration/updateYjsDocument").then(({ updateYjsDocument }) => {
-              updateYjsDocument(roomId, content).catch((err) =>
-                console.warn("[Yjs] Failed to sync file content:", err),
-              );
-            });
           }
         }
         break;

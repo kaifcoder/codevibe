@@ -69,10 +69,6 @@ interface ChatContextValue {
   iframeLoading: boolean;
   setIframeLoading: Dispatch<SetStateAction<boolean>>;
 
-  // File streaming
-  streamingFiles: string[];
-  setStreamingFiles: Dispatch<SetStateAction<string[]>>;
-
   // Collaboration
   connectionStatus: ConnectionStatus;
   setConnectionStatus: Dispatch<SetStateAction<ConnectionStatus>>;
@@ -130,8 +126,6 @@ export function ChatProvider({
   const [isSyncingFilesystem, setIsSyncingFilesystem] = useState(false);
   const [iframeLoading, setIframeLoading] = useState(true);
 
-  const [streamingFiles, setStreamingFiles] = useState<string[]>([]);
-
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
 
@@ -178,8 +172,6 @@ export function ChatProvider({
     setIsSyncingFilesystem,
     iframeLoading,
     setIframeLoading,
-    streamingFiles,
-    setStreamingFiles,
     connectionStatus,
     setConnectionStatus,
     connectedUsers,
