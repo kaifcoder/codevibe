@@ -2,38 +2,37 @@
 
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { useCallback, useEffect, useRef } from "react";
-import { useChatStore } from "@/stores/chat-store";
-import type { FileNode } from "@/stores/chat-store";
+import { useChat } from "@/contexts/chat-context";
+import type { FileNode } from "@/contexts/chat-context";
 
 const AGENT_URL = process.env.NEXT_PUBLIC_LANGGRAPH_URL || "http://localhost:2024";
 
-// Custom event types emitted via config.writer() from the agent
 interface CodePatchEvent {
-  type: 'codePatch';
+  type: "codePatch";
   filePath: string;
   content?: string;
-  action: 'streaming_start' | 'streaming_chunk' | 'streaming_end';
+  action: "streaming_start" | "streaming_chunk" | "streaming_end";
 }
 
 interface FileTreeSyncEvent {
-  type: 'fileTreeSync';
+  type: "fileTreeSync";
   fileTree: FileNode[];
 }
 
 interface SandboxCreatedEvent {
-  type: 'sandboxCreated';
+  type: "sandboxCreated";
   sandboxId: string;
   sandboxUrl: string;
   isNew: boolean;
 }
 
 interface SandboxExpiredEvent {
-  type: 'sandboxExpired';
+  type: "sandboxExpired";
   sandboxId: string;
 }
 
 interface ToolProgressEvent {
-  type: 'tool_progress';
+  type: "tool_progress";
   tool: string;
   args?: Record<string, unknown>;
   message: string;
@@ -41,7 +40,7 @@ interface ToolProgressEvent {
 }
 
 interface ToolResultEvent {
-  type: 'tool_result';
+  type: "tool_result";
   tool: string;
   args?: Record<string, unknown>;
   result: string;
@@ -57,30 +56,29 @@ type CustomEvent =
 
 function findFileInTree(nodes: FileNode[], path: string): boolean {
   for (const node of nodes) {
-    if (node.type === 'file' && node.path === path) return true;
-    if (node.type === 'folder' && node.children && findFileInTree(node.children, path)) return true;
+    if (node.type === "file" && node.path === path) return true;
+    if (node.type === "folder" && node.children && findFileInTree(node.children, path)) return true;
   }
   return false;
 }
 
 function addFileToTree(nodes: FileNode[], filePath: string, content: string): FileNode[] {
-  const segments = filePath.split('/');
+  const segments = filePath.split("/");
   if (segments.length === 1) {
-    // Check if file already exists at this level
-    if (nodes.some(n => n.type === 'file' && n.name === segments[0])) {
-      return nodes.map(n =>
-        n.type === 'file' && n.name === segments[0] ? { ...n, content } : n
+    if (nodes.some((n) => n.type === "file" && n.name === segments[0])) {
+      return nodes.map((n) =>
+        n.type === "file" && n.name === segments[0] ? { ...n, content } : n,
       );
     }
-    return [...nodes, { name: segments[0], path: filePath, type: 'file' as const, content }];
+    return [...nodes, { name: segments[0], path: filePath, type: "file" as const, content }];
   }
 
   const folderName = segments[0];
-  const remainingPath = segments.slice(1).join('/');
-  const existing = nodes.find(n => n.type === 'folder' && n.name === folderName);
+  const remainingPath = segments.slice(1).join("/");
+  const existing = nodes.find((n) => n.type === "folder" && n.name === folderName);
 
   if (existing && existing.children) {
-    return nodes.map(n => {
+    return nodes.map((n) => {
       if (n === existing) {
         return { ...n, children: addFileToTree(n.children!, remainingPath, content) };
       }
@@ -88,85 +86,117 @@ function addFileToTree(nodes: FileNode[], filePath: string, content: string): Fi
     });
   }
 
-  const folderPath = segments.slice(0, segments.length - 1).join('/');
+  const folderPath = segments.slice(0, segments.length - 1).join("/");
   const newFolder: FileNode = {
     name: folderName,
-    path: folderPath.includes('/') ? folderPath : folderName,
-    type: 'folder',
+    path: folderPath.includes("/") ? folderPath : folderName,
+    type: "folder",
     children: addFileToTree([], remainingPath, content),
   };
   return [...nodes, newFolder];
 }
 
-function updateFileInTree(nodes: FileNode[], path: string, updater: (existing: string | undefined) => string): FileNode[] {
-  return nodes.map(node => {
-    if (node.type === 'file' && node.path === path) {
+function updateFileInTree(
+  nodes: FileNode[],
+  path: string,
+  updater: (existing: string | undefined) => string,
+): FileNode[] {
+  return nodes.map((node) => {
+    if (node.type === "file" && node.path === path) {
       return { ...node, content: updater(node.content) };
     }
-    if (node.type === 'folder' && node.children) {
+    if (node.type === "folder" && node.children) {
       return { ...node, children: updateFileInTree(node.children, path, updater) };
     }
     return node;
   });
 }
 
-export function useAgentStream(threadId: string | null) {
-  const lastSavedContentRef = useRef<Record<string, string>>({});
+function findFirstFile(nodes: FileNode[]): string | null {
+  for (const node of nodes) {
+    if (node.type === "file") return node.path;
+    if (node.type === "folder" && node.children) {
+      const found = findFirstFile(node.children);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function useAgentStream() {
+  const ctx = useChat();
+  const { sessionId, threadId } = ctx;
+
+  // Latest-context ref so async callbacks always see fresh setters/values
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const streamingLengthRef = useRef<Record<string, number>>({});
   const yjsFlushTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // Tracks the threadId we've already persisted for this session so we don't
+  // re-PATCH (and bump updatedAt) when useStream emits onThreadId with the
+  // same id on every revisit. Updated synchronously in render to mirror the
+  // value loaded into context from the DB.
+  const savedThreadIdRef = useRef<string | null>(threadId ?? null);
+  savedThreadIdRef.current = threadId ?? savedThreadIdRef.current;
 
   const handleCustomEvent = useCallback((event: CustomEvent) => {
-    const store = useChatStore.getState();
+    const c = ctxRef.current;
+    if (!mountedRef.current) return;
 
     switch (event.type) {
-      case 'sandboxCreated': {
-        store.setSandboxId(event.sandboxId);
-        store.setSandboxUrl(event.sandboxUrl);
-        store.setShowSecondPanel(true);
-        store.setSandboxCreatedAt(Date.now());
-        store.setIsSandboxExpired(false);
-        store.setActiveTab('live preview');
-        store.setIframeLoading(true);
+      case "sandboxCreated": {
+        c.setSandboxId(event.sandboxId);
+        c.setSandboxUrl(event.sandboxUrl);
+        c.setShowSecondPanel(true);
+        c.setSandboxCreatedAt(Date.now());
+        c.setIsSandboxExpired(false);
+        c.setActiveTab("live preview");
+        c.setIframeLoading(true);
         break;
       }
 
-      case 'sandboxExpired': {
-        store.setIsSandboxExpired(true);
+      case "sandboxExpired": {
+        c.setIsSandboxExpired(true);
         break;
       }
 
-      case 'fileTreeSync': {
+      case "fileTreeSync": {
         if (event.fileTree && Array.isArray(event.fileTree)) {
-          store.setFileTree(event.fileTree);
+          c.setFileTree(event.fileTree);
           const firstFile = findFirstFile(event.fileTree);
-          if (firstFile && !store.selectedFile) {
-            store.setSelectedFile(firstFile);
-            store.setOpenFiles([firstFile]);
+          if (firstFile && !c.selectedFile) {
+            c.setSelectedFile(firstFile);
+            c.setOpenFiles([firstFile]);
           }
         }
         break;
       }
 
-      case 'codePatch': {
+      case "codePatch": {
         const { filePath, content, action } = event;
         if (!filePath) break;
 
-        if (action === 'streaming_start') {
+        if (action === "streaming_start") {
           streamingLengthRef.current[filePath] = 0;
-          store.addStreamingFile(filePath);
-          store.setSelectedFile(filePath);
-          const currentOpen = store.openFiles;
-          if (!currentOpen.includes(filePath)) {
-            store.setOpenFiles([...currentOpen, filePath]);
-          }
-          store.setFileTree(prev => {
-            if (!findFileInTree(prev, filePath)) {
-              return addFileToTree(prev, filePath, '');
-            }
-            return prev;
-          });
-          // Clear Yjs doc at start for a fresh write
-          const roomId = `${store.sessionId}-${filePath}`;
+          c.setStreamingFiles((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
+          c.setSelectedFile(filePath);
+          c.setOpenFiles((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
+          c.setFileTree((prev) =>
+            findFileInTree(prev, filePath) ? prev : addFileToTree(prev, filePath, ""),
+          );
+          const roomId = `${sessionIdRef.current}-${filePath}`;
           import("@/lib/collaboration").then(({ getExistingYText }) => {
             const yText = getExistingYText(roomId);
             if (yText && yText.length > 0) {
@@ -175,18 +205,14 @@ export function useAgentStream(threadId: string | null) {
               });
             }
           });
-        } else if (action === 'streaming_chunk') {
+        } else if (action === "streaming_chunk") {
           if (content) {
-            store.setFileTree(prev =>
-              updateFileInTree(prev, filePath, () => content)
-            );
-            // Incremental append to Yjs — only insert the new delta
+            c.setFileTree((prev) => updateFileInTree(prev, filePath, () => content));
             const prevLength = streamingLengthRef.current[filePath] || 0;
             const delta = content.slice(prevLength);
             streamingLengthRef.current[filePath] = content.length;
 
             if (delta.length > 0) {
-              // Debounce Yjs updates: batch rapid chunks into ~50ms windows
               if (yjsFlushTimerRef.current[filePath]) {
                 clearTimeout(yjsFlushTimerRef.current[filePath]);
               }
@@ -194,14 +220,13 @@ export function useAgentStream(threadId: string | null) {
               const capturedPrevLength = prevLength;
               yjsFlushTimerRef.current[filePath] = setTimeout(() => {
                 delete yjsFlushTimerRef.current[filePath];
-                const roomId = `${store.sessionId}-${filePath}`;
+                const roomId = `${sessionIdRef.current}-${filePath}`;
                 import("@/lib/collaboration").then(({ getExistingYText }) => {
                   const yText = getExistingYText(roomId);
                   if (yText) {
                     const appendDelta = capturedContent.slice(capturedPrevLength);
                     if (appendDelta.length > 0) {
                       yText.doc!.transact(() => {
-                        // Append at end — avoids expensive delete+reinsert
                         yText.insert(yText.length, appendDelta);
                       });
                     }
@@ -210,27 +235,23 @@ export function useAgentStream(threadId: string | null) {
               }, 50);
             }
           }
-        } else if (action === 'streaming_end') {
-          store.removeStreamingFile(filePath);
+        } else if (action === "streaming_end") {
+          c.setStreamingFiles((prev) => prev.filter((f) => f !== filePath));
           delete streamingLengthRef.current[filePath];
-          // Cancel any pending debounced flush
           if (yjsFlushTimerRef.current[filePath]) {
             clearTimeout(yjsFlushTimerRef.current[filePath]);
             delete yjsFlushTimerRef.current[filePath];
           }
           if (content) {
-            lastSavedContentRef.current[filePath] = content;
-            store.setFileTree(prev => {
-              if (!findFileInTree(prev, filePath)) {
-                return addFileToTree(prev, filePath, content);
-              }
-              return updateFileInTree(prev, filePath, () => content);
-            });
-            // Final reconciliation: ensure Yjs matches the final content exactly
-            const roomId = `${store.sessionId}-${filePath}`;
+            c.setFileTree((prev) =>
+              findFileInTree(prev, filePath)
+                ? updateFileInTree(prev, filePath, () => content)
+                : addFileToTree(prev, filePath, content),
+            );
+            const roomId = `${sessionIdRef.current}-${filePath}`;
             import("@/lib/collaboration/updateYjsDocument").then(({ updateYjsDocument }) => {
-              updateYjsDocument(roomId, content).catch(err =>
-                console.warn('[Yjs] Failed to sync file content:', err)
+              updateYjsDocument(roomId, content).catch((err) =>
+                console.warn("[Yjs] Failed to sync file content:", err),
               );
             });
           }
@@ -238,75 +259,101 @@ export function useAgentStream(threadId: string | null) {
         break;
       }
 
-      case 'tool_progress':
-      case 'tool_result':
-        // These are handled natively by useStream's toolCalls/toolProgress
+      case "tool_progress":
+      case "tool_result":
+        // Handled natively by useStream's toolCalls
         break;
     }
   }, []);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stream = useStream({
     apiUrl: AGENT_URL,
     assistantId: "agent",
     threadId: threadId ?? undefined,
     onThreadId: (id: string) => {
-      useChatStore.getState().setThreadId(id);
+      if (!mountedRef.current) return;
+      ctxRef.current.setThreadId(id);
+
+      const currentSessionId = sessionIdRef.current;
+      if (!currentSessionId) return;
+
+      // Skip if this is the same id we already have persisted — useStream
+      // emits onThreadId on every attach, and re-saving an unchanged value
+      // still bumps updatedAt and re-orders the sidebar.
+      if (savedThreadIdRef.current === id) return;
+      savedThreadIdRef.current = id;
+
+      const saveThreadId = (retries = 3) => {
+        if (!mountedRef.current || sessionIdRef.current !== currentSessionId) return;
+        fetch(`/api/session/${currentSessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ threadId: id }),
+        })
+          .then((res) => {
+            if (!res.ok && retries > 0) {
+              setTimeout(() => saveThreadId(retries - 1), 1000);
+            }
+          })
+          .catch(() => {
+            if (retries > 0) setTimeout(() => saveThreadId(retries - 1), 1000);
+          });
+      };
+      saveThreadId();
     },
     onCustomEvent: (data: unknown) => {
       handleCustomEvent(data as CustomEvent);
     },
     onCreated: (run: { run_id: string }) => {
-      useChatStore.getState().setRunId(run.run_id);
+      if (!mountedRef.current) return;
+      ctxRef.current.setRunId(run.run_id);
     },
     onFinish: () => {
-      useChatStore.getState().setRunId(null);
+      if (!mountedRef.current) return;
+      ctxRef.current.setRunId(null);
     },
     onError: (error: unknown) => {
-      console.error('[useStream] Error:', error);
+      console.error("[useStream] Error:", error);
     },
-  } as any) as any;
-
-  // Sync isStreaming state to the store
-  useEffect(() => {
-    useChatStore.getState().setIsStreaming(stream.isLoading);
-  }, [stream.isLoading]);
+  });
 
   // Attempt to rejoin a running stream on mount (page refresh)
   const rejoinAttemptedRef = useRef(false);
   useEffect(() => {
     if (rejoinAttemptedRef.current) return;
     rejoinAttemptedRef.current = true;
-
-    const { runId } = useChatStore.getState();
-    if (runId && stream.joinStream) {
-      stream.joinStream(runId);
+    const rid = ctxRef.current.runId;
+    if (rid && stream.joinStream) {
+      stream.joinStream(rid);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-rejoin when tab becomes visible (Page Visibility API)
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState !== 'visible') return;
-      const { runId } = useChatStore.getState();
-      if (runId && !stream.isLoading && stream.joinStream) {
-        stream.joinStream(runId);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [stream]);
 
-  return stream;
-}
+  // Auto-rejoin when tab becomes visible
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      const rid = ctxRef.current.runId;
+      if (rid && !stream.isLoading && stream.joinStream) {
+        stream.joinStream(rid);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [stream]);
 
-function findFirstFile(nodes: FileNode[]): string | null {
-  for (const node of nodes) {
-    if (node.type === 'file') return node.path;
-    if (node.type === 'folder' && node.children) {
-      const found = findFirstFile(node.children);
-      if (found) return found;
-    }
-  }
-  return null;
+  // useStream's exact return type varies by generic params; access dynamic
+  // fields (toolCalls, joinStream, switchThread) through an `any` cast.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s = stream as any;
+
+  return {
+    messages: s.messages,
+    toolCalls: s.toolCalls,
+    isLoading: s.isLoading,
+    stop: s.stop,
+    joinStream: s.joinStream,
+    queue: s.queue,
+    switchThread: s.switchThread,
+    submit: s.submit,
+  };
 }

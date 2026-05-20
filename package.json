@@ -88,8 +88,7 @@
     "y-monaco": "^0.1.6",
     "y-websocket": "^3.0.0",
     "yjs": "^13.6.27",
-    "zod": "^3.25.76",
-    "zustand": "^5.0.12"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -102,6 +101,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.3.4",
     "prisma": "^6.11.0",
+    "shadcn": "^4.7.0",
     "tailwindcss": "^4",
     "tsc": "^2.0.4",
     "tsx": "^4.20.3",

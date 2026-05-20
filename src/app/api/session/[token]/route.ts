@@ -2,8 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@/generated/prisma";
 import { getSandbox } from "@/lib/sandbox-utils";
 import { auth } from "@clerk/nextjs/server";
+import { Client } from "@langchain/langgraph-sdk";
 
 const prisma = new PrismaClient();
+
+const AGENT_URL = process.env.NEXT_PUBLIC_LANGGRAPH_URL || "http://localhost:2024";
+
+async function deleteThread(threadId: string): Promise<void> {
+  try {
+    const client = new Client({ apiUrl: AGENT_URL });
+    await client.threads.delete(threadId);
+  } catch (error) {
+    // Don't block session deletion if the thread is already gone or the
+    // agent server is unreachable.
+    console.error(`Failed to delete LangGraph thread ${threadId}:`, error);
+  }
+}
 
 // Sanitize data to remove null bytes that PostgreSQL can't handle
 function sanitizeForPostgres(obj: unknown): unknown {
@@ -101,9 +115,27 @@ export async function PATCH(
     // Sanitize data to remove null bytes before saving to PostgreSQL
     const sanitizedBody = sanitizeForPostgres(body) as Record<string, unknown>;
 
+    // Skip the update entirely if the incoming fields all match what's
+    // already in the row. Prisma's @updatedAt would otherwise bump the
+    // timestamp (re-ordering the sidebar) on a no-op PATCH.
+    const changed: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(sanitizedBody)) {
+      if (value === undefined) continue;
+      const existingValue = (existingSession as Record<string, unknown>)[key];
+      // Compare via JSON serialization so Date / nested object / array
+      // diffs are caught without per-field handling.
+      if (JSON.stringify(existingValue) !== JSON.stringify(value)) {
+        changed[key] = value;
+      }
+    }
+
+    if (Object.keys(changed).length === 0) {
+      return NextResponse.json(existingSession);
+    }
+
     const session = await prisma.session.update({
       where: { id: token },
-      data: sanitizedBody,
+      data: changed,
     });
 
     return NextResponse.json(session);
@@ -155,6 +187,11 @@ export async function DELETE(
         console.error(`Failed to kill sandbox ${session.sandboxId}:`, error);
         // Continue with session deletion even if sandbox kill fails
       }
+    }
+
+    // Delete the LangGraph thread (checkpoints) so they don't accumulate.
+    if (session.threadId) {
+      await deleteThread(session.threadId);
     }
 
     await prisma.session.delete({

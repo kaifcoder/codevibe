@@ -9,9 +9,9 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
   ArrowRight,
-  FileText,
-  Calculator,
-  ScanLine,
+  ListTodo,
+  Timer,
+  CloudSun,
   Sparkles,
 } from "lucide-react"
 import { useAuth, SignInButton, useClerk } from "@clerk/nextjs"
@@ -43,21 +43,50 @@ export default function HomePage() {
     return crypto.randomUUID()
   }
 
+  const phrases = [
+    "What do you want to build today?",
+    "Got an idea? Let's bring it to life.",
+    "Describe an app. Ship a prototype.",
+    "Turn a sentence into a real product.",
+    "What should we build next?",
+  ]
+  const [phraseIdx, setPhraseIdx] = useState(0)
+  const [typed, setTyped] = useState("")
+
+  useEffect(() => {
+    const phrase = phrases[phraseIdx]
+    setTyped("")
+    let i = 0
+    const typeInterval = setInterval(() => {
+      i++
+      setTyped(phrase.slice(0, i))
+      if (i >= phrase.length) clearInterval(typeInterval)
+    }, 45)
+
+    const advanceTimeout = setTimeout(() => {
+      setPhraseIdx((p) => (p + 1) % phrases.length)
+    }, 7000)
+
+    return () => {
+      clearInterval(typeInterval)
+      clearTimeout(advanceTimeout)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phraseIdx])
+
   const handleStartChat = () => {
     if (!prompt.trim()) return
     if (!isSignedIn) return // Don't proceed if not signed in
 
     const chatId = generateChatId()
 
-    // Store the initial prompt and app type in sessionStorage
-    sessionStorage.setItem(`chat_${chatId}_initial`, prompt)
-
-    // Navigate to the chat page
-    router.push(`/chat/${chatId}`)
+    // Hand off the initial prompt via URL search param — the chat page
+    // reads it on mount, auto-sends it, then strips it from the URL.
+    router.push(`/chat/${chatId}?prompt=${encodeURIComponent(prompt)}`)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && e.metaKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (!isSignedIn) {
         openSignIn()
@@ -69,9 +98,21 @@ export default function HomePage() {
 
 
   const suggestions = [
-    { icon: <FileText className="w-4 h-4" />, text: "Personal blog" },
-    { icon: <Calculator className="w-4 h-4" />, text: "Statistical significance calculator" },
-    { icon: <ScanLine className="w-4 h-4" />, text: "Book scanner" },
+    {
+      icon: <ListTodo className="w-4 h-4" />,
+      label: "Todo app",
+      prompt: "A todo app with drag-and-drop reordering, due dates, and categories.",
+    },
+    {
+      icon: <Timer className="w-4 h-4" />,
+      label: "Pomodoro timer",
+      prompt: "A pomodoro timer with customizable work/break intervals and session history.",
+    },
+    {
+      icon: <CloudSun className="w-4 h-4" />,
+      label: "Weather dashboard",
+      prompt: "A weather dashboard with current conditions and a 5-day forecast for any city.",
+    },
   ]
 
   return (
@@ -162,14 +203,17 @@ export default function HomePage() {
               transition={{ delay: 0.2, duration: 0.6 }}
               className="text-center mb-8 lg:mb-12"
             >
-              <div className="inline-flex items-center justify-center mb-4 px-4 py-2 rounded-full bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
-                <Sparkles className="w-4 h-4 mr-2 text-blue-600 dark:text-blue-400" />
-                <span className="text-sm font-medium text-blue-600 dark:text-blue-400">AI-Powered Development</span>
-              </div>
-              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-semibold dark:text-white mb-4 px-4 leading-tight">
-                What do you want to build today?
+
+              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-semibold dark:text-white mb-3 px-4 leading-tight min-h-[2.5em] flex items-center justify-center">
+                <span>
+                  {typed}
+                  <span
+                    aria-hidden
+                    className="inline-block w-0.5 h-[0.9em] bg-current ml-1 align-[-0.1em] animate-pulse"
+                  />
+                </span>
               </h1>
-              <p className="text-base sm:text-lg text-gray-600 dark:text-gray-400 max-w-xl mx-auto px-4">
+              <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400 max-w-xl mx-auto px-4">
                 Describe your idea and watch it come to life with AI assistance
               </p>
             </motion.div>
@@ -181,45 +225,56 @@ export default function HomePage() {
               transition={{ delay: 0.4, duration: 0.6 }}
               className="mb-4 lg:mb-6"
             >
-              <div className="relative bg-white dark:bg-[#1a1a1a] border-2 border-gray-200 dark:border-[#333] rounded-xl shadow-lg dark:shadow-none overflow-hidden transition-all duration-200 hover:border-blue-300 dark:hover:border-blue-900 focus-within:border-blue-500 dark:focus-within:border-blue-700 focus-within:shadow-xl">
-                <Textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Describe an app or site you want to create..."
-                  className="w-full min-h-[120px] sm:min-h-[140px] max-h-[200px] overflow-y-auto px-4 sm:px-5 py-4 sm:py-5 text-base sm:text-lg dark:bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                  style={{ fieldSizing: 'normal' } as React.CSSProperties}
-                  rows={4}
-                />
+              <div className="relative group">
+                {/* Soft animated glow */}
+                <div className="pointer-events-none absolute -inset-1 rounded-4xl bg-linear-to-r from-blue-500 via-purple-500 to-blue-500 opacity-40 blur-2xl group-focus-within:opacity-70 transition-opacity duration-500" />
+                <div className="pointer-events-none absolute -inset-px rounded-4xl bg-linear-to-r from-blue-500/40 via-purple-500/40 to-blue-500/40 opacity-0 group-focus-within:opacity-100 transition-opacity duration-500" />
 
-                {/* Bottom Bar */}
-                <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-t border-gray-200 dark:border-[#333] bg-gray-50 dark:bg-[#161616]">
-                  <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
-                    Press <kbd className="px-2 py-1 bg-white dark:bg-[#2a2a2a] border border-gray-300 dark:border-[#444] rounded text-xs font-mono">⌘</kbd> + <kbd className="px-2 py-1 bg-white dark:bg-[#2a2a2a] border border-gray-300 dark:border-[#444] rounded text-xs font-mono">Enter</kbd> to start
-                  </div>
-                  <div className="flex items-center space-x-2 flex-shrink-0">
-                    {isLoaded && !isSignedIn ? (
-                      <SignInButton mode="modal">
-                        <Button
-                          className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 sm:px-6 py-2 sm:py-2.5 text-sm sm:text-base rounded-lg font-medium shadow-md hover:shadow-lg transition-all duration-200 h-9 sm:h-10 gap-2 cursor-pointer"
-                        >
-                          Sign in to Start
-                          <ArrowRight className="w-4 h-4" />
-                        </Button>
-                      </SignInButton>
-                    ) : (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    if (!isSignedIn) {
+                      openSignIn()
+                      return
+                    }
+                    handleStartChat()
+                  }}
+                  className="relative flex items-center gap-3 bg-background/80 dark:bg-[#0f0f12]/90 backdrop-blur-xl rounded-4xl border border-border/80 px-6 py-4 shadow-2xl shadow-blue-500/10 dark:shadow-blue-500/20 focus-within:border-blue-500/60 transition-all"
+                >
+                  <Sparkles className="w-6 h-6 text-blue-500/80 shrink-0" />
+                  <Textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Describe an app or site you want to create..."
+                    className="flex-1 min-h-14 max-h-72 resize-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent dark:bg-transparent px-0 py-3 text-lg sm:text-xl leading-7 placeholder:text-muted-foreground/70"
+                    rows={1}
+                  />
+                  {isLoaded && !isSignedIn ? (
+                    <SignInButton mode="modal">
                       <Button
-                        onClick={handleStartChat}
-                        disabled={!prompt.trim()}
-                        className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white px-4 sm:px-6 py-2 sm:py-2.5 text-sm sm:text-base rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-md hover:shadow-lg transition-all duration-200 h-9 sm:h-10 gap-2"
+                        type="button"
+                        size="icon"
+                        className="h-12 w-12 rounded-full shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 transition-all"
                       >
-                        Start Building
-                        <ArrowRight className="w-4 h-4" />
+                        <ArrowRight className="w-5 h-5" />
                       </Button>
-                    )}
-                  </div>
-                </div>
+                    </SignInButton>
+                  ) : (
+                    <Button
+                      type="submit"
+                      size="icon"
+                      disabled={!prompt.trim()}
+                      className="h-12 w-12 rounded-full shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:shadow-none transition-all"
+                    >
+                      <ArrowRight className="w-5 h-5" />
+                    </Button>
+                  )}
+                </form>
               </div>
+              <p className="text-xs text-muted-foreground mt-3 text-center">
+                Press <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> to send · <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Shift</kbd> + <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> for new line
+              </p>
             </motion.div>
 
             {/* Suggestions */}
@@ -229,19 +284,21 @@ export default function HomePage() {
               transition={{ delay: 0.6, duration: 0.6 }}
               className="space-y-3"
             >
-              <p className="text-center text-sm font-medium text-gray-700 dark:text-gray-300">
-                Try these examples:
+              <p className="text-center text-xs uppercase tracking-wider font-medium text-muted-foreground">
+                Try these examples
               </p>
-              <div className="flex flex-wrap gap-2 sm:gap-3 justify-center">
+              <div className="flex flex-wrap gap-2 justify-center">
                 {suggestions.map((suggestion) => (
                   <Button
-                    key={`suggestion-${suggestion.text}`}
-                    variant="outline"
-                    onClick={() => setPrompt(suggestion.text)}
-                    className="flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 bg-white dark:bg-[#1a1a1a] border-2 border-gray-200 dark:border-[#333] rounded-xl hover:border-blue-400 dark:hover:border-blue-700 hover:bg-blue-50 dark:hover:bg-[#1a2a3a] text-gray-700 dark:text-gray-300 hover:text-blue-700 dark:hover:text-blue-400 transition-all duration-200 text-sm sm:text-base font-medium shadow-sm hover:shadow-md"
+                    key={`suggestion-${suggestion.label}`}
+                    variant="ghost"
+                    onClick={() => setPrompt(suggestion.prompt)}
+                    className="group/pill flex items-center gap-2 h-auto px-4 py-2 bg-muted/40 hover:bg-muted/70 border border-border/40 hover:border-blue-500/40 rounded-full text-muted-foreground hover:text-foreground transition-all duration-200 text-sm font-normal backdrop-blur-sm"
                   >
-                    {suggestion.icon}
-                    <span className="truncate max-w-[140px] sm:max-w-none">{suggestion.text}</span>
+                    <span className="text-blue-500/70 group-hover/pill:text-blue-500 transition-colors">
+                      {suggestion.icon}
+                    </span>
+                    <span className="truncate max-w-35 sm:max-w-none">{suggestion.label}</span>
                   </Button>
                 ))}
               </div>

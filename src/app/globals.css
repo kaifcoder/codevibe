@@ -263,3 +263,32 @@
   70% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* Sleek minimal scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 25%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--muted-foreground) 25%, transparent);
+  border-radius: 9999px;
+  border: none;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}

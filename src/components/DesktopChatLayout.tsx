@@ -13,7 +13,7 @@ import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import type { MessageQueue } from "@/components/QueueList";
 import { CodeEditor } from "@/components/CodeEditor";
 import { FileTree } from "@/components/FileTree";
-import { useChatStore } from "@/stores/chat-store";
+import { useChat } from "@/contexts/chat-context";
 import { useCollaboration } from "@/hooks/use-collaboration";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -24,8 +24,6 @@ export interface DesktopChatLayoutProps {
   handleSend: () => void;
   isLoading: boolean;
   isStreaming: boolean;
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
   handleCodeChange: (value: string | undefined) => void;
   renderPreview: () => React.ReactNode;
   queue?: MessageQueue;
@@ -38,23 +36,28 @@ export function DesktopChatLayout({
   handleSend,
   isLoading,
   isStreaming,
-  activeTab,
-  setActiveTab,
   handleCodeChange,
   renderPreview,
   queue,
 }: Readonly<DesktopChatLayoutProps>) {
-  const fileTree = useChatStore(s => s.fileTree);
-  const selectedFile = useChatStore(s => s.selectedFile);
-  const openFiles = useChatStore(s => s.openFiles);
-  const sandboxId = useChatStore(s => s.sandboxId);
-  const sessionId = useChatStore(s => s.sessionId);
-  const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
-  const streamingFiles = useChatStore(s => s.streamingFiles);
-  const setSelectedFile = useChatStore(s => s.setSelectedFile);
-  const setOpenFiles = useChatStore(s => s.setOpenFiles);
-  const selectedFileContent = useChatStore(s => s.getFileContent(s.selectedFile));
+  const {
+    sessionId,
+    fileTree,
+    selectedFile,
+    setSelectedFile,
+    openFiles,
+    setOpenFiles,
+    sandboxId,
+    isSyncingFilesystem,
+    streamingFiles,
+    activeTab,
+    setActiveTab,
+    getFileContent,
+  } = useChat();
+
+  const selectedFileContent = getFileContent(selectedFile);
   const { yText, provider } = useCollaboration(sessionId, selectedFile);
+
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full">
       <ResizablePanel defaultSize={30} minSize={20}>
@@ -70,7 +73,7 @@ export function DesktopChatLayout({
           />
         </div>
       </ResizablePanel>
-      <ResizableHandle withHandle />
+      <ResizableHandle className="bg-transparent" />
       <ResizablePanel
         defaultSize={70}
         minSize={30}
@@ -146,7 +149,6 @@ export function DesktopChatLayout({
                     </div>
                   ) : (
                     <>
-                      {/* File Tabs */}
                       <div className="flex items-center justify-between bg-muted/20 border-b overflow-x-auto">
                         <div className="flex items-center overflow-x-auto">
                           {openFiles.map((filePath) => {
@@ -193,7 +195,6 @@ export function DesktopChatLayout({
                             );
                           })}
                         </div>
-                        {/* Connection Status and Sync Indicator */}
                         <div className="flex items-center gap-3 px-3 py-1.5 text-xs border-l shrink-0">
                           {streamingFiles.length > 0 && (
                             <div className="flex items-center gap-1 text-emerald-500">
