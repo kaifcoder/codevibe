@@ -45,17 +45,22 @@ export async function GET(
   try {
     const { token } = await params;
     const { userId } = await auth();
-    
+    const shareToken = request.nextUrl.searchParams.get("token");
+
     // Try to find by ID first (for regular chat sessions)
     let session = await prisma.session.findUnique({
       where: { id: token },
     });
 
-    // If not found, try by shareToken (for shared sessions)
+    // If not found, try by shareToken (legacy callers that pass the share
+    // token in the path). When this branch matches, the share token has
+    // implicitly been provided already.
+    let matchedByShareToken = false;
     if (!session) {
       session = await prisma.session.findUnique({
         where: { shareToken: token, isPublic: true },
       });
+      matchedByShareToken = !!session;
     }
 
     if (!session) {
@@ -64,9 +69,15 @@ export async function GET(
         { status: 404 }
       );
     }
-    
-    // Check access: user owns the session OR session is public
-    if (session.userId !== userId && !session.isPublic) {
+
+    // Owner can always read.
+    const isOwner = !!userId && session.userId === userId;
+    // Non-owners need a public session AND a matching share token —
+    // either presented in the path (legacy lookup above) or in `?token=`.
+    const tokenMatches = matchedByShareToken
+      || (session.isPublic && !!shareToken && shareToken === session.shareToken);
+
+    if (!isOwner && !tokenMatches) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 403 }
@@ -83,6 +94,10 @@ export async function GET(
   }
 }
 
+// Fields a share-link collaborator may update. Keep tight: writes that change
+// ownership semantics, visibility, title, etc. stay owner-only.
+const COLLAB_PATCH_WHITELIST = new Set(["threadId"]);
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ token: string }> }
@@ -90,30 +105,42 @@ export async function PATCH(
   try {
     const { token } = await params;
     const { userId } = await auth();
-    
-    if (!userId) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
-    
+    const shareToken = request.nextUrl.searchParams.get("token");
+
     // Verify ownership before updating
     const existingSession = await prisma.session.findUnique({
       where: { id: token },
     });
-    
-    if (!existingSession || existingSession.userId !== userId) {
+
+    if (!existingSession) {
       return NextResponse.json(
-        { error: "Session not found or access denied" },
+        { error: "Session not found" },
+        { status: 404 }
+      );
+    }
+
+    const isOwner = !!userId && existingSession.userId === userId;
+    const isCollab =
+      !isOwner
+      && existingSession.isPublic
+      && !!shareToken
+      && shareToken === existingSession.shareToken;
+
+    if (!isOwner && !isCollab) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
         { status: 403 }
       );
     }
-    
+
     const body = await request.json() as Record<string, unknown>;
 
     // Sanitize data to remove null bytes before saving to PostgreSQL
     const sanitizedBody = sanitizeForPostgres(body) as Record<string, unknown>;
+
+    // Collaborators can only touch the whitelisted fields. Owner has full
+    // access to whatever PATCH allows.
+    const allowedFields = isOwner ? null : COLLAB_PATCH_WHITELIST;
 
     // Skip the update entirely if the incoming fields all match what's
     // already in the row. Prisma's @updatedAt would otherwise bump the
@@ -121,6 +148,7 @@ export async function PATCH(
     const changed: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(sanitizedBody)) {
       if (value === undefined) continue;
+      if (allowedFields && !allowedFields.has(key)) continue;
       const existingValue = (existingSession as Record<string, unknown>)[key];
       // Compare via JSON serialization so Date / nested object / array
       // diffs are caught without per-field handling.
@@ -149,7 +177,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
   try {

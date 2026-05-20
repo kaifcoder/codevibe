@@ -24,6 +24,8 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
     sandboxId,
     setIsSyncingToE2B,
     updateFileContent,
+    displayName,
+    shareToken,
   } = useChat();
 
   // Stable refs for the E2B-sync side effect — we don't want to rebind the
@@ -34,9 +36,13 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
   setIsSyncingToE2BRef.current = setIsSyncingToE2B;
   const updateFileContentRef = useRef(updateFileContent);
   updateFileContentRef.current = updateFileContent;
+  const shareTokenRef = useRef(shareToken);
+  shareTokenRef.current = shareToken;
 
   useEffect(() => {
-    if (!sessionId || !selectedFile) {
+    if (!sessionId || !selectedFile || !displayName) {
+      // Wait for an identity before joining the room — avoids broadcasting
+      // an "Anonymous" awareness state and then having to overwrite it.
       setYText(null);
       setProvider(null);
       return;
@@ -62,7 +68,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       const { initCollaboration } = await import("@/lib/collaboration");
       if (cancelled) return;
 
-      const session = initCollaboration({ roomId });
+      const session = initCollaboration({ roomId, username: displayName ?? "Anonymous" });
       if (cancelled) {
         session.disconnect();
         return;
@@ -106,12 +112,24 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       }
 
       // Mirror Yjs edits → file tree (for sidebar/etc) and → E2B sandbox.
-      // Debounced; lastSavedContent skips redundant writes when the agent
-      // wrote into Yjs and we'd just be echoing the same content back.
-      const observer = () => {
+      // Only push to E2B for changes the user actually typed in this browser:
+      //   - remote updates from the server come from the agent (which already
+      //     wrote E2B) or other clients (whose edits also already went to E2B
+      //     from their own session).
+      //   - seed transactions (origin "local-seed") come from CodeEditor
+      //     re-applying initialContent that itself came from the agent.
+      // Bouncing those back through /api/write-to-sandbox is at best wasted,
+      // at worst stomps on a newer agent write that hasn't reached us yet.
+      const observer = (
+        _event: Y.YTextEvent,
+        transaction: Y.Transaction,
+      ) => {
         if (cancelled) return;
         const content = session.yText.toString();
         updateFileContentRef.current(selectedFile, content);
+
+        if (!transaction.local) return;
+        if (transaction.origin === "local-seed") return;
 
         const sbx = sandboxIdRef.current;
         if (!sbx) return;
@@ -125,7 +143,13 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
             await fetch("/api/write-to-sandbox", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ sandboxId: sbx, filePath: selectedFile, content }),
+              body: JSON.stringify({
+                sandboxId: sbx,
+                filePath: selectedFile,
+                content,
+                sessionId,
+                shareToken: shareTokenRef.current ?? undefined,
+              }),
             });
           } catch (err) {
             console.error("[E2B sync] write failed:", err);
@@ -152,7 +176,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       setConnectionStatus("disconnected");
       setConnectedUsers([]);
     };
-  }, [sessionId, selectedFile, setConnectionStatus, setConnectedUsers]);
+  }, [sessionId, selectedFile, displayName, setConnectionStatus, setConnectedUsers]);
 
   return { yText, provider };
 }

@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "yjs": "node yjs-server.js",
+    "yjs": "node --watch yjs-server.js",
     "agent": "npx @langchain/langgraph-cli dev",
     "agent:docker": "docker compose up --build",
     "agent:docker:down": "docker compose down"

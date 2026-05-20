@@ -19,6 +19,9 @@ services:
       POSTGRES_URI: "postgres://postgres:password@host.docker.internal:5433/langgraph?sslmode=disable"
       LANGSERVE_GRAPHS: '{"agent": "./src/lib/agent.ts:agent"}'
       DOCKER_CONTAINER: "true"
+      YJS_WS_URL: "ws://host.docker.internal:1234"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     pull_policy: missing

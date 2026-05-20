@@ -13,7 +13,13 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
 
   if (entry) {
     const sbx = await getSandbox(entry.sandboxId);
-    if (sbx) return sbx;
+    if (sbx) {
+      // Reattach: tell the frontend about the live sandbox in case this is a
+      // fresh page load that didn't have sandboxUrl in the session row yet.
+      // isNew=false signals the handler to skip iframe-loading flicker etc.
+      config.writer?.({ type: 'sandboxCreated', sandboxId: entry.sandboxId, sandboxUrl: entry.sandboxUrl, isNew: false });
+      return sbx;
+    }
     config.writer?.({ type: 'sandboxExpired', sandboxId: entry.sandboxId });
   }
 
@@ -100,13 +106,22 @@ const writeFile = tool(
 
     await sbx.files.write(path, content);
 
+    // Tell the frontend this file exists so the sidebar can show it before any
+    // fileTreeSync rescans. The actual content lives in Yjs (below).
+    config.writer?.({ type: 'fileCreated', filePath: path });
+
     // Mirror into Yjs so any open editor (and future opens) see the new content.
     const sessionId = config.configurable?.sessionId as string | undefined;
-    if (sessionId) {
+    if (!sessionId) {
+      console.warn('[e2b_write_file] No sessionId in config.configurable — skipping Yjs mirror for', path);
+    } else {
+      const room = `${sessionId}-${path}`;
+      console.log(`[e2b_write_file] Yjs mirror starting: ${room} (${content.length} chars)`);
       try {
-        await writeToYjsRoom(`${sessionId}-${path}`, content);
+        await writeToYjsRoom(room, content);
+        console.log(`[e2b_write_file] Yjs mirror ok: ${room}`);
       } catch (err) {
-        console.warn('[e2b_write_file] Yjs mirror failed:', (err as Error).message);
+        console.warn('[e2b_write_file] Yjs mirror failed:', room, '-', (err as Error).message);
       }
     }
 
