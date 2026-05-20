@@ -83,8 +83,8 @@ export const agent = createAgent({
     sandboxAwarePrompt,
     summarizationMiddleware({
       model,
-      trigger: { tokens: 12000 },
-      keep: { messages: 6 },
+      trigger: { tokens: 80000 },
+      keep: { messages: 12 },
     }),
   ],
   version: 'v1',

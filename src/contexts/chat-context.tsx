@@ -4,11 +4,14 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useState,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from "react";
+import { useUser } from "@clerk/nextjs";
+import { useSearchParams } from "next/navigation";
 
 export type FileNode = {
   name: string;
@@ -22,8 +25,21 @@ export type ConnectionStatus = "connected" | "connecting" | "disconnected";
 export type ConnectedUser = { id: string; name: string; color: string };
 export type MobilePanel = "chat" | "preview" | "code";
 
+const DISPLAY_NAME_STORAGE_KEY = "codevibe.guestDisplayName";
+
 interface ChatContextValue {
   sessionId: string;
+
+  // Identity used for Yjs awareness ("who is in the room"). Comes from Clerk
+  // when signed in, otherwise localStorage, otherwise null until the visitor
+  // is prompted.
+  displayName: string | null;
+  setDisplayName: (name: string) => void;
+  isClerkAuthed: boolean;
+
+  // Share-link credential for collaborators. Null for the owner. When set,
+  // the client appends it to write endpoints so the server can re-authorize.
+  shareToken: string | null;
 
   // LangGraph thread / run identifiers (mirrored from useStream callbacks)
   threadId: string | null;
@@ -129,6 +145,43 @@ export function ChatProvider({
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
 
+  const { isSignedIn, user } = useUser();
+  const searchParams = useSearchParams();
+  const shareToken = searchParams?.get("token") ?? null;
+  const clerkName = isSignedIn
+    ? user?.fullName || user?.firstName || user?.username || user?.primaryEmailAddress?.emailAddress || null
+    : null;
+
+  const [displayName, setDisplayNameState] = useState<string | null>(() => {
+    if (clerkName) return clerkName;
+    if (typeof globalThis !== "undefined" && "localStorage" in globalThis) {
+      try {
+        return globalThis.localStorage.getItem(DISPLAY_NAME_STORAGE_KEY);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  // Once Clerk hydrates, prefer the authenticated name over any cached guest name.
+  useEffect(() => {
+    if (clerkName && displayName !== clerkName) {
+      setDisplayNameState(clerkName);
+    }
+  }, [clerkName, displayName]);
+
+  const setDisplayName = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setDisplayNameState(trimmed);
+    try {
+      globalThis.localStorage?.setItem(DISPLAY_NAME_STORAGE_KEY, trimmed);
+    } catch {
+      // ignore quota / private-mode errors
+    }
+  }, []);
+
   const getFileContent = useCallback(
     (path: string) => flattenFiles(fileTree).find((f) => f.path === path)?.content ?? "",
     [fileTree],
@@ -140,6 +193,10 @@ export function ChatProvider({
 
   const value: ChatContextValue = {
     sessionId,
+    displayName,
+    setDisplayName,
+    isClerkAuthed: !!isSignedIn,
+    shareToken,
     threadId,
     setThreadId,
     runId,

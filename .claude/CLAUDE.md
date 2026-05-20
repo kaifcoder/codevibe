@@ -96,7 +96,7 @@ import { api } from "@/trpc/server"   // server-side (RSC)
 - Custom events (codePatch, fileTreeSync, sandboxCreated) emitted via `config.writer()` in tools
 - Sandbox lifecycle: `create_sandbox` tool creates sandbox, registered in thread-scoped registry
 - Recursion limit: 80; Message compaction: last 10 msgs via middleware
-- Summarization: triggers at 12,000 tokens, keeps 6 messages
+- Summarization: triggers at 80,000 tokens, keeps 12 messages
 
 ### File Sync Boundaries
 - **Include**: `.ts`, `.tsx`, `.js`, `.jsx`, `.css`, `.md`, `.json`, `.toml`

@@ -15,6 +15,7 @@ import { MobileChatLayout } from "@/components/MobileChatLayout";
 import { DesktopChatLayout } from "@/components/DesktopChatLayout";
 import { PreviewShimmer } from "@/components/ui/shimmer";
 import { ChatProvider, useChat } from "@/contexts/chat-context";
+import { NamePromptDialog } from "@/components/NamePromptDialog";
 import { useTRPC } from "@/trpc/client";
 import { useMutation } from "@tanstack/react-query";
 
@@ -352,7 +353,9 @@ function ChatPage() {
 
     const initSession = async () => {
       try {
-        const response = await fetch(`/api/session/${sessionId}`);
+        const response = await fetch(
+          `/api/session/${sessionId}${shareToken ? `?token=${encodeURIComponent(shareToken)}` : ""}`,
+        );
         if (response.status === 404) {
           createDbSessionRef.current.mutate({ id: sessionId, title: `Chat ${new Date().toLocaleString()}` });
         } else if (response.ok) {
@@ -372,7 +375,9 @@ function ChatPage() {
 
     const loadSession = async () => {
       try {
-        const response = await fetch(`/api/session/${sessionId}`);
+        const response = await fetch(
+          `/api/session/${sessionId}${shareToken ? `?token=${encodeURIComponent(shareToken)}` : ""}`,
+        );
         if (!response.ok) return;
 
         const session = await response.json();
@@ -481,11 +486,17 @@ function ChatPage() {
     checkExpiration();
     const interval = setInterval(checkExpiration, 60000);
     return () => clearInterval(interval);
-  }, [ctx]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.sandboxCreatedAt, ctx.sandboxUrl]);
 
+  // When the sandbox transitions to expired, kick the user off the preview
+  // tab (it'd just show the "Expired" placeholder). Depending on `[ctx]`
+  // makes this fire on every state change and stomps the "live preview"
+  // setActiveTab from the next sandboxCreated event.
   useEffect(() => {
     if (ctx.isSandboxExpired) ctx.setActiveTab("code");
-  }, [ctx]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.isSandboxExpired]);
 
   // --- Auto-save session to DB ---
   useEffect(() => {
@@ -716,6 +727,7 @@ function ChatPage() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      <NamePromptDialog />
       {/* Status Bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
         <div className="flex items-center gap-3">

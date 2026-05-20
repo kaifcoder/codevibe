@@ -189,10 +189,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <div className="relative flex items-center gap-1">
               <SidebarMenuButton
                 asChild
-                className="data-[slot=sidebar-menu-button]:!p-1.5 flex-1 group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:group-hover:opacity-0 transition-opacity"
+                className="data-[slot=sidebar-menu-button]:p-1.5! flex-1 group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:group-hover:opacity-0 transition-opacity"
               >
                 <Link href="/">
-                  <BotIcon className="!size-5" />
+                  <BotIcon className="size-5!" />
                   <span className="text-base font-semibold">CodeVibe</span>
                 </Link>
               </SidebarMenuButton>
@@ -207,7 +207,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
               >
                 <Link href="/">
-                  <PlusIcon className="!size-4" />
+                  <PlusIcon className="size-4!" />
                   <span className="font-medium">New Chat</span>
                 </Link>
               </SidebarMenuButton>
