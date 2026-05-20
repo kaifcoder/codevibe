@@ -87,7 +87,7 @@ export function DesktopChatLayout({
           >
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full overflow-hidden">
               <TabsContent value="code" className="flex flex-row flex-1 min-h-0 gap-0 mt-0 overflow-hidden">
-                <div className="w-48 h-full flex-shrink-0 overflow-hidden border-r flex flex-col">
+                <div className="w-48 h-full shrink-0 overflow-hidden border-r flex flex-col">
                   <div className="p-2 border-b flex items-center justify-between bg-muted/20">
                     <span className="text-xs font-medium text-muted-foreground">Files</span>
                     <Button
