@@ -1,9 +1,10 @@
 "use client"
 
-import { BotIcon, MessagesSquareIcon, Trash2Icon, MoreHorizontalIcon, Trash } from "lucide-react"
+import { BotIcon, MessagesSquareIcon, Trash2Icon, MoreHorizontalIcon, PlusIcon, SettingsIcon, Sun, Moon, Monitor, Palette, UserIcon, LogOutIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
-import { useAuth } from "@clerk/nextjs"
+import { useAuth, useUser, useClerk } from "@clerk/nextjs"
+import { useTheme } from "next-themes"
 
 import {
   Sidebar,
@@ -17,8 +18,10 @@ import {
   SidebarMenuItem,
   SidebarMenuAction,
   SidebarFooter,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import Link from "next/link"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,6 +36,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
@@ -50,6 +57,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const router = useRouter()
   const pathname = usePathname()
   const { isSignedIn, isLoaded } = useAuth()
+  const { user } = useUser()
+  const { openUserProfile, signOut } = useClerk()
+  const { setTheme } = useTheme()
 
   const handleDeleteChat = (chatId: string, e: React.MouseEvent) => {
     e.preventDefault()
@@ -121,13 +131,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           return
         }
         
-        const sessions = await response.json()
-        
+        const sessions = await response.json() as Array<{
+          id: string
+          title?: string | null
+          updatedAt?: string | null
+          createdAt?: string | null
+        }>
+
         // Map to ChatSession format
         const chats: ChatSession[] = sessions
-          .map((session: any) => {
+          .map((session) => {
             const title = session.title || 'New Chat'
-            const timestamp = new Date(session.updatedAt || session.createdAt).getTime()
+            const timestamp = new Date(session.updatedAt || session.createdAt || Date.now()).getTime()
 
             return {
               id: session.id,
@@ -171,16 +186,33 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              asChild
-              className="data-[slot=sidebar-menu-button]:!p-1.5"
-            >
-              <Link href="/">
-                <BotIcon className="!size-5" />
-                <span className="text-base font-semibold">CodeVibe</span>
-              </Link>
-            </SidebarMenuButton>
+            <div className="relative flex items-center gap-1">
+              <SidebarMenuButton
+                asChild
+                className="data-[slot=sidebar-menu-button]:!p-1.5 flex-1 group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:group-hover:opacity-0 transition-opacity"
+              >
+                <Link href="/">
+                  <BotIcon className="!size-5" />
+                  <span className="text-base font-semibold">CodeVibe</span>
+                </Link>
+              </SidebarMenuButton>
+              <SidebarTrigger className="shrink-0 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:group-hover:opacity-100 transition-opacity" />
+            </div>
           </SidebarMenuItem>
+          {isLoaded && isSignedIn && (
+            <SidebarMenuItem className="mt-5">
+              <SidebarMenuButton
+                asChild
+                tooltip="New Chat"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+              >
+                <Link href="/">
+                  <PlusIcon className="!size-4" />
+                  <span className="font-medium">New Chat</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
@@ -191,14 +223,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <SidebarMenu>
                 {recentChats.length === 0 ? (
                   <SidebarMenuItem>
-                    <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">
                       No recent chats
                     </div>
                   </SidebarMenuItem>
                 ) : (
                   recentChats.map((chat) => (
                     <SidebarMenuItem key={chat.id}>
-                      <SidebarMenuButton asChild>
+                      <SidebarMenuButton asChild isActive={pathname === `/chat/${chat.id}`}>
                         <Link href={`/chat/${chat.id}`}>
                           <MessagesSquareIcon />
                           <span className="truncate">{chat.title}</span>
@@ -240,18 +272,125 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       
       {isLoaded && isSignedIn && (
         <SidebarFooter>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                onClick={handleClearAll}
-                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                tooltip="Clear All Chats"
+          <div className="flex items-center group-data-[collapsible=icon]:justify-center">
+            <a
+              href="https://github.com/kaifcoder/codevibe"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub repository"
+              className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="h-4 w-4 shrink-0"
+                aria-hidden="true"
               >
-                <Trash />
-                <span>Clear All Chats</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+                <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.16-.02-2.11-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18.91-.25 1.89-.38 2.86-.38.97 0 1.95.13 2.86.38 2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z" />
+              </svg>
+              <span className="truncate group-data-[collapsible=icon]:hidden">GitHub</span>
+            </a>
+          </div>
+          <div className="flex items-center gap-2 group-data-[collapsible=icon]:flex-col-reverse group-data-[collapsible=icon]:gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex flex-1 min-w-0 items-center gap-2 rounded-md p-2 text-left transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:p-1"
+                  aria-label={user?.fullName || user?.primaryEmailAddress?.emailAddress || "Account"}
+                >
+                  <Avatar className="h-8 w-8 rounded-full shrink-0">
+                    {user?.imageUrl && <AvatarImage src={user.imageUrl} alt={user?.fullName || "User"} />}
+                    <AvatarFallback className="rounded-full text-xs">
+                      {(user?.fullName || user?.primaryEmailAddress?.emailAddress || "U")
+                        .split(" ")
+                        .map((s) => s[0])
+                        .slice(0, 2)
+                        .join("")
+                        .toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight min-w-0 group-data-[collapsible=icon]:hidden">
+                    <span className="truncate font-medium">
+                      {user?.fullName || user?.primaryEmailAddress?.emailAddress || "Account"}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {user?.fullName ? user?.primaryEmailAddress?.emailAddress : "Free"}
+                    </span>
+                  </div>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start" className="w-56">
+                <div className="px-2 py-1.5">
+                  <p className="text-sm font-medium truncate">
+                    {user?.fullName || user?.primaryEmailAddress?.emailAddress || "Account"}
+                  </p>
+                  {user?.fullName && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      {user?.primaryEmailAddress?.emailAddress}
+                    </p>
+                  )}
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => openUserProfile()}>
+                  <UserIcon className="h-4 w-4 mr-2" />
+                  Manage account
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => signOut({ redirectUrl: "/" })}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <LogOutIcon className="h-4 w-4 mr-2" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Settings"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                >
+                  <SettingsIcon className="h-4 w-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="end" className="ml-3 w-56">
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Palette className="h-4 w-4 mr-2" />
+                    Theme
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onClick={() => setTheme("light")}>
+                      <Sun className="h-4 w-4 mr-2" />
+                      Light
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setTheme("dark")}>
+                      <Moon className="h-4 w-4 mr-2" />
+                      Dark
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setTheme("system")}>
+                      <Monitor className="h-4 w-4 mr-2" />
+                      System
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleClearAll}
+                  disabled={recentChats.length <= 1}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2Icon className="h-4 w-4 mr-2" />
+                  Delete all chats
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+          </div>
         </SidebarFooter>
       )}
       

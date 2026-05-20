@@ -3,8 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useEffect, useState, useCallback, useRef, useMemo, type Dispatch, type SetStateAction } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
@@ -15,492 +15,564 @@ import { useAgentStream } from "@/hooks/use-agent-stream";
 import { MobileChatLayout } from "@/components/MobileChatLayout";
 import { DesktopChatLayout } from "@/components/DesktopChatLayout";
 import { PreviewShimmer } from "@/components/ui/shimmer";
-import { useChatStore } from "@/stores/chat-store";
+import { ChatProvider, useChat } from "@/contexts/chat-context";
 import { useTRPC } from "@/trpc/client";
 import { useMutation } from "@tanstack/react-query";
 
-// Sandbox expiration constant
 const SANDBOX_EXPIRY_MS = 25 * 60 * 1000;
+
+// Derive a chat title from the first user message — trimmed to ~50 chars on a word boundary.
+function generateTitle(content: string): string {
+  const trimmed = content.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= 50) return trimmed;
+  const sliced = trimmed.slice(0, 50);
+  const lastSpace = sliced.lastIndexOf(" ");
+  return (lastSpace > 30 ? sliced.slice(0, lastSpace) : sliced) + "…";
+}
 
 interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-function Page({ params }: PageProps) {
+export default function Page({ params }: PageProps) {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    params.then(({ id }) => setSessionId(id));
+  }, [params]);
+
+  if (!sessionId) return null;
+
+  // key={sessionId} forces full remount on session change — resets all useState
+  // and useStream's internal thread state cleanly.
+  return (
+    <ChatProvider key={sessionId} sessionId={sessionId}>
+      <ChatPage />
+    </ChatProvider>
+  );
+}
+
+// Build a snapshot string used to skip re-deriving messages when nothing changed.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function snapshotStream(messages: any[], toolCalls: any[] | undefined, isLoading: boolean): string {
+  const toolSnapshot = toolCalls
+    ? toolCalls.map((tc) => `${tc.call?.id}:${tc.state}`).join(",")
+    : "";
+  return (
+    messages
+      .map((msg) => {
+        const c = msg.content;
+        let len = 0;
+        if (typeof c === "string") {
+          len = c.length;
+        } else if (Array.isArray(c)) {
+          for (const block of c) {
+            if (block.type === "text") len += block.text?.length || 0;
+            else if (block.type === "thinking" || block.type === "reasoning")
+              len += block.thinking?.length || block.reasoning?.length || 0;
+            else len += 1;
+          }
+        }
+        return `${msg.id ?? ""}:${len}`;
+      })
+      .join("|") + `|loading:${isLoading}|tc:${toolSnapshot}`
+  );
+}
+
+// Module-level per-session timestamp cache. Survives chat navigation
+// (refs/state are wiped on remount, but this Map outlives them). Lost on
+// full page reload, which is acceptable — we'd otherwise need DB persistence.
+const timestampCachesBySession = new Map<string, Map<string, number>>();
+
+function getTimestampCache(sessionId: string): Map<string, number> {
+  let cache = timestampCachesBySession.get(sessionId);
+  if (!cache) {
+    cache = new Map();
+    timestampCachesBySession.set(sessionId, cache);
+  }
+  return cache;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function deriveChatMessages(
+  streamMessages: any[],
+  toolCalls: any[] | undefined,
+  isLoading: boolean,
+  timestampCache: Map<string, number>,
+  captureNewTimestamps: boolean,
+): ChatMessage[] {
+  const now = Date.now();
+  // Returns the persisted timestamp for an id, or — only when we're allowed
+  // to capture new ones — assigns and remembers `now`. Messages loaded via
+  // thread-rehydration (switchThread on revisit) are recorded with a
+  // sentinel `0` so they stay timestamp-less even after the user later
+  // interacts and capture is enabled.
+  const getTimestamp = (id: string): number | undefined => {
+    const existing = timestampCache.get(id);
+    if (existing !== undefined) return existing === 0 ? undefined : existing;
+    if (!captureNewTimestamps) {
+      timestampCache.set(id, 0);
+      return undefined;
+    }
+    timestampCache.set(id, now);
+    return now;
+  };
+
+  const mapped: ChatMessage[] = [];
+  let currentAiTurn: {
+    content: string;
+    reasoning: string;
+    toolCalls: NonNullable<ChatMessage["toolCalls"]>;
+    id: string;
+    lastIndex: number;
+  } | null = null;
+
+  const flushAiTurn = () => {
+    if (!currentAiTurn) return;
+    const isLast = currentAiTurn.lastIndex === streamMessages.length - 1;
+    mapped.push({
+      role: "ai",
+      content: currentAiTurn.content,
+      reasoning: currentAiTurn.reasoning || undefined,
+      timestamp: getTimestamp(currentAiTurn.id),
+      id: currentAiTurn.id,
+      status: isLoading && isLast ? "streaming" : "complete",
+      toolCalls: currentAiTurn.toolCalls.length > 0 ? currentAiTurn.toolCalls : undefined,
+    });
+    currentAiTurn = null;
+  };
+
+  for (let i = 0; i < streamMessages.length; i++) {
+    const msg = streamMessages[i];
+    const msgType = msg.type as string;
+
+    if (msgType === "tool") continue;
+
+    if (msgType === "human") {
+      flushAiTurn();
+      let content = "";
+      if (typeof msg.content === "string") {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === "text") content += block.text || "";
+        }
+      }
+      if (content) {
+        const id = msg.id || `msg-${i}`;
+        mapped.push({
+          role: "user",
+          content,
+          timestamp: getTimestamp(id),
+          id,
+          status: "complete",
+        });
+      }
+      continue;
+    }
+
+    if (msgType === "ai") {
+      if (!currentAiTurn) {
+        currentAiTurn = {
+          content: "",
+          reasoning: "",
+          toolCalls: [],
+          id: msg.id || `msg-${i}`,
+          lastIndex: i,
+        };
+      }
+      currentAiTurn.lastIndex = i;
+
+      if (typeof msg.content === "string") {
+        if (msg.content) currentAiTurn.content += (currentAiTurn.content ? "\n\n" : "") + msg.content;
+      } else if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === "text" && block.text) {
+            currentAiTurn.content += (currentAiTurn.content ? "\n\n" : "") + block.text;
+          }
+          if (block.type === "thinking" || block.type === "reasoning") {
+            currentAiTurn.reasoning += block.thinking || block.reasoning || "";
+          }
+        }
+      }
+
+      if (toolCalls) {
+        const msgToolCalls = msg.tool_calls as
+          | Array<{ id?: string; name: string; args: Record<string, unknown> }>
+          | undefined;
+        if (msgToolCalls) {
+          for (const tc of msgToolCalls) {
+            const match = toolCalls.find((stc) => stc.call.id === tc.id);
+            currentAiTurn.toolCalls.push({
+              tool: tc.name,
+              args: tc.args,
+              result: match?.result?.content as string | undefined,
+              status:
+                match?.state === "pending"
+                  ? "running"
+                  : match?.state === "error"
+                    ? "error"
+                    : match?.state === "completed"
+                      ? "complete"
+                      : "running",
+            });
+          }
+        }
+      }
+      continue;
+    }
+  }
+
+  flushAiTurn();
+
+  return mapped.filter((msg) => {
+    if (msg.role === "ai" && !msg.content && !msg.toolCalls?.length && !msg.reasoning && msg.status !== "streaming") {
+      return false;
+    }
+    if (msg.role === "ai" && msg.content && msg.content.startsWith("Here is a summary of the conversation")) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function ChatPage() {
   const trpc = useTRPC();
+  const router = useRouter();
   const searchParams = useSearchParams();
-  const shareToken = searchParams.get('token');
+  const shareToken = searchParams.get("token");
+  const promptParam = searchParams.get("prompt");
   const isSharedAccess = !!shareToken;
 
+  const ctx = useChat();
+  const { sessionId } = ctx;
+
+  const stream = useAgentStream();
+
+  // --- Local UI state ---
   const [isMounted, setIsMounted] = useState(false);
-  const [shouldAutoSend, setShouldAutoSend] = useState(false);
+  const [message, setMessage] = useState("");
   const [isCheckingExpiration, setIsCheckingExpiration] = useState(false);
-  const hasAutoSent = useRef(false);
-  const sessionCheckRef = useRef<Set<string>>(new Set());
+
+  // --- Refs for one-shot effects ---
+  const didInitRef = useRef(false);
   const sessionExistsRef = useRef(false);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<Record<string, string>>({});
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasAutoSentRef = useRef(false);
+  const switchedThreadRef = useRef(false);
+  const titleSetRef = useRef(false);
+  // Auto-save guard: only PATCH session data after the user has actually
+  // interacted in this session — prevents a passive visit from bumping
+  // updatedAt (which would re-order the sidebar).
+  const hasUserInteractedRef = useRef(false);
 
   const guestCredentials = useMemo(() => {
     if (!isSharedAccess) return null;
     const randomId = Math.floor(Math.random() * 10000);
     return { username: `Guest-${randomId}`, userId: `guest-${Date.now()}-${randomId}` };
   }, [isSharedAccess]);
+  void guestCredentials;
 
   const isMobile = useIsMobile();
 
-  // --- Zustand store ---
-  const sessionId = useChatStore(s => s.sessionId);
-  const setSessionId = useChatStore(s => s.setSessionId);
-  const threadId = useChatStore(s => s.threadId);
-  const messages = useChatStore(s => s.messages);
-  const setMessages = useChatStore(s => s.setMessages);
-  const message = useChatStore(s => s.message);
-  const setMessage = useChatStore(s => s.setMessage);
-  const isStreaming = useChatStore(s => s.isStreaming);
-  const fileTree = useChatStore(s => s.fileTree);
-  const setFileTree = useChatStore(s => s.setFileTree);
-  const sandboxId = useChatStore(s => s.sandboxId);
-  const setSandboxId = useChatStore(s => s.setSandboxId);
-  const sandboxUrl = useChatStore(s => s.sandboxUrl);
-  const setSandboxUrl = useChatStore(s => s.setSandboxUrl);
-  const sandboxCreatedAt = useChatStore(s => s.sandboxCreatedAt);
-  const setSandboxCreatedAt = useChatStore(s => s.setSandboxCreatedAt);
-  const isSandboxExpired = useChatStore(s => s.isSandboxExpired);
-  const setIsSandboxExpired = useChatStore(s => s.setIsSandboxExpired);
-  const activeTab = useChatStore(s => s.activeTab);
-  const setActiveTab = useChatStore(s => s.setActiveTab);
-  const showSecondPanel = useChatStore(s => s.showSecondPanel);
-  const setShowSecondPanel = useChatStore(s => s.setShowSecondPanel);
-  const mobileActivePanel = useChatStore(s => s.mobileActivePanel);
-  const setMobileActivePanel = useChatStore(s => s.setMobileActivePanel);
-  const setIsSyncingFilesystem = useChatStore(s => s.setIsSyncingFilesystem);
-  const iframeLoading = useChatStore(s => s.iframeLoading);
-  const setIframeLoading = useChatStore(s => s.setIframeLoading);
-  const connectedUsers = useChatStore(s => s.connectedUsers);
-  const runId = useChatStore(s => s.runId);
-
-  // --- useStream hook (replaces tRPC + SSE) ---
-  const stream = useAgentStream(threadId);
-
-  // --- Sync stream.messages → Zustand store (ChatMessage format) ---
-  const prevSnapshotRef = useRef('');
-
-  useEffect(() => {
-    if (!stream.messages || stream.messages.length === 0) return;
-
-    // Build a lightweight snapshot to detect real changes
-    // Include content length within array blocks to catch streaming token updates
-    const toolSnapshot = stream.toolCalls
-      ? stream.toolCalls.map((tc: any) => `${tc.call?.id}:${tc.state}`).join(',')
-      : '';
-    const snapshot = stream.messages.map((msg: any) => {
-      const c = msg.content;
-      let len = 0;
-      if (typeof c === 'string') {
-        len = c.length;
-      } else if (Array.isArray(c)) {
-        for (const block of c) {
-          if (block.type === 'text') len += (block.text?.length || 0);
-          else if (block.type === 'thinking' || block.type === 'reasoning') len += (block.thinking?.length || block.reasoning?.length || 0);
-          else len += 1;
-        }
-      }
-      return `${msg.id ?? ''}:${len}`;
-    }).join('|') + `|loading:${stream.isLoading}|tc:${toolSnapshot}`;
-
-    if (snapshot === prevSnapshotRef.current) return;
+  // --- Derive ChatMessage[] from stream.messages (single source of truth) ---
+  const prevSnapshotRef = useRef("");
+  const prevDerivedRef = useRef<ChatMessage[]>([]);
+  const messages = useMemo(() => {
+    const streamMessages = stream.messages || [];
+    if (streamMessages.length === 0) return prevDerivedRef.current;
+    const snapshot = snapshotStream(streamMessages, stream.toolCalls, stream.isLoading);
+    if (snapshot === prevSnapshotRef.current) return prevDerivedRef.current;
     prevSnapshotRef.current = snapshot;
+    const derived = deriveChatMessages(
+      streamMessages,
+      stream.toolCalls,
+      stream.isLoading,
+      getTimestampCache(sessionId),
+      hasUserInteractedRef.current,
+    );
+    prevDerivedRef.current = derived;
+    return derived;
+  }, [stream.messages, stream.toolCalls, stream.isLoading, sessionId]);
 
-    // Build consolidated messages: merge consecutive AI messages into single turns
-    const mapped: ChatMessage[] = [];
-    let currentAiTurn: { content: string; reasoning: string; toolCalls: NonNullable<ChatMessage['toolCalls']>; id: string; lastIndex: number } | null = null;
+  // --- Send message via useStream ---
+  const handleSend = useCallback(() => {
+    const text = message.trim();
+    if (!text) return;
+    setMessage("");
+    hasUserInteractedRef.current = true;
+    stream.submit(
+      { messages: [{ type: "human", content: text }] },
+      { onDisconnect: "continue", streamResumable: true } as Record<string, unknown>,
+    );
+  }, [message, stream]);
 
-    const flushAiTurn = () => {
-      if (!currentAiTurn) return;
-      const isLast = currentAiTurn.lastIndex === stream.messages.length - 1;
-      mapped.push({
-        role: 'ai',
-        content: currentAiTurn.content,
-        reasoning: currentAiTurn.reasoning || undefined,
-        timestamp: Date.now() - (stream.messages.length - currentAiTurn.lastIndex) * 1000,
-        id: currentAiTurn.id,
-        status: (stream.isLoading && isLast) ? 'streaming' : 'complete',
-        toolCalls: currentAiTurn.toolCalls.length > 0 ? currentAiTurn.toolCalls : undefined,
-      });
-      currentAiTurn = null;
-    };
-
-    for (let i = 0; i < stream.messages.length; i++) {
-      const msg = stream.messages[i] as any;
-      const msgType = msg.type as string;
-
-      if (msgType === 'tool') continue;
-
-      if (msgType === 'human') {
-        flushAiTurn();
-        let content = '';
-        if (typeof msg.content === 'string') {
-          content = msg.content;
-        } else if (Array.isArray(msg.content)) {
-          for (const block of msg.content as any[]) {
-            if (block.type === 'text') content += block.text || '';
-          }
-        }
-        if (content) {
-          mapped.push({
-            role: 'user',
-            content,
-            timestamp: Date.now() - (stream.messages.length - i) * 1000,
-            id: msg.id || `msg-${i}`,
-            status: 'complete',
-          });
-        }
-        continue;
-      }
-
-      if (msgType === 'ai') {
-        if (!currentAiTurn) {
-          currentAiTurn = { content: '', reasoning: '', toolCalls: [], id: msg.id || `msg-${i}`, lastIndex: i };
-        }
-        currentAiTurn.lastIndex = i;
-
-        // Extract text and reasoning
-        if (typeof msg.content === 'string') {
-          if (msg.content) currentAiTurn.content += (currentAiTurn.content ? '\n\n' : '') + msg.content;
-        } else if (Array.isArray(msg.content)) {
-          for (const block of msg.content as any[]) {
-            if (block.type === 'text' && block.text) {
-              currentAiTurn.content += (currentAiTurn.content ? '\n\n' : '') + block.text;
-            }
-            if (block.type === 'thinking' || block.type === 'reasoning') {
-              currentAiTurn.reasoning += (block.thinking || block.reasoning || '');
-            }
-          }
-        }
-
-        // Collect tool calls
-        if (stream.toolCalls) {
-          const msgToolCalls = msg.tool_calls as Array<{ id?: string; name: string; args: Record<string, unknown> }> | undefined;
-          if (msgToolCalls) {
-            for (const tc of msgToolCalls) {
-              const match = stream.toolCalls.find((stc: any) => stc.call.id === tc.id);
-              currentAiTurn.toolCalls.push({
-                tool: tc.name,
-                args: tc.args,
-                result: match?.result?.content as string | undefined,
-                status: match?.state === 'pending' ? 'running' : match?.state === 'error' ? 'error' : match?.state === 'completed' ? 'complete' : 'running',
-              });
-            }
-          }
-        }
-        continue;
-      }
-    }
-
-    flushAiTurn();
-
-    // Filter out empty AI messages and summary messages from summarization middleware
-    const filtered = mapped.filter((msg: ChatMessage) => {
-      if (msg.role === 'ai' && !msg.content && !msg.toolCalls?.length && !msg.reasoning && msg.status !== 'streaming') {
-        return false;
-      }
-      // Filter out summarization middleware output
-      if (msg.role === 'ai' && msg.content && msg.content.startsWith('Here is a summary of the conversation')) {
-        return false;
-      }
-      return true;
-    });
-
-    // Merge with existing messages: keep old messages, append only genuinely new ones
-    const existingMessages = useChatStore.getState().messages;
-    if (existingMessages.length > 0 && filtered.length > 0) {
-      // Find the last user message ID in filtered to anchor the merge
-      const lastExistingUserMsg = [...existingMessages].reverse().find(m => m.role === 'user');
-      const lastFilteredUserMsg = [...filtered].reverse().find(m => m.role === 'user');
-
-      // If the stream still has the same recent user message, merge properly
-      if (lastExistingUserMsg && lastFilteredUserMsg && lastExistingUserMsg.content === lastFilteredUserMsg.content) {
-        // Find where this user message is in filtered
-        const anchorIdx = filtered.findLastIndex(m => m.role === 'user' && m.content === lastExistingUserMsg.content);
-        const anchorIdxExisting = existingMessages.findLastIndex(m => m.role === 'user' && m.content === lastExistingUserMsg.content);
-
-        if (anchorIdx >= 0 && anchorIdxExisting >= 0) {
-          // Keep all existing messages up to (but not including) the anchor's AI response,
-          // then take anchor + everything after from filtered (which has the latest streaming state)
-          const preserved = existingMessages.slice(0, anchorIdxExisting);
-          const fromStream = filtered.slice(anchorIdx);
-          const merged = [...preserved, ...fromStream];
-          useChatStore.getState().setMessages(merged);
-          return;
-        }
-      }
-
-      // If filtered has fewer messages than existing (summarization happened),
-      // keep old messages and only update/append the tail
-      if (filtered.length < existingMessages.length) {
-        // Find new messages not in existing (by matching last few)
-        const lastExisting = existingMessages[existingMessages.length - 1];
-        const lastFiltered = filtered[filtered.length - 1];
-        if (lastFiltered && lastExisting &&
-            lastFiltered.role === lastExisting.role &&
-            lastFiltered.content === lastExisting.content) {
-          // Same last message — just update status of last AI message
-          const updated = [...existingMessages];
-          updated[updated.length - 1] = { ...lastFiltered, timestamp: lastExisting.timestamp };
-          useChatStore.getState().setMessages(updated);
-          return;
-        }
-        // New AI response after summarization — append it
-        const newMessages = filtered.filter(fm =>
-          !existingMessages.some(em => em.role === fm.role && em.content === fm.content)
-        );
-        if (newMessages.length > 0) {
-          useChatStore.getState().setMessages([...existingMessages, ...newMessages]);
-          return;
-        }
-        // Fallback: keep existing (don't shrink)
-        return;
-      }
-    }
-
-    useChatStore.getState().setMessages(filtered);
-  }, [stream.messages, stream.toolCalls, stream.isLoading]);
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
 
   // --- DB session creation ---
   const createDbSession = useMutation(
     trpc.session.createSession.mutationOptions({
       onSuccess: (data) => {
         sessionExistsRef.current = true;
-        console.log('[DB] Session created:', data.id);
+        globalThis.dispatchEvent(new CustomEvent("chatUpdated"));
+        if (ctx.threadId) {
+          fetch(`/api/session/${data.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ threadId: ctx.threadId }),
+          }).catch(() => {});
+        }
       },
-      onError: (error) => { console.error('[DB] Failed to create session:', error); },
-    })
+      onError: (error) => {
+        console.error("[DB] Failed to create session:", error);
+        setTimeout(() => {
+          createDbSessionRef.current.mutate({ id: sessionId, title: `Chat ${new Date().toLocaleString()}` });
+        }, 2000);
+      },
+    }),
   );
   const createDbSessionRef = useRef(createDbSession);
   createDbSessionRef.current = createDbSession;
 
-  // Extract chat ID from params
+  // --- Initialize session on mount ---
   useEffect(() => {
-    let mounted = true;
-    params.then(async ({ id }) => {
-      if (!mounted) return;
+    if (didInitRef.current) return;
+    didInitRef.current = true;
 
-      const currentId = useChatStore.getState().sessionId;
-      // Reset if navigating to a different session or if store has stale data
-      if (currentId !== id) {
-        useChatStore.getState().reset(id);
-      }
-      setSessionId(id);
+    // Pull initial prompt from URL (set by home page handoff) and clear it from the URL.
+    if (promptParam) {
+      setMessage(promptParam);
+      router.replace(`/chat/${sessionId}`, { scroll: false });
+    }
 
-      if (sessionCheckRef.current.has(id)) return;
-      sessionCheckRef.current.add(id);
-
+    const initSession = async () => {
       try {
-        const response = await fetch(`/api/session/${id}`);
-        if (!mounted) return;
+        const response = await fetch(`/api/session/${sessionId}`);
         if (response.status === 404) {
-          createDbSessionRef.current.mutate({ id, title: `Chat ${new Date().toLocaleString()}` });
+          createDbSessionRef.current.mutate({ id: sessionId, title: `Chat ${new Date().toLocaleString()}` });
         } else if (response.ok) {
           sessionExistsRef.current = true;
         }
       } catch (error) {
-        console.error('[DB] Error checking session:', error);
-        sessionCheckRef.current.delete(id);
+        console.error("[DB] Error checking session:", error);
       }
+    };
+    initSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-      if (typeof globalThis !== 'undefined') {
-        const initialPrompt = sessionStorage.getItem(`chat_${id}_initial`);
-        if (initialPrompt) {
-          useChatStore.getState().setMessage(initialPrompt);
-          setShouldAutoSend(true);
-          sessionStorage.removeItem(`chat_${id}_initial`);
-        }
-      }
-    });
-    return () => { mounted = false; };
-  }, [params, setSessionId]);
-
-  // Load session data from database
+  // --- Load session data from DB ---
   useEffect(() => {
     if (!sessionId) return;
 
     const loadSession = async () => {
       try {
         const response = await fetch(`/api/session/${sessionId}`);
-        if (response.ok) {
-          const session = await response.json();
-          sessionExistsRef.current = true;
+        if (!response.ok) return;
 
-          if (session.fileTree && Array.isArray(session.fileTree)) {
-            setFileTree(session.fileTree);
+        const session = await response.json();
+        sessionExistsRef.current = true;
+
+        // If the session already has a non-default title, treat it as set so
+        // we don't PATCH it again on revisit.
+        if (session.title && !/^Chat \d/.test(session.title)) {
+          titleSetRef.current = true;
+        }
+
+        if (session.threadId) {
+          ctx.setThreadId(session.threadId);
+          if (!switchedThreadRef.current && stream.switchThread) {
+            switchedThreadRef.current = true;
+            stream.switchThread(session.threadId);
           }
+        }
 
-          if (session.sandboxId) {
-            setSandboxId(session.sandboxId);
-            setIsSyncingFilesystem(true);
-            setTimeout(async () => {
-              try {
-                const res = await fetch('/api/sync-filesystem', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ sandboxId: session.sandboxId, sessionId }),
-                });
-                if (res.ok) {
-                  const data = await res.json();
-                  if (data.fileTree) {
-                    useChatStore.getState().setFileTree(data.fileTree);
-                  }
-                }
-              } catch (err) {
-                console.error('[Sync] Auto-sync failed:', err);
-              } finally {
-                useChatStore.getState().setIsSyncingFilesystem(false);
+        if (session.fileTree && Array.isArray(session.fileTree)) {
+          ctx.setFileTree(session.fileTree);
+        }
+
+        if (session.sandboxId) {
+          ctx.setSandboxId(session.sandboxId);
+          ctx.setIsSyncingFilesystem(true);
+          setTimeout(async () => {
+            try {
+              const res = await fetch("/api/sync-filesystem", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sandboxId: session.sandboxId, sessionId }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.fileTree) ctx.setFileTree(data.fileTree);
               }
-            }, 1000);
-          }
-
-          if (session.sandboxUrl) {
-            setSandboxUrl(session.sandboxUrl);
-            setShowSecondPanel(true);
-            if (session.sandboxCreatedAt) {
-              setIsCheckingExpiration(true);
-              const createdTime = new Date(session.sandboxCreatedAt).getTime();
-              setSandboxCreatedAt(createdTime);
-              const elapsed = Date.now() - createdTime;
-              setTimeout(() => {
-                if (elapsed >= SANDBOX_EXPIRY_MS) {
-                  useChatStore.getState().setIsSandboxExpired(true);
-                }
-                setIsCheckingExpiration(false);
-              }, 500);
-            } else {
-              setSandboxCreatedAt(Date.now());
+            } catch (err) {
+              console.error("[Sync] Auto-sync failed:", err);
+            } finally {
+              ctx.setIsSyncingFilesystem(false);
             }
+          }, 1000);
+        }
+
+        if (session.sandboxUrl) {
+          ctx.setSandboxUrl(session.sandboxUrl);
+          ctx.setShowSecondPanel(true);
+          if (session.sandboxCreatedAt) {
+            setIsCheckingExpiration(true);
+            const createdTime = new Date(session.sandboxCreatedAt).getTime();
+            ctx.setSandboxCreatedAt(createdTime);
+            const elapsed = Date.now() - createdTime;
+            setTimeout(() => {
+              if (elapsed >= SANDBOX_EXPIRY_MS) ctx.setIsSandboxExpired(true);
+              setIsCheckingExpiration(false);
+            }, 500);
+          } else {
+            ctx.setSandboxCreatedAt(Date.now());
           }
         }
       } catch (error) {
-        console.error('[DB] Failed to load session:', error);
+        console.error("[DB] Failed to load session:", error);
       }
     };
     loadSession();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  useEffect(() => { setIsMounted(true); }, []);
-
-  // --- Send message via useStream ---
-  const handleSend = useCallback(() => {
-    const { message: msg } = useChatStore.getState();
-    if (!msg.trim()) return;
-
-    useChatStore.getState().setMessage("");
-
-    stream.submit(
-      { messages: [{ type: "human", content: msg.trim() }] },
-      {
-        onDisconnect: "continue",
-        streamResumable: true,
-      }
-    );
-  }, [stream]);
-
-  // --- Disconnect / Rejoin ---
-  const handleDisconnect = useCallback(() => {
-    if (stream.stop) {
-      stream.stop();
-    }
-  }, [stream]);
-
-  const handleRejoin = useCallback(() => {
-    const { runId: rid } = useChatStore.getState();
-    if (rid && stream.joinStream) {
-      stream.joinStream(rid);
-    }
-  }, [stream]);
-
-  // Auto-send initial message
   useEffect(() => {
-    if (shouldAutoSend && message.trim() && !hasAutoSent.current && messages.length <= 1) {
-      hasAutoSent.current = true;
-      setShouldAutoSend(false);
-      setTimeout(() => handleSend(), 100);
-    }
-  }, [shouldAutoSend, message, messages.length, handleSend]);
-
-  // --- Code editor changes ---
-  const handleCodeChange = useCallback((val: string | undefined) => {
-    const { selectedFile: file, sandboxId: sbx, isStreaming: streaming, updateFileContent } = useChatStore.getState();
-    const newContent = val ?? "";
-    updateFileContent(file, newContent);
-
-    if (sbx && file && !streaming) {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      if (lastSavedContentRef.current[file] === newContent) return;
-
-      saveTimeoutRef.current = setTimeout(async () => {
-        try {
-          useChatStore.getState().setIsSyncingToE2B(true);
-          lastSavedContentRef.current[file] = newContent;
-          await fetch('/api/write-to-sandbox', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sandboxId: sbx, filePath: file, content: newContent }),
-          });
-        } catch (error) {
-          console.error('[Sync] Error writing to e2b:', error);
-        } finally {
-          useChatStore.getState().setIsSyncingToE2B(false);
-        }
-      }, 1000);
-    }
+    setIsMounted(true);
   }, []);
 
-  // Check sandbox expiration
+  // --- Auto-send initial prompt from URL ---
   useEffect(() => {
+    if (!promptParam || hasAutoSentRef.current) return;
+    if (!message.trim()) return;
+    if (messages.length > 1) return;
+
+    hasAutoSentRef.current = true;
+    const attemptSend = (retries = 3) => {
+      const text = message.trim();
+      if (!text) return;
+      try {
+        handleSendRef.current();
+      } catch (e) {
+        if (retries > 0) {
+          setTimeout(() => attemptSend(retries - 1), 500);
+        } else {
+          console.error("[AutoSend] Failed after retries:", e);
+        }
+      }
+    };
+    setTimeout(() => attemptSend(), 300);
+  }, [message, messages.length, promptParam]);
+
+  // --- Code editor changes ---
+  const handleCodeChange = useCallback(
+    (val: string | undefined) => {
+      const newContent = val ?? "";
+      const file = ctx.selectedFile;
+      const sbx = ctx.sandboxId;
+      const streaming = stream.isLoading;
+      ctx.updateFileContent(file, newContent);
+
+      if (sbx && file && !streaming) {
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        if (lastSavedContentRef.current[file] === newContent) return;
+
+        saveTimeoutRef.current = setTimeout(async () => {
+          try {
+            ctx.setIsSyncingToE2B(true);
+            lastSavedContentRef.current[file] = newContent;
+            await fetch("/api/write-to-sandbox", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sandboxId: sbx, filePath: file, content: newContent }),
+            });
+          } catch (error) {
+            console.error("[Sync] Error writing to e2b:", error);
+          } finally {
+            ctx.setIsSyncingToE2B(false);
+          }
+        }, 1000);
+      }
+    },
+    [ctx, stream.isLoading],
+  );
+
+  // --- Sandbox expiration check ---
+  useEffect(() => {
+    const { sandboxCreatedAt, sandboxUrl } = ctx;
     if (!sandboxCreatedAt || !sandboxUrl) return;
     const checkExpiration = () => {
-      if (Date.now() - sandboxCreatedAt >= SANDBOX_EXPIRY_MS) setIsSandboxExpired(true);
+      if (Date.now() - sandboxCreatedAt >= SANDBOX_EXPIRY_MS) ctx.setIsSandboxExpired(true);
     };
     checkExpiration();
     const interval = setInterval(checkExpiration, 60000);
     return () => clearInterval(interval);
-  }, [sandboxCreatedAt, sandboxUrl, setIsSandboxExpired]);
+  }, [ctx]);
 
   useEffect(() => {
-    if (isSandboxExpired) setActiveTab('code');
-  }, [isSandboxExpired, setActiveTab]);
+    if (ctx.isSandboxExpired) ctx.setActiveTab("code");
+  }, [ctx]);
 
-  // Auto-save session to database (file tree + sandbox state + threadId)
+  // --- Auto-save session to DB ---
   useEffect(() => {
     if (!sessionId || !sessionExistsRef.current) return;
+    // Skip until the user actually interacts — prevents a passive open
+    // from bumping `updatedAt` and re-ordering the sidebar.
+    if (!hasUserInteractedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const currentThreadId = useChatStore.getState().threadId;
       fetch(`/api/session/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          threadId: currentThreadId || undefined,
-          fileTree: fileTree.length > 0 ? fileTree : undefined,
-          sandboxId: sandboxId || undefined,
-          sandboxUrl: sandboxUrl || undefined,
-          sandboxCreatedAt: sandboxCreatedAt ? new Date(sandboxCreatedAt).toISOString() : undefined,
+          threadId: ctx.threadId || undefined,
+          fileTree: ctx.fileTree.length > 0 ? ctx.fileTree : undefined,
+          sandboxId: ctx.sandboxId || undefined,
+          sandboxUrl: ctx.sandboxUrl || undefined,
+          sandboxCreatedAt: ctx.sandboxCreatedAt ? new Date(ctx.sandboxCreatedAt).toISOString() : undefined,
         }),
-      }).catch(err => console.error('[DB] Failed to save session:', err));
+      }).catch((err) => console.error("[DB] Failed to save session:", err));
     }, 2000);
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [sessionId, fileTree, sandboxId, sandboxUrl, sandboxCreatedAt]);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [sessionId, ctx.threadId, ctx.fileTree, ctx.sandboxId, ctx.sandboxUrl, ctx.sandboxCreatedAt]);
 
-  // Notify sidebar
+  // --- Notify sidebar on new user message ---
   useEffect(() => {
-    if (messages.some(m => m.role === 'user') && typeof globalThis !== 'undefined') {
-      globalThis.dispatchEvent(new CustomEvent('chatUpdated'));
+    if (messages.some((m) => m.role === "user") && typeof globalThis !== "undefined") {
+      globalThis.dispatchEvent(new CustomEvent("chatUpdated"));
     }
   }, [messages]);
 
-  // --- Render ---
+  // --- Set the session title from the first user message (once per session) ---
+  useEffect(() => {
+    if (titleSetRef.current) return;
+    if (!sessionId || !sessionExistsRef.current) return;
+    // Only set the title when this session originated user activity in this
+    // visit. Without this gate, switchThread re-hydrates prior messages on
+    // every open and we'd PATCH the title (and updatedAt) on each click.
+    if (!hasUserInteractedRef.current) return;
+    const firstUserMsg = messages.find((m) => m.role === "user" && m.content.trim());
+    if (!firstUserMsg) return;
+
+    titleSetRef.current = true;
+    const title = generateTitle(firstUserMsg.content);
+    fetch(`/api/session/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    })
+      .then(() => {
+        globalThis.dispatchEvent(new CustomEvent("chatUpdated"));
+      })
+      .catch((err) => console.error("[Title] Failed to set:", err));
+  }, [messages, sessionId]);
+
+  // --- Render preview ---
   const renderPreview = () => {
     if (isCheckingExpiration) {
       return (
@@ -511,7 +583,7 @@ function Page({ params }: PageProps) {
       );
     }
 
-    if (sandboxUrl && !isSandboxExpired) {
+    if (ctx.sandboxUrl && !ctx.isSandboxExpired) {
       return (
         <div className="relative w-full h-full flex flex-col bg-background">
           <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 shrink-0">
@@ -520,50 +592,83 @@ function Page({ params }: PageProps) {
                 type="button"
                 className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 onClick={() => {
-                  setIframeLoading(true);
+                  ctx.setIframeLoading(true);
                   const iframe = document.querySelector('iframe[title="Sandbox Preview"]') as HTMLIFrameElement;
-                  if (iframe) { const s = iframe.src; iframe.src = ''; setTimeout(() => { iframe.src = s; }, 0); }
+                  if (iframe) {
+                    const s = iframe.src;
+                    iframe.src = "";
+                    setTimeout(() => {
+                      iframe.src = s;
+                    }, 0);
+                  }
                 }}
                 title="Refresh"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
                 </svg>
               </button>
             </div>
             <div className="flex-1 flex items-center gap-2 px-3 py-1.5 bg-background rounded-md border text-sm">
               <svg className="w-3.5 h-3.5 text-green-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                <path
+                  fillRule="evenodd"
+                  d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z"
+                  clipRule="evenodd"
+                />
               </svg>
-              <span className="text-muted-foreground truncate font-mono text-xs">{sandboxUrl}</span>
+              <span className="text-muted-foreground truncate font-mono text-xs">{ctx.sandboxUrl}</span>
               <button
                 type="button"
                 className="ml-auto p-0.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                onClick={() => { navigator.clipboard.writeText(sandboxUrl); toast.success('URL copied'); }}
+                onClick={() => {
+                  navigator.clipboard.writeText(ctx.sandboxUrl!);
+                  toast.success("URL copied");
+                }}
                 title="Copy URL"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                  />
                 </svg>
               </button>
             </div>
             <button
               type="button"
               className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-              onClick={() => globalThis.open(sandboxUrl, '_blank')}
+              onClick={() => globalThis.open(ctx.sandboxUrl!, "_blank")}
               title="Open in new tab"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                />
               </svg>
             </button>
           </div>
           <div className="relative flex-1 min-h-0">
-            {iframeLoading && <div className="absolute inset-0 z-10"><PreviewShimmer /></div>}
+            {ctx.iframeLoading && (
+              <div className="absolute inset-0 z-10">
+                <PreviewShimmer />
+              </div>
+            )}
             <iframe
-              src={sandboxUrl}
-              className={`w-full h-full border-0 transition-opacity duration-300 ${iframeLoading ? 'opacity-0' : 'opacity-100'}`}
-              onLoad={() => setIframeLoading(false)}
+              key={`${sessionId}-${ctx.sandboxUrl}`}
+              src={ctx.sandboxUrl}
+              className={`w-full h-full border-0 transition-opacity duration-300 ${ctx.iframeLoading ? "opacity-0" : "opacity-100"}`}
+              onLoad={() => ctx.setIframeLoading(false)}
               title="Sandbox Preview"
               sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
               allow="clipboard-write; clipboard-read; microphone; camera; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
@@ -573,13 +678,15 @@ function Page({ params }: PageProps) {
       );
     }
 
-    if (isSandboxExpired) {
+    if (ctx.isSandboxExpired) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">
           <div className="text-6xl">⏱️</div>
           <div className="space-y-3">
             <h3 className="text-xl font-semibold text-foreground">Sandbox Expired</h3>
-            <p className="text-sm text-muted-foreground max-w-md">This sandbox has expired after 25 minutes of inactivity.</p>
+            <p className="text-sm text-muted-foreground max-w-md">
+              This sandbox has expired after 25 minutes of inactivity.
+            </p>
           </div>
         </div>
       );
@@ -589,17 +696,17 @@ function Page({ params }: PageProps) {
   };
 
   const renderMainContent = () => {
-    if (!showSecondPanel) {
+    if (!ctx.showSecondPanel) {
       return (
         <div className="h-full flex items-center justify-center">
           <div className="max-w-4xl w-full px-4 sm:px-6 lg:px-8 h-full flex flex-col">
             <ChatPanel
               messages={messages}
               message={message}
-              setMessage={setMessage as Dispatch<SetStateAction<string>>}
+              setMessage={setMessage}
               onSend={handleSend}
               isLoading={stream.isLoading}
-              isStreaming={isStreaming}
+              isStreaming={stream.isLoading}
               queue={stream.queue}
             />
           </div>
@@ -610,14 +717,12 @@ function Page({ params }: PageProps) {
     if (isMobile) {
       return (
         <MobileChatLayout
-          mobileActivePanel={mobileActivePanel}
-          setMobileActivePanel={setMobileActivePanel}
           messages={messages}
           message={message}
-          setMessage={setMessage as Dispatch<SetStateAction<string>>}
+          setMessage={setMessage}
           handleSend={handleSend}
           isLoading={stream.isLoading}
-          isStreaming={isStreaming}
+          isStreaming={stream.isLoading}
           renderPreview={renderPreview}
           handleCodeChange={handleCodeChange}
           queue={stream.queue}
@@ -629,12 +734,10 @@ function Page({ params }: PageProps) {
       <DesktopChatLayout
         messages={messages}
         message={message}
-        setMessage={setMessage as Dispatch<SetStateAction<string>>}
+        setMessage={setMessage}
         handleSend={handleSend}
         isLoading={stream.isLoading}
-        isStreaming={isStreaming}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        isStreaming={stream.isLoading}
         handleCodeChange={handleCodeChange}
         renderPreview={renderPreview}
         queue={stream.queue}
@@ -645,22 +748,17 @@ function Page({ params }: PageProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Status Bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
         <div className="flex items-center gap-3">
-          <div className={`w-2 h-2 rounded-full ${stream.isLoading ? 'bg-green-500 animate-pulse' : runId ? 'bg-amber-500' : 'bg-muted-foreground/30'}`} />
-          <span className="text-sm font-medium">
-            {stream.isLoading ? 'AI is thinking...' : runId ? 'Disconnected — agent may still be running' : 'Ready'}
-          </span>
+         
           {isSharedAccess && (
             <Badge variant="secondary" className="text-xs">
               <Users className="h-3 w-3 mr-1" />
               Shared Session
             </Badge>
           )}
-          {messages.length > 1 && (
-            <span className="text-xs text-muted-foreground">{messages.length} messages</span>
-          )}
-          {sandboxUrl && (
+  
+          {ctx.sandboxUrl && (
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> Sandbox Active
             </span>
@@ -668,51 +766,37 @@ function Page({ params }: PageProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Disconnect / Rejoin buttons */}
-          {stream.isLoading && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/20"
-              onClick={handleDisconnect}
-            >
-              <Unplug className="w-3 h-3 mr-1" />
-              Disconnect
-            </Button>
-          )}
-          {!stream.isLoading && runId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-950/20"
-              onClick={handleRejoin}
-            >
-              <Plug className="w-3 h-3 mr-1" />
-              Rejoin
-            </Button>
-          )}
-          {showSecondPanel && (
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
+          {ctx.showSecondPanel && (
+            <Tabs value={ctx.activeTab} onValueChange={ctx.setActiveTab}>
               <TabsList className="h-7 bg-muted/50">
-                <TabsTrigger value="live preview" className="text-xs h-6 px-3">Preview</TabsTrigger>
-                <TabsTrigger value="code" className="text-xs h-6 px-3">Code</TabsTrigger>
+                <TabsTrigger value="live preview" className="text-xs h-6 px-3">
+                  Preview
+                </TabsTrigger>
+                <TabsTrigger value="code" className="text-xs h-6 px-3">
+                  Code
+                </TabsTrigger>
               </TabsList>
             </Tabs>
           )}
 
-          {connectedUsers.length > 0 && (
+          {ctx.connectedUsers.length > 0 && (
             <TooltipProvider>
               <div className="flex items-center gap-1">
-                {connectedUsers.map((user) => (
+                {ctx.connectedUsers.map((user) => (
                   <Tooltip key={user.id}>
                     <TooltipTrigger asChild>
-                      <Avatar className="h-7 w-7 border-2 -ml-2 first:ml-0" style={{ borderColor: user.color }}>
-                        <AvatarFallback style={{ backgroundColor: user.color + '20', color: user.color }}>
+                      <Avatar
+                        className="h-7 w-7 border-2 -ml-2 first:ml-0"
+                        style={{ borderColor: user.color }}
+                      >
+                        <AvatarFallback style={{ backgroundColor: user.color + "20", color: user.color }}>
                           {user.name.substring(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                     </TooltipTrigger>
-                    <TooltipContent><p className="text-xs">{user.name}</p></TooltipContent>
+                    <TooltipContent>
+                      <p className="text-xs">{user.name}</p>
+                    </TooltipContent>
                   </Tooltip>
                 ))}
               </div>
@@ -720,28 +804,23 @@ function Page({ params }: PageProps) {
           )}
 
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
-          {messages.length > 1 && (
+          {messages.length > 1 && stream.switchThread && (
             <Button
               variant="ghost"
               size="sm"
               onClick={async () => {
-                if (confirm('Clear all messages? This cannot be undone.')) {
-                  const newMessages: ChatMessage[] = [{
-                    role: "ai" as const,
-                    content: "Chat cleared. How can I help you?",
-                    timestamp: Date.now(),
-                    id: 'clear-' + Date.now()
-                  }];
-                  setMessages(newMessages);
-                  try {
-                    await fetch(`/api/session/${sessionId}`, {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ messages: newMessages }),
-                    });
-                  } catch (error) {
-                    console.error('[DB] Failed to clear messages:', error);
-                  }
+                if (!confirm("Clear all messages? This starts a fresh thread.")) return;
+                const newThreadId = crypto.randomUUID();
+                ctx.setThreadId(newThreadId);
+                stream.switchThread(newThreadId);
+                try {
+                  await fetch(`/api/session/${sessionId}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ threadId: newThreadId }),
+                  });
+                } catch (error) {
+                  console.error("[DB] Failed to clear messages:", error);
                 }
               }}
               className="text-xs"
@@ -752,11 +831,7 @@ function Page({ params }: PageProps) {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {renderMainContent()}
-      </div>
+      <div className="flex-1 min-h-0 overflow-hidden">{renderMainContent()}</div>
     </div>
   );
 }
-
-export default Page;

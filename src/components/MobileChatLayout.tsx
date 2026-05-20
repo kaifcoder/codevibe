@@ -5,14 +5,10 @@ import { MessageSquare, Code, Eye } from "lucide-react";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import type { MessageQueue } from "@/components/QueueList";
 import { CodeEditor } from "@/components/CodeEditor";
-import { useChatStore } from "@/stores/chat-store";
+import { useChat } from "@/contexts/chat-context";
 import { useCollaboration } from "@/hooks/use-collaboration";
 
-type MobilePanel = "chat" | "preview" | "code";
-
 export interface MobileChatLayoutProps {
-  mobileActivePanel: MobilePanel;
-  setMobileActivePanel: (panel: MobilePanel) => void;
   messages: ChatMessage[];
   message: string;
   setMessage: Dispatch<SetStateAction<string>>;
@@ -25,8 +21,6 @@ export interface MobileChatLayoutProps {
 }
 
 export function MobileChatLayout({
-  mobileActivePanel,
-  setMobileActivePanel,
   messages,
   message,
   setMessage,
@@ -37,13 +31,18 @@ export function MobileChatLayout({
   handleCodeChange,
   queue,
 }: Readonly<MobileChatLayoutProps>) {
-  const openFiles = useChatStore(s => s.openFiles);
-  const selectedFile = useChatStore(s => s.selectedFile);
-  const setSelectedFile = useChatStore(s => s.setSelectedFile);
-  const isSyncingFilesystem = useChatStore(s => s.isSyncingFilesystem);
-  const selectedFileContent = useChatStore(s => s.getFileContent(s.selectedFile));
-  const streamingFiles = useChatStore(s => s.streamingFiles);
-  const sessionId = useChatStore(s => s.sessionId);
+  const {
+    sessionId,
+    openFiles,
+    selectedFile,
+    setSelectedFile,
+    isSyncingFilesystem,
+    streamingFiles,
+    mobileActivePanel,
+    setMobileActivePanel,
+    getFileContent,
+  } = useChat();
+  const selectedFileContent = getFileContent(selectedFile);
   const { yText, provider } = useCollaboration(sessionId, selectedFile);
 
   return (
@@ -116,7 +115,6 @@ export function MobileChatLayout({
               </div>
             ) : (
               <>
-                {/* Mobile File Tabs */}
                 <div className="flex items-center bg-muted/20 border-b overflow-x-auto">
                   {openFiles.map((filePath) => {
                     const fileName = filePath.split('/').pop() || filePath;

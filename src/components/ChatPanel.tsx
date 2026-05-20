@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Dispatch, SetStateAction, useRef, useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useRef, useEffect, useState, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LucideSend, Bot, User, ChevronDown, ChevronRight, Brain, AlertCircle, Check, Terminal, Pencil, Eye, FolderOpen, Trash2, Globe, Search, Package, Box, Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -291,12 +291,74 @@ interface ChatPanelProps {
   queue?: MessageQueue;
 }
 
+// Memoized message row — only re-renders when its own message data changes,
+// not when sibling messages or the input textarea change.
+const MessageRow = memo(function MessageRow({
+  msg,
+  isLastMsg,
+  isStreaming,
+}: {
+  msg: ChatMessage;
+  isLastMsg: boolean;
+  isStreaming: boolean;
+}) {
+  const isUser = msg.role === 'user';
+  const isAI = msg.role === 'ai';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 30 } }}
+      exit={{ opacity: 0, y: -20, transition: { duration: 0.2 } }}
+      className="flex gap-3 group"
+    >
+      <div className={cn(
+        "flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5",
+        isUser ? "bg-primary" : "bg-muted border border-border"
+      )}>
+        {isUser ? (
+          <User className="w-3.5 h-3.5 text-primary-foreground" />
+        ) : (
+          <Bot className="w-3.5 h-3.5 text-foreground" />
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-semibold">
+            {isUser ? 'You' : 'AI Assistant'}
+          </span>
+          {msg.timestamp && (
+            <span className="text-xs text-muted-foreground" suppressHydrationWarning>
+              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
+
+        {isUser && (
+          <div className="rounded-lg px-3 py-2 bg-primary/10 text-foreground">
+            <div className="whitespace-pre-wrap text-sm break-words">
+              {msg.content}
+            </div>
+          </div>
+        )}
+
+        {isAI && (
+          <AIMessageTimeline
+            msg={msg}
+            isStreaming={isStreaming && isLastMsg}
+          />
+        )}
+      </div>
+    </motion.div>
+  );
+});
+
 export function ChatPanel({
   messages,
   message,
   setMessage,
   onSend,
-  isLoading,
   isStreaming,
   readOnly = false,
   queue,
@@ -308,7 +370,7 @@ export function ChatPanel({
   }, [messages]);
 
   return (
-    <div className="flex flex-col h-full w-full bg-background border-r border-border">
+    <div className="flex flex-col h-full w-full bg-background">
       {/* Chat history */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
         {messages.length === 0 && (
@@ -325,76 +387,32 @@ export function ChatPanel({
         <AnimatePresence initial={false}>
           {messages.map((msg, i) => {
             const key = msg.id || `${msg.role}-${i}`;
-            const isUser = msg.role === 'user';
-            const isAI = msg.role === 'ai';
             const isLastMsg = i === messages.length - 1;
-
             return (
-            <motion.div
-              key={key}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 30 } }}
-              exit={{ opacity: 0, y: -20, transition: { duration: 0.2 } }}
-              className="flex gap-3 group"
-            >
-              {/* Avatar */}
-              <div className={cn(
-                "flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5",
-                isUser ? "bg-primary" : "bg-muted border border-border"
-              )}>
-                {isUser ? (
-                  <User className="w-3.5 h-3.5 text-primary-foreground" />
-                ) : (
-                  <Bot className="w-3.5 h-3.5 text-foreground" />
-                )}
-              </div>
-
-              {/* Message content */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm font-semibold">
-                    {isUser ? 'You' : 'AI Assistant'}
-                  </span>
-                  {msg.timestamp && (
-                    <span className="text-xs text-muted-foreground" suppressHydrationWarning>
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  )}
-                </div>
-
-                {isUser && (
-                  <div className="rounded-lg px-3 py-2 bg-primary/10 text-foreground">
-                    <div className="whitespace-pre-wrap text-sm break-words">
-                      {msg.content}
-                    </div>
-                  </div>
-                )}
-
-                {isAI && (
-                  <AIMessageTimeline
-                    msg={msg}
-                    isStreaming={!!(isStreaming && isLastMsg)}
-                  />
-                )}
-              </div>
-            </motion.div>
-          )})}
+              <MessageRow
+                key={key}
+                msg={msg}
+                isLastMsg={isLastMsg}
+                isStreaming={!!isStreaming && isLastMsg}
+              />
+            );
+          })}
         </AnimatePresence>
         <div ref={chatEndRef} />
       </div>
       {/* Input bar */}
       {!readOnly && (
-        <div className="border-t border-border bg-muted/30 px-4 py-4">
+        <div className="px-4 pb-4 pt-2">
           {queue && queue.size > 0 && <QueueList queue={queue} />}
           <form
-            className="flex items-end gap-2 bg-background rounded-lg border border-border p-2 focus-within:ring-2 focus-within:ring-primary/20 transition-all"
+            className="flex items-center gap-2 bg-muted/40 rounded-3xl border border-border/60 px-4 py-2 focus-within:border-border focus-within:ring-1 focus-within:ring-primary/30 transition-all"
             onSubmit={e => {
               e.preventDefault();
               if (message.trim()) onSend();
             }}
           >
             <Textarea
-              placeholder={isStreaming ? "Type to queue a follow-up..." : "Type a message... (Shift+Enter for new line)"}
+              placeholder={isStreaming ? "Type to queue a follow-up..." : "Ask anything..."}
               value={message}
               onChange={e => setMessage(e.target.value)}
               onKeyDown={e => {
@@ -403,7 +421,7 @@ export function ChatPanel({
                   if (message.trim()) onSend();
                 }
               }}
-              className="flex-1 min-h-[60px] max-h-[200px] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent"
+              className="flex-1 min-h-[36px] max-h-[200px] resize-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent dark:bg-transparent px-0 py-2 leading-5"
               rows={1}
             />
             <Button
@@ -411,20 +429,20 @@ export function ChatPanel({
               size="icon"
               disabled={!message.trim()}
               className={cn(
-                "transition-all",
+                "h-8 w-8 rounded-full shrink-0 transition-all",
                 !message.trim() && "opacity-50"
               )}
             >
               <LucideSend className="w-4 h-4" />
             </Button>
           </form>
-          <p className="text-xs text-muted-foreground mt-2 text-center">
-            {isStreaming ? "Messages will be queued and processed in order" : "Press Enter to send, Shift+Enter for new line"}
+          <p className="text-[11px] text-muted-foreground mt-2 text-center">
+            {isStreaming ? "Messages will be queued and processed in order" : "Enter to send · Shift+Enter for new line"}
           </p>
         </div>
       )}
       {readOnly && (
-        <div className="border-t border-border bg-muted/30 px-4 py-3 text-center">
+        <div className="bg-muted/30 px-4 py-3 text-center">
           <p className="text-sm text-muted-foreground">
             View-only mode - Messages cannot be sent in shared sessions
           </p>

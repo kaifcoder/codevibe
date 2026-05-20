@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useChatStore } from "@/stores/chat-store";
+import { useChat } from "@/contexts/chat-context";
 import type { CollaborationSession } from "@/lib/collaboration";
 import type * as Y from "yjs";
 import type { HocuspocusProvider } from "@hocuspocus/provider";
@@ -16,8 +16,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const sessionRef = useRef<CollaborationSession | null>(null);
   const currentRoomRef = useRef<string>("");
-  const setConnectionStatus = useChatStore(s => s.setConnectionStatus);
-  const setConnectedUsers = useChatStore(s => s.setConnectedUsers);
+  const { setConnectionStatus, setConnectedUsers } = useChat();
 
   useEffect(() => {
     if (!sessionId || !selectedFile) {
@@ -32,7 +31,6 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       return;
     }
 
-    // Disconnect previous room
     if (sessionRef.current) {
       sessionRef.current.disconnect();
       sessionRef.current = null;
