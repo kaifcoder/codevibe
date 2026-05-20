@@ -11,12 +11,29 @@ interface UseCollaborationReturn {
   provider: HocuspocusProvider | null;
 }
 
+const E2B_SYNC_DEBOUNCE_MS = 1000;
+
 export function useCollaboration(sessionId: string, selectedFile: string): UseCollaborationReturn {
   const [yText, setYText] = useState<Y.Text | null>(null);
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const sessionRef = useRef<CollaborationSession | null>(null);
   const currentRoomRef = useRef<string>("");
-  const { setConnectionStatus, setConnectedUsers } = useChat();
+  const {
+    setConnectionStatus,
+    setConnectedUsers,
+    sandboxId,
+    setIsSyncingToE2B,
+    updateFileContent,
+  } = useChat();
+
+  // Stable refs for the E2B-sync side effect — we don't want to rebind the
+  // observer just because these change.
+  const sandboxIdRef = useRef(sandboxId);
+  sandboxIdRef.current = sandboxId;
+  const setIsSyncingToE2BRef = useRef(setIsSyncingToE2B);
+  setIsSyncingToE2BRef.current = setIsSyncingToE2B;
+  const updateFileContentRef = useRef(updateFileContent);
+  updateFileContentRef.current = updateFileContent;
 
   useEffect(() => {
     if (!sessionId || !selectedFile) {
@@ -38,6 +55,8 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
 
     currentRoomRef.current = roomId;
     let cancelled = false;
+    let e2bTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastSavedContent: string | null = null;
 
     const connect = async () => {
       const { initCollaboration } = await import("@/lib/collaboration");
@@ -85,12 +104,44 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
         awareness.on("change", updateUsers);
         updateUsers();
       }
+
+      // Mirror Yjs edits → file tree (for sidebar/etc) and → E2B sandbox.
+      // Debounced; lastSavedContent skips redundant writes when the agent
+      // wrote into Yjs and we'd just be echoing the same content back.
+      const observer = () => {
+        if (cancelled) return;
+        const content = session.yText.toString();
+        updateFileContentRef.current(selectedFile, content);
+
+        const sbx = sandboxIdRef.current;
+        if (!sbx) return;
+        if (e2bTimer) clearTimeout(e2bTimer);
+        e2bTimer = setTimeout(async () => {
+          if (cancelled) return;
+          if (lastSavedContent === content) return;
+          lastSavedContent = content;
+          try {
+            setIsSyncingToE2BRef.current(true);
+            await fetch("/api/write-to-sandbox", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sandboxId: sbx, filePath: selectedFile, content }),
+            });
+          } catch (err) {
+            console.error("[E2B sync] write failed:", err);
+          } finally {
+            if (!cancelled) setIsSyncingToE2BRef.current(false);
+          }
+        }, E2B_SYNC_DEBOUNCE_MS);
+      };
+      session.yText.observe(observer);
     };
 
     connect();
 
     return () => {
       cancelled = true;
+      if (e2bTimer) clearTimeout(e2bTimer);
       if (sessionRef.current) {
         sessionRef.current.disconnect();
         sessionRef.current = null;

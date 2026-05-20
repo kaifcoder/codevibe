@@ -16,7 +16,6 @@ export interface MobileChatLayoutProps {
   isLoading: boolean;
   isStreaming: boolean;
   renderPreview: () => React.ReactNode;
-  handleCodeChange: (value: string | undefined) => void;
   queue?: MessageQueue;
 }
 
@@ -28,7 +27,6 @@ export function MobileChatLayout({
   isLoading,
   isStreaming,
   renderPreview,
-  handleCodeChange,
   queue,
 }: Readonly<MobileChatLayoutProps>) {
   const {
@@ -37,7 +35,6 @@ export function MobileChatLayout({
     selectedFile,
     setSelectedFile,
     isSyncingFilesystem,
-    streamingFiles,
     mobileActivePanel,
     setMobileActivePanel,
     getFileContent,
@@ -133,22 +130,11 @@ export function MobileChatLayout({
                   })}
                 </div>
                 <div className="flex-1 min-h-0 overflow-hidden relative">
-                  {streamingFiles.includes(selectedFile) && (
-                    <div className="absolute inset-0 z-10 pointer-events-none">
-                      <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-background/90 border rounded-md px-2 py-1 z-20">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="text-[10px] text-muted-foreground font-medium">Writing...</span>
-                      </div>
-                    </div>
-                  )}
                   <CodeEditor
-                    value={selectedFileContent}
-                    onChange={handleCodeChange}
-                    language="typescript"
-                    autoScroll={streamingFiles.includes(selectedFile)}
-                    isStreaming={streamingFiles.includes(selectedFile)}
                     yText={yText}
                     provider={provider}
+                    language="typescript"
+                    initialContent={selectedFileContent}
                   />
                 </div>
               </>

@@ -5,6 +5,7 @@ import { Sandbox } from '@e2b/code-interpreter';
 import { z } from 'zod';
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 import { getThreadSandbox, registerSandbox } from './sandbox-registry';
+import { writeToYjsRoom } from './server-yjs-writer';
 
 async function resolveSandbox(config: LangGraphRunnableConfig) {
   const threadId = config.configurable?.thread_id as string;
@@ -95,27 +96,25 @@ const runCommand = tool(
 const writeFile = tool(
   async ({ path, content }: { path: string; content: string }, config: LangGraphRunnableConfig) => {
     const sbx = await resolveSandbox(config);
-    config.writer?.({ type: 'codePatch', filePath: path, action: 'streaming_start' });
     config.writer?.({ type: 'tool_progress', tool: 'e2b_write_file', args: { path }, message: `Writing ${path}...`, status: 'running' });
-
-    // Emit content in chunks for typing effect
-    const CHUNK_SIZE = 200;
-    for (let i = 0; i < content.length; i += CHUNK_SIZE) {
-      config.writer?.({ type: 'codePatch', filePath: path, content: content.slice(0, i + CHUNK_SIZE), action: 'streaming_chunk' });
-      if (i + CHUNK_SIZE < content.length) {
-        await new Promise(r => setTimeout(r, 15));
-      }
-    }
 
     await sbx.files.write(path, content);
 
-    config.writer?.({ type: 'codePatch', filePath: path, content, action: 'streaming_end' });
+    // Mirror into Yjs so any open editor (and future opens) see the new content.
+    const sessionId = config.configurable?.sessionId as string | undefined;
+    if (sessionId) {
+      try {
+        await writeToYjsRoom(`${sessionId}-${path}`, content);
+      } catch (err) {
+        console.warn('[e2b_write_file] Yjs mirror failed:', (err as Error).message);
+      }
+    }
 
     // Check for compilation errors after writing .tsx/.ts/.jsx/.js files
     const ext = path.substring(path.lastIndexOf('.'));
     if (['.tsx', '.ts', '.jsx', '.js'].includes(ext)) {
       try {
-        const check = await sbx.commands.run(
+        await sbx.commands.run(
           `curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 2>/dev/null && cat /tmp/next-error 2>/dev/null || true`,
           { timeoutMs: 5000 }
         );
