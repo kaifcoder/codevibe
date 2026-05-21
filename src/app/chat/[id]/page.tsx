@@ -334,6 +334,10 @@ function ChatPage() {
       {
         onDisconnect: "continue",
         streamResumable: true,
+        // Tell the server to enqueue this run if one is already in flight
+        // (instead of the default reject/replace). useStream then surfaces
+        // pending entries via stream.queue, which <QueueList> renders.
+        multitaskStrategy: "enqueue",
         config: {
           configurable: {
             sessionId,
