@@ -70,6 +70,13 @@ interface ChatContextValue {
   isSandboxExpired: boolean;
   setIsSandboxExpired: Dispatch<SetStateAction<boolean>>;
 
+  // GitHub link — set after the user creates / pushes / imports. When set,
+  // the GitHub button switches from "Connect" to "Push commit".
+  githubRepo: string | null;
+  setGithubRepo: Dispatch<SetStateAction<string | null>>;
+  githubBranch: string | null;
+  setGithubBranch: Dispatch<SetStateAction<string | null>>;
+
   // Template (set by HITL classification on first prompt)
   templateType: TemplateType;
   setTemplateType: Dispatch<SetStateAction<TemplateType>>;
@@ -145,6 +152,8 @@ export function ChatProvider({
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   const [sandboxCreatedAt, setSandboxCreatedAt] = useState<number | null>(null);
   const [isSandboxExpired, setIsSandboxExpired] = useState(false);
+  const [githubRepo, setGithubRepo] = useState<string | null>(null);
+  const [githubBranch, setGithubBranch] = useState<string | null>(null);
 
   const [templateType, setTemplateType] = useState<TemplateType>("nextjs");
   const [templateDecided, setTemplateDecided] = useState(false);
@@ -233,6 +242,10 @@ export function ChatProvider({
     setSandboxCreatedAt,
     isSandboxExpired,
     setIsSandboxExpired,
+    githubRepo,
+    setGithubRepo,
+    githubBranch,
+    setGithubBranch,
     templateType,
     setTemplateType,
     templateDecided,

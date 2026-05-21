@@ -10,7 +10,9 @@ import { ChatPanel, ChatMessage, ChatMessageStep } from "@/components/ChatPanel"
 import { ShareButton } from "@/components/ShareButton";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DeployButton } from "@/components/DeployButton";
+import { GithubButton } from "@/components/GithubButton";
 import { TemplateApprovalCard } from "@/components/TemplateApprovalCard";
+import { SandboxExpiredPanel } from "@/components/SandboxExpiredPanel";
 import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
@@ -343,11 +345,15 @@ function ChatPage() {
             sessionId,
             templateType: ctx.templateType,
             templateDecided: ctx.templateDecided,
+            // Forward the sandboxId we currently consider canonical (e.g.
+            // freshly provisioned by the rewarm flow). resolveSandbox in the
+            // agent will adopt it instead of trying its stale registry entry.
+            sandboxId: ctx.sandboxId,
           },
         },
       } as Record<string, unknown>,
     );
-  }, [message, stream, sessionId, ctx.templateType, ctx.templateDecided]);
+  }, [message, stream, sessionId, ctx.templateType, ctx.templateDecided, ctx.sandboxId]);
 
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
@@ -361,12 +367,13 @@ function ChatPage() {
             sessionId,
             templateType: ctx.templateType,
             templateDecided: ctx.templateDecided,
+            sandboxId: ctx.sandboxId,
           },
         },
         command: { resume: { decisions: [decision] } },
       } as Record<string, unknown>);
     },
-    [stream, sessionId, ctx.templateType, ctx.templateDecided],
+    [stream, sessionId, ctx.templateType, ctx.templateDecided, ctx.sandboxId],
   );
 
   const interruptValue = stream.interrupt?.value as
@@ -482,6 +489,15 @@ function ChatPage() {
           ctx.setTemplateDecided(session.templateDecided);
         }
 
+        // GitHub link state — controls whether the GitHub button shows
+        // "Connect" vs "Push commit" mode without an extra round-trip.
+        if (typeof session.githubRepo === "string" || session.githubRepo === null) {
+          ctx.setGithubRepo(session.githubRepo ?? null);
+        }
+        if (typeof session.githubBranch === "string" || session.githubBranch === null) {
+          ctx.setGithubBranch(session.githubBranch ?? null);
+        }
+
         if (session.fileTree && Array.isArray(session.fileTree)) {
           ctx.setFileTree(session.fileTree);
         }
@@ -574,14 +590,48 @@ function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.sandboxCreatedAt, ctx.sandboxUrl]);
 
-  // When the sandbox transitions to expired, kick the user off the preview
-  // tab (it'd just show the "Expired" placeholder). Depending on `[ctx]`
-  // makes this fire on every state change and stomps the "live preview"
-  // setActiveTab from the next sandboxCreated event.
+  // --- Sandbox liveness poll ---
+  // The expiry timer above only catches the 25-min idle case. A sandbox can
+  // also die earlier (manual kill from the e2b dashboard, agent crash, etc.).
+  // Without this poll the iframe just renders e2b's "Sandbox Not Found" page
+  // forever and the user has no way to recover unless they trigger an agent
+  // run. Probe every 60s when we're not already showing the expired panel.
   useEffect(() => {
-    if (ctx.isSandboxExpired) ctx.setActiveTab("code");
+    if (!ctx.sandboxId || ctx.isSandboxExpired) return;
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const params = new URLSearchParams({ sessionId });
+        if (ctx.shareToken) params.set("token", ctx.shareToken);
+        const res = await fetch(`/api/sandbox-health?${params.toString()}`, {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { alive: boolean; sandboxId: string | null };
+        // Only act on the response if it's still about the sandbox we're
+        // currently displaying — a concurrent rewarm could swap ctx.sandboxId
+        // mid-flight and we don't want to clobber the new one.
+        if (cancelled) return;
+        if (data.sandboxId === ctx.sandboxId && !data.alive) {
+          ctx.setIsSandboxExpired(true);
+        }
+      } catch {
+        // Network blip — no-op; next interval will retry.
+      }
+    };
+    probe();
+    const interval = setInterval(probe, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx.isSandboxExpired]);
+  }, [ctx.sandboxId, ctx.isSandboxExpired, sessionId, ctx.shareToken]);
+
+  // Sandbox expiry no longer kicks the user off the preview tab — the
+  // SandboxExpiredPanel is rendered there and provides the one-click restore
+  // affordance, so we want it to be visible.
 
   // n8n sessions have no code panel — pin the preview tab so the iframe stays
   // visible even if some other effect tried to flip to "code".
@@ -794,17 +844,7 @@ function ChatPage() {
     }
 
     if (ctx.isSandboxExpired) {
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">
-          <div className="text-6xl">⏱️</div>
-          <div className="space-y-3">
-            <h3 className="text-xl font-semibold text-foreground">Sandbox Expired</h3>
-            <p className="text-sm text-muted-foreground max-w-md">
-              This sandbox has expired after 25 minutes of inactivity.
-            </p>
-          </div>
-        </div>
-      );
+      return <SandboxExpiredPanel />;
     }
 
     return null;
@@ -921,6 +961,9 @@ function ChatPage() {
           )}
 
           {isMounted && sessionId && <DownloadButton sessionId={sessionId} />}
+          {isMounted && sessionId && ctx.templateType !== "n8n" && !isSharedAccess && (
+            <GithubButton sessionId={sessionId} />
+          )}
           {isMounted && sessionId && ctx.templateType !== "n8n" && <DeployButton sessionId={sessionId} />}
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
         </div>

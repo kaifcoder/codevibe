@@ -1,10 +1,11 @@
 "use client";
 
 import { useStream } from "@langchain/langgraph-sdk/react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@/contexts/chat-context";
 import type { FileNode } from "@/contexts/chat-context";
 import { useSessionBroadcast } from "@/hooks/use-session-broadcast";
+import type { MessageQueue } from "@/components/QueueList";
 
 const AGENT_URL = process.env.NEXT_PUBLIC_LANGGRAPH_URL || "http://localhost:2024";
 
@@ -393,15 +394,81 @@ export function useAgentStream() {
     };
   }, [broadcast]);
 
+  // ─── Local message queue ──────────────────────────────────────────────
+  // The legacy useStream (useStreamLGP) we depend on does NOT expose a
+  // `queue` field — it just forwards multitaskStrategy to the server, with
+  // no client-side tracker. So <QueueList> never had data to render. Keep
+  // our own queue: when the user submits while a run is active, hold the
+  // submission locally; drain it the moment isLoading flips false.
+  type SubmitArgs = Parameters<typeof s.submit>;
+  type QueueItem = { id: string; values: SubmitArgs[0]; options: SubmitArgs[1] };
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+
+  const isLoading: boolean = s.isLoading;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+  const queueItemsRef = useRef(queueItems);
+  queueItemsRef.current = queueItems;
+  const rawSubmitRef = useRef(s.submit);
+  rawSubmitRef.current = s.submit;
+
+  const wrappedSubmit = useCallback((values: SubmitArgs[0], options?: SubmitArgs[1]) => {
+    if (isLoadingRef.current || queueItemsRef.current.length > 0) {
+      // Stream is busy (or earlier-queued items still draining) — hold this
+      // one until the active run finishes. Server-side multitaskStrategy is
+      // ignored for the queued items because we're submitting one at a time.
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `q-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      setQueueItems((prev) => [...prev, { id, values, options }]);
+      return;
+    }
+    rawSubmitRef.current(values, options);
+  }, []);
+
+  // Drain one item per isLoading→false transition. Submitting flips
+  // isLoading back to true, which prevents this effect from re-firing
+  // until the next idle moment.
+  useEffect(() => {
+    if (isLoading || queueItems.length === 0) return;
+    const [next, ...rest] = queueItems;
+    setQueueItems(rest);
+    rawSubmitRef.current(next.values, next.options);
+  }, [isLoading, queueItems]);
+
+  const queue: MessageQueue = useMemo(
+    () => ({
+      size: queueItems.length,
+      entries: queueItems.map((q) => {
+        const msgs = (q.values as { messages?: unknown } | null | undefined)?.messages;
+        if (Array.isArray(msgs)) {
+          return { id: q.id, values: { messages: msgs as Array<{ type: string; content: string }> } };
+        }
+        if (msgs && typeof msgs === "object") {
+          return { id: q.id, values: { messages: msgs as { text?: string; content?: string } } };
+        }
+        return { id: q.id, values: undefined };
+      }),
+      clear: async () => {
+        setQueueItems([]);
+      },
+      cancel: async (id: string) => {
+        setQueueItems((prev) => prev.filter((q) => q.id !== id));
+      },
+    }),
+    [queueItems],
+  );
+
   return {
     messages: s.messages,
     toolCalls: s.toolCalls,
     isLoading: s.isLoading,
     stop: s.stop,
     joinStream: s.joinStream,
-    queue: s.queue,
+    queue,
     switchThread: s.switchThread,
-    submit: s.submit,
+    submit: wrappedSubmit,
     interrupt: s.interrupt,
   };
 }
