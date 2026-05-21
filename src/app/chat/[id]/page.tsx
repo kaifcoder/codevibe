@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import { ShareButton } from "@/components/ShareButton";
+import { DownloadButton } from "@/components/DownloadButton";
+import { DeployButton } from "@/components/DeployButton";
 import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
@@ -784,6 +786,8 @@ function ChatPage() {
             </TooltipProvider>
           )}
 
+          {isMounted && sessionId && <DownloadButton sessionId={sessionId} />}
+          {isMounted && sessionId && <DeployButton sessionId={sessionId} />}
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
         </div>
       </div>

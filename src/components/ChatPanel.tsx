@@ -109,11 +109,11 @@ function TimelineToolStep({ tool, isLast }: { tool: ToolCall; isLast: boolean })
     <div className="flex gap-3 relative">
       {/* Timeline line */}
       {!isLast && (
-        <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
+        <div className="absolute left-2.75 top-6 bottom-0 w-px bg-border" />
       )}
       {/* Dot/Icon */}
       <div className={cn(
-        "relative z-10 flex items-center justify-center w-[23px] h-[23px] rounded-full shrink-0 mt-0.5",
+        "relative z-10 flex items-center justify-center w-5.75 h-5.75 rounded-full shrink-0 mt-0.5",
         isRunning && "bg-blue-500/10 text-blue-500",
         isError && "bg-red-500/10 text-red-500",
         !isRunning && !isError && "bg-emerald-500/10 text-emerald-500"

@@ -61,6 +61,31 @@ async function doWrite(roomId: string, content: string): Promise<void> {
   }
 }
 
+// Read the current text of a Yjs room. Returns null on timeout or if the room
+// has no content (e.g. never opened, no agent mirror happened). Useful as a
+// fallback source of file contents after the E2B sandbox dies — Yjs persists
+// across sandbox lifetimes via Hocuspocus.
+export async function readFromYjsRoom(roomId: string): Promise<string | null> {
+  const doc = new Y.Doc();
+  const yText = doc.getText('monaco');
+  const provider = new HocuspocusProvider({
+    url: WS_URL,
+    name: roomId,
+    document: doc,
+  });
+
+  try {
+    await waitForEvent(provider, 'synced', SYNC_TIMEOUT_MS, `sync timeout for ${roomId}`);
+    const text = yText.toString();
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  } finally {
+    provider.destroy();
+    doc.destroy();
+  }
+}
+
 function waitForEvent(
   provider: HocuspocusProvider,
   event: 'synced',
