@@ -11,6 +11,7 @@ import {
   TEMPLATE_CONFIG,
 } from './sandbox-registry';
 import { writeToYjsRoom } from './server-yjs-writer';
+import { scanSandboxToTree } from './sandbox-scan';
 
 async function resolveSandbox(config: LangGraphRunnableConfig) {
   const threadId = config.configurable?.thread_id as string;
@@ -44,52 +45,26 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
 
   // Emit initial file tree so frontend shows the structure immediately. n8n
   // sandboxes don't have a project tree to scan — skip the scan there.
+  // Awaited (not fire-and-forget): the recursive sbx.files.list/read scan used
+  // to take 10–20s on fresh nextjs projects, often outlasting the agent run,
+  // and the post-run config.writer call dropped the fileTreeSync silently —
+  // leaving the frontend with only fileCreated entries (= just agent-written
+  // files, no boilerplate). The new tar-based scan finishes in ~1–2s; awaiting
+  // it adds negligible delay to the first tool call but guarantees delivery.
   if (templateType === 'nextjs') {
-    scanAndEmitFileTree(sbx, config).catch(() => {});
+    try {
+      await scanAndEmitFileTree(sbx, config);
+    } catch (err) {
+      console.warn('[resolveSandbox] initial scan failed:', (err as Error).message);
+    }
   }
 
   return sbx;
 }
 
 async function scanAndEmitFileTree(sbx: Sandbox, config: LangGraphRunnableConfig) {
-  const excludes = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.cache', 'components/ui', 'nextjs-app']);
-  const binaryExtensions = new Set([
-    '.ico', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp',
-    '.mp4', '.mov', '.avi', '.mp3', '.wav',
-    '.zip', '.tar', '.gz', '.rar',
-    '.exe', '.dll', '.so', '.dylib',
-    '.pdf', '.doc', '.docx',
-    '.woff', '.woff2', '.ttf', '.otf', '.eot'
-  ]);
-  const lockFiles = new Set(['.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
-
-  interface FileInfo { name: string; path: string; type: 'file' | 'folder'; children?: FileInfo[]; content?: string; }
-
-  async function scan(dirPath: string): Promise<FileInfo[]> {
-    try {
-      const files = await sbx.files.list(dirPath);
-      const result: FileInfo[] = [];
-      for (const file of files) {
-        if (excludes.has(file.name)) continue;
-        const fullPath = dirPath === '/' ? `/${file.name}` : `${dirPath}/${file.name}`;
-        const relativePath = fullPath.startsWith('/home/user/') ? fullPath.substring('/home/user/'.length) : fullPath;
-        if (Array.from(excludes).some(exc => relativePath.includes(exc + '/'))) continue;
-        if (file.type === 'dir') {
-          const children = await scan(fullPath);
-          if (children.length > 0) result.push({ name: file.name, path: relativePath, type: 'folder', children });
-        } else {
-          const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-          if (binaryExtensions.has(ext) || lockFiles.has(file.name)) continue;
-          let content = '';
-          try { if (file.size < 100000) content = (await sbx.files.read(fullPath)).replaceAll('\x00', ''); } catch {}
-          result.push({ name: file.name, path: relativePath, type: 'file', content });
-        }
-      }
-      return result.sort((a, b) => { if (a.type !== b.type) return a.type === 'folder' ? -1 : 1; return a.name.localeCompare(b.name); });
-    } catch { return []; }
-  }
-
-  const fileTree = await scan('/home/user');
+  const sessionId = config.configurable?.sessionId as string | undefined;
+  const fileTree = await scanSandboxToTree(sbx, { sessionId });
   config.writer?.({ type: 'fileTreeSync', fileTree });
 }
 
@@ -105,6 +80,28 @@ const runCommand = tool(
     }
     const output = result.stdout || '(no output)';
     config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: output.slice(0, 200) });
+
+    // n8n: when the agent imports a workflow, sniff the new id from SQLite and
+    // emit `workflowReady` so the iframe deep-links to /workflow/<id>. The
+    // CLI itself doesn't print the id reliably across versions; querying the
+    // DB by createdAt is the only stable signal.
+    if (/\bn8n\s+import:workflow\b/.test(command)) {
+      try {
+        const sql = `SELECT id || '|' || COALESCE(name,'') FROM workflow_entity ORDER BY datetime(createdAt) DESC LIMIT 1;`;
+        const idRes = await sbx.commands.run(
+          `sqlite3 /home/user/.n8n/database.sqlite "${sql}"`,
+          { timeoutMs: 5_000 },
+        );
+        const line = (idRes.stdout ?? '').trim().split('\n')[0] ?? '';
+        const [workflowId, workflowName] = line.split('|');
+        if (workflowId) {
+          config.writer?.({ type: 'workflowReady', workflowId, workflowName });
+        }
+      } catch (err) {
+        console.warn('[e2b-tools] workflow id sniff failed:', (err as Error).message);
+      }
+    }
+
     return output;
   },
   {

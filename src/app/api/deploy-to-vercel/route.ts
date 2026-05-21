@@ -255,12 +255,26 @@ async function injectShadcnIfMissing(files: DeploymentFile[]): Promise<Deploymen
 }
 
 // Versions Vercel installs for the deployed project. The sandbox image bakes
-// whatever `create-next-app` resolved at template-build time (currently
-// 15.3.3, which Vercel flags as vulnerable), but Vercel runs `npm install`
-// from scratch — so we rewrite package.json on the way out and pin to a
-// supported version here. Bump as new releases land.
+// whatever `create-next-app` / `shadcn add --all` resolved at template-build
+// time, but Vercel runs `npm install` from scratch — so we rewrite
+// package.json on the way out and pin to versions known to build.
+//   - next: 15.3.3 baked in is flagged as vulnerable; bump to 16.2.6
+//   - react-day-picker: 10.x renamed `table` → `month_grid` and shadcn
+//     2.6.3's calendar.tsx still uses `table`; pin to ^9 so the ClassNames
+//     type still has the field.
 const DEPLOY_DEP_OVERRIDES: Record<string, string> = {
   next: '16.2.6',
+  'react-day-picker': '^9.7.0',
+};
+
+// Deps that lib/utils.ts (and shadcn UI in general) require but which the
+// sandbox-built package.json may not list — agent-side `npm install` doesn't
+// always persist, and an older sandbox image won't have them at all. Inject
+// them unconditionally so Vercel's clean install can resolve the imports.
+const DEPLOY_REQUIRED_DEPS: Record<string, string> = {
+  clsx: '^2.1.1',
+  'tailwind-merge': '^3.3.1',
+  'tw-animate-css': '^1.3.4',
 };
 
 function bumpVulnerableDeps(files: DeploymentFile[]): DeploymentFile[] {
@@ -277,8 +291,10 @@ function bumpVulnerableDeps(files: DeploymentFile[]): DeploymentFile[] {
   }
 
   let changed = false;
+  pkg.dependencies = pkg.dependencies ?? {};
+
   for (const [name, target] of Object.entries(DEPLOY_DEP_OVERRIDES)) {
-    if (pkg.dependencies?.[name] && pkg.dependencies[name] !== target) {
+    if (pkg.dependencies[name] && pkg.dependencies[name] !== target) {
       pkg.dependencies[name] = target;
       changed = true;
     } else if (pkg.devDependencies?.[name] && pkg.devDependencies[name] !== target) {
@@ -286,6 +302,14 @@ function bumpVulnerableDeps(files: DeploymentFile[]): DeploymentFile[] {
       changed = true;
     }
   }
+
+  for (const [name, target] of Object.entries(DEPLOY_REQUIRED_DEPS)) {
+    if (!pkg.dependencies[name] && !pkg.devDependencies?.[name]) {
+      pkg.dependencies[name] = target;
+      changed = true;
+    }
+  }
+
   if (!changed) return files;
 
   const next = JSON.stringify(pkg, null, 2) + '\n';

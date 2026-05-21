@@ -10,6 +10,7 @@
     "lint": "next lint",
     "yjs": "node --watch yjs-server.js",
     "agent": "npx @langchain/langgraph-cli dev",
+    "n8n-proxy": "tsx --watch n8n-proxy.ts",
     "agent:docker": "docker compose up --build",
     "agent:docker:down": "docker compose down"
   },
@@ -58,6 +59,7 @@
     "@trpc/client": "^11.4.3",
     "@trpc/server": "^11.4.3",
     "@trpc/tanstack-react-query": "^11.4.3",
+    "@types/http-proxy": "^1.17.17",
     "class-variance-authority": "^0.7.1",
     "client-only": "^0.0.1",
     "clsx": "^2.1.1",
@@ -67,6 +69,7 @@
     "e2b": "^2.21.0",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.23.12",
+    "http-proxy": "^1.18.1",
     "input-otp": "^1.4.2",
     "jszip": "^3.10.1",
     "langchain": "^1.3.5",
