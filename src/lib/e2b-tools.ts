@@ -17,6 +17,27 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
   const threadId = config.configurable?.thread_id as string;
   const entry = getThreadSandbox(threadId);
 
+  // Frontend forwards its current sandboxId via configurable. After a rewarm
+  // it points at a sandbox the agent process doesn't know about yet — adopt
+  // it (re-register) so this run and subsequent ones use it instead of the
+  // stale registry entry.
+  const requestedSandboxId = config.configurable?.sandboxId as string | undefined;
+  if (requestedSandboxId && requestedSandboxId !== entry?.sandboxId) {
+    const sbx = await getSandbox(requestedSandboxId);
+    if (sbx) {
+      const adoptedTemplate = resolveTemplateType(
+        entry?.templateType ?? config.configurable?.templateType,
+      );
+      const cfg = TEMPLATE_CONFIG[adoptedTemplate];
+      const host = sbx.getHost(cfg.port);
+      const sandboxUrl = `https://${host}`;
+      registerSandbox(threadId, requestedSandboxId, sandboxUrl, adoptedTemplate);
+      config.writer?.({ type: 'sandboxCreated', sandboxId: requestedSandboxId, sandboxUrl, isNew: false });
+      return sbx;
+    }
+    // Fall through — the sandboxId the frontend sent has already died.
+  }
+
   if (entry?.sandboxId) {
     const sbx = await getSandbox(entry.sandboxId);
     if (sbx) {

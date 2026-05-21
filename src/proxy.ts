@@ -36,6 +36,20 @@ function isVercelDeploy(req: Request): boolean {
   return url.pathname === '/api/deploy-to-vercel'
 }
 
+// /api/rewarm-sandbox — owner or collaborator can re-provision an expired
+// sandbox. Route re-validates against the session row.
+function isSandboxRewarm(req: Request): boolean {
+  const url = new URL(req.url)
+  return url.pathname === '/api/rewarm-sandbox'
+}
+
+// /api/sandbox-health — owner or collaborator can poll whether the session's
+// sandbox is still alive. Route re-validates against the session row.
+function isSandboxHealth(req: Request): boolean {
+  const url = new URL(req.url)
+  return url.pathname === '/api/sandbox-health'
+}
+
 // GET /api/session/<id> stays accessible without `?token=` for owners hitting
 // it from a normal Clerk session. Non-owners get 403 from the route handler.
 function isPublicSessionRead(req: Request): boolean {
@@ -51,6 +65,8 @@ export default clerkMiddleware(async (auth, req) => {
     || isSandboxWrite(req)
     || isProjectDownload(req)
     || isVercelDeploy(req)
+    || isSandboxRewarm(req)
+    || isSandboxHealth(req)
     || isPublicSessionRead(req)
   ) return
   await auth.protect()

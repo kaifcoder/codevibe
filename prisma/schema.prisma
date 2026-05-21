@@ -20,6 +20,10 @@ model Session {
   sandboxCreatedAt DateTime?
   templateType     String    @default("nextjs") // "nextjs" | "n8n" — picks sandbox image + agent prompt
   templateDecided  Boolean   @default(false)    // set true after HITL classification on first prompt
+  // GitHub link — set after the user pushes/imports. Subsequent commits push
+  // back here instead of prompting for a target each time.
+  githubRepo       String?   // "owner/name"
+  githubBranch     String?   // default branch we commit to (usually "main")
   userId           String?   // Clerk user ID
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
