@@ -289,6 +289,7 @@ interface ChatPanelProps {
   isStreaming?: boolean;
   readOnly?: boolean;
   queue?: MessageQueue;
+  interruptSlot?: React.ReactNode;
 }
 
 // Memoized message row — only re-renders when its own message data changes,
@@ -362,6 +363,7 @@ export function ChatPanel({
   isStreaming,
   readOnly = false,
   queue,
+  interruptSlot,
 }: Readonly<ChatPanelProps>) {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -403,6 +405,7 @@ export function ChatPanel({
       {/* Input bar */}
       {!readOnly && (
         <div className="px-4 pb-4 pt-2">
+          {interruptSlot && <div className="mb-3">{interruptSlot}</div>}
           {queue && queue.size > 0 && <QueueList queue={queue} />}
           <form
             className="flex items-center gap-2 bg-muted/40 rounded-3xl border border-border/60 px-4 py-2 focus-within:border-border focus-within:ring-1 focus-within:ring-primary/30 transition-all"

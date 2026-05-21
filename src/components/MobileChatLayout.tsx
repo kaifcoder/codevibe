@@ -17,6 +17,7 @@ export interface MobileChatLayoutProps {
   isStreaming: boolean;
   renderPreview: () => React.ReactNode;
   queue?: MessageQueue;
+  interruptSlot?: React.ReactNode;
 }
 
 export function MobileChatLayout({
@@ -28,6 +29,7 @@ export function MobileChatLayout({
   isStreaming,
   renderPreview,
   queue,
+  interruptSlot,
 }: Readonly<MobileChatLayoutProps>) {
   const {
     sessionId,
@@ -93,6 +95,7 @@ export function MobileChatLayout({
               isLoading={isLoading}
               isStreaming={isStreaming}
               queue={queue}
+              interruptSlot={interruptSlot}
             />
           </div>
         )}

@@ -45,13 +45,20 @@ interface ToolResultEvent {
   result: string;
 }
 
+interface TemplateDecidedEvent {
+  type: "templateDecided";
+  templateType: "nextjs" | "n8n";
+  reasoning?: string;
+}
+
 type CustomEvent =
   | FileTreeSyncEvent
   | FileCreatedEvent
   | SandboxCreatedEvent
   | SandboxExpiredEvent
   | ToolProgressEvent
-  | ToolResultEvent;
+  | ToolResultEvent
+  | TemplateDecidedEvent;
 
 function findFileInTree(nodes: FileNode[], path: string): boolean {
   for (const node of nodes) {
@@ -214,6 +221,23 @@ export function useAgentStream() {
       case "tool_result":
         // Handled natively by useStream's toolCalls
         break;
+
+      case "templateDecided": {
+        c.setTemplateType(event.templateType);
+        c.setTemplateDecided(true);
+        // Persist to DB so re-opens skip the dispatcher.
+        const sid = sessionIdRef.current;
+        if (sid) {
+          const token = c.shareToken;
+          const url = `/api/session/${sid}${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+          fetch(url, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ templateType: event.templateType, templateDecided: true }),
+          }).catch(() => {});
+        }
+        break;
+      }
     }
   }, []);
 
@@ -361,5 +385,6 @@ export function useAgentStream() {
     queue: s.queue,
     switchThread: s.switchThread,
     submit: s.submit,
+    interrupt: s.interrupt,
   };
 }

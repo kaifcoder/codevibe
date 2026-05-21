@@ -19,6 +19,7 @@ model Session {
   sandboxUrl       String?
   sandboxCreatedAt DateTime?
   templateType     String    @default("nextjs") // "nextjs" | "n8n" — picks sandbox image + agent prompt
+  templateDecided  Boolean   @default(false)    // set true after HITL classification on first prompt
   userId           String?   // Clerk user ID
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

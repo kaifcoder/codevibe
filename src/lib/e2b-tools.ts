@@ -16,7 +16,7 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
   const threadId = config.configurable?.thread_id as string;
   const entry = getThreadSandbox(threadId);
 
-  if (entry) {
+  if (entry?.sandboxId) {
     const sbx = await getSandbox(entry.sandboxId);
     if (sbx) {
       // Reattach: tell the frontend about the live sandbox in case this is a
