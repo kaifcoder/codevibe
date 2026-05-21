@@ -4,7 +4,12 @@ import { tool } from '@langchain/core/tools';
 import { Sandbox } from '@e2b/code-interpreter';
 import { z } from 'zod';
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
-import { getThreadSandbox, registerSandbox } from './sandbox-registry';
+import {
+  getThreadSandbox,
+  registerSandbox,
+  resolveTemplateType,
+  TEMPLATE_CONFIG,
+} from './sandbox-registry';
 import { writeToYjsRoom } from './server-yjs-writer';
 
 async function resolveSandbox(config: LangGraphRunnableConfig) {
@@ -23,15 +28,25 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
     config.writer?.({ type: 'sandboxExpired', sandboxId: entry.sandboxId });
   }
 
-  // Auto-create sandbox if none exists or existing one expired
-  const sbx = await Sandbox.create('codevibe-test', { timeoutMs: 25 * 60 * 1000 });
-  const host = sbx.getHost(3000);
+  // Auto-create sandbox if none exists or existing one expired. Template is
+  // chosen by the session (frontend passes via config.configurable.templateType);
+  // an existing registry entry's template wins on respawn after expiry so the
+  // sandbox doesn't change image mid-conversation.
+  const templateType = resolveTemplateType(
+    entry?.templateType ?? config.configurable?.templateType,
+  );
+  const cfg = TEMPLATE_CONFIG[templateType];
+  const sbx = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });
+  const host = sbx.getHost(cfg.port);
   const sandboxUrl = `https://${host}`;
-  registerSandbox(threadId, sbx.sandboxId, sandboxUrl);
+  registerSandbox(threadId, sbx.sandboxId, sandboxUrl, templateType);
   config.writer?.({ type: 'sandboxCreated', sandboxId: sbx.sandboxId, sandboxUrl, isNew: true });
 
-  // Emit initial file tree so frontend shows the structure immediately
-  scanAndEmitFileTree(sbx, config).catch(() => {});
+  // Emit initial file tree so frontend shows the structure immediately. n8n
+  // sandboxes don't have a project tree to scan — skip the scan there.
+  if (templateType === 'nextjs') {
+    scanAndEmitFileTree(sbx, config).catch(() => {});
+  }
 
   return sbx;
 }
@@ -110,48 +125,52 @@ const writeFile = tool(
     // fileTreeSync rescans. The actual content lives in Yjs (below).
     config.writer?.({ type: 'fileCreated', filePath: path });
 
-    // Mirror into Yjs so any open editor (and future opens) see the new content.
+    // Yjs mirror + compile-error check are independent — run them in parallel
+    // so the tool doesn't block the agent for ~3s per file write. Still
+    // awaited (not fire-and-forget) because Monaco loads file content from
+    // Yjs; if a user clicks the file before the mirror lands they see the
+    // empty doc.
     const sessionId = config.configurable?.sessionId as string | undefined;
-    if (!sessionId) {
-      console.warn('[e2b_write_file] No sessionId in config.configurable — skipping Yjs mirror for', path);
-    } else {
+    const yjsPromise: Promise<void> = (async () => {
+      if (!sessionId) {
+        console.warn('[e2b_write_file] No sessionId in config.configurable — skipping Yjs mirror for', path);
+        return;
+      }
       const room = `${sessionId}-${path}`;
-      console.log(`[e2b_write_file] Yjs mirror starting: ${room} (${content.length} chars)`);
       try {
         await writeToYjsRoom(room, content);
-        console.log(`[e2b_write_file] Yjs mirror ok: ${room}`);
       } catch (err) {
         console.warn('[e2b_write_file] Yjs mirror failed:', room, '-', (err as Error).message);
       }
-    }
+    })();
 
-    // Check for compilation errors after writing .tsx/.ts/.jsx/.js files
     const ext = path.substring(path.lastIndexOf('.'));
-    if (['.tsx', '.ts', '.jsx', '.js'].includes(ext)) {
-      try {
-        await sbx.commands.run(
-          `curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 2>/dev/null && cat /tmp/next-error 2>/dev/null || true`,
-          { timeoutMs: 5000 }
-        );
-        // Also check Next.js compilation by requesting the page
-        const pageCheck = await sbx.commands.run(
-          `curl -s http://localhost:3000 2>/dev/null | grep -o 'Server Error\\|Unhandled Runtime Error\\|Module not found\\|SyntaxError\\|TypeError\\|Cannot find module' | head -1`,
-          { timeoutMs: 5000 }
-        );
-        if (pageCheck.stdout && pageCheck.stdout.trim()) {
-          // Get more details about the error
-          const errorDetail = await sbx.commands.run(
-            `curl -s http://localhost:3000 2>/dev/null | grep -A5 -o 'Error:.*' | head -10`,
-            { timeoutMs: 5000 }
-          );
-          const errorMsg = errorDetail.stdout?.trim() || pageCheck.stdout.trim();
-          const result = `Wrote ${content.length} chars to ${path}\n\n⚠️ COMPILATION ERROR DETECTED:\n${errorMsg}\n\nPlease fix this error before continuing.`;
-          config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result: `WROTE but ERROR: ${errorMsg.slice(0, 100)}` });
-          return result;
-        }
-      } catch {
-        // Ignore check failures — dev server might still be compiling
-      }
+    const checkCompile = ['.tsx', '.ts', '.jsx', '.js'].includes(ext);
+    const compilePromise: Promise<string | null> = checkCompile
+      ? (async () => {
+          try {
+            const pageCheck = await sbx.commands.run(
+              `curl -s http://localhost:3000 2>/dev/null | grep -o 'Server Error\\|Unhandled Runtime Error\\|Module not found\\|SyntaxError\\|TypeError\\|Cannot find module' | head -1`,
+              { timeoutMs: 5000 }
+            );
+            if (!pageCheck.stdout || !pageCheck.stdout.trim()) return null;
+            const errorDetail = await sbx.commands.run(
+              `curl -s http://localhost:3000 2>/dev/null | grep -A5 -o 'Error:.*' | head -10`,
+              { timeoutMs: 5000 }
+            );
+            return errorDetail.stdout?.trim() || pageCheck.stdout.trim();
+          } catch {
+            return null;
+          }
+        })()
+      : Promise.resolve(null);
+
+    const [, compileError] = await Promise.all([yjsPromise, compilePromise]);
+
+    if (compileError) {
+      const result = `Wrote ${content.length} chars to ${path}\n\n⚠️ COMPILATION ERROR DETECTED:\n${compileError}\n\nPlease fix this error before continuing.`;
+      config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result: `WROTE but ERROR: ${compileError.slice(0, 100)}` });
+      return result;
     }
 
     const result = `Wrote ${content.length} chars to ${path}`;

@@ -18,6 +18,7 @@ model Session {
   sandboxId        String?
   sandboxUrl       String?
   sandboxCreatedAt DateTime?
+  templateType     String    @default("nextjs") // "nextjs" | "n8n" — picks sandbox image + agent prompt
   userId           String?   // Clerk user ID
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

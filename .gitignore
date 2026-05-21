@@ -35,6 +35,7 @@ yarn-error.log*
 
 # vercel
 .vercel
+/sandbox-templates/n8n-codevibe/n8n-seed
 
 # typescript
 *.tsbuildinfo

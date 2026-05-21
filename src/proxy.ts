@@ -21,6 +21,21 @@ function isSandboxWrite(req: Request): boolean {
   return url.pathname === '/api/write-to-sandbox'
 }
 
+// /api/download-project follows the same pattern: owner (Clerk) or
+// collaborator (sessionId + shareToken in body). Route validates.
+function isProjectDownload(req: Request): boolean {
+  const url = new URL(req.url)
+  return url.pathname === '/api/download-project'
+}
+
+// /api/deploy-to-vercel — same owner-or-collaborator pattern. The route
+// re-validates the session and the user's Vercel token comes from their own
+// browser, so middleware just steps aside.
+function isVercelDeploy(req: Request): boolean {
+  const url = new URL(req.url)
+  return url.pathname === '/api/deploy-to-vercel'
+}
+
 // GET /api/session/<id> stays accessible without `?token=` for owners hitting
 // it from a normal Clerk session. Non-owners get 403 from the route handler.
 function isPublicSessionRead(req: Request): boolean {
@@ -34,6 +49,8 @@ export default clerkMiddleware(async (auth, req) => {
     isPublicRoute(req)
     || isShareTokenedRequest(req)
     || isSandboxWrite(req)
+    || isProjectDownload(req)
+    || isVercelDeploy(req)
     || isPublicSessionRead(req)
   ) return
   await auth.protect()
