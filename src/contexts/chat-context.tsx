@@ -76,6 +76,11 @@ interface ChatContextValue {
   templateDecided: boolean;
   setTemplateDecided: Dispatch<SetStateAction<boolean>>;
 
+  // n8n: latest imported workflow id — iframe deep-links to /workflow/<id>
+  // when set so the user lands on the workflow the agent just built.
+  n8nWorkflowId: string | null;
+  setN8nWorkflowId: Dispatch<SetStateAction<string | null>>;
+
   // UI panels
   activeTab: string;
   setActiveTab: Dispatch<SetStateAction<string>>;
@@ -143,6 +148,7 @@ export function ChatProvider({
 
   const [templateType, setTemplateType] = useState<TemplateType>("nextjs");
   const [templateDecided, setTemplateDecided] = useState(false);
+  const [n8nWorkflowId, setN8nWorkflowId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<string>("live preview");
   const [showSecondPanel, setShowSecondPanel] = useState(false);
@@ -231,6 +237,8 @@ export function ChatProvider({
     setTemplateType,
     templateDecided,
     setTemplateDecided,
+    n8nWorkflowId,
+    setN8nWorkflowId,
     activeTab,
     setActiveTab,
     showSecondPanel,

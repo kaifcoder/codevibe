@@ -292,3 +292,29 @@
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+/* Chat message markdown — keep long URLs/code from blowing out the panel width. */
+.markdown-content {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.markdown-content pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.markdown-content code {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.markdown-content pre code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.markdown-content a {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}

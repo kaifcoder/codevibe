@@ -51,6 +51,12 @@ interface TemplateDecidedEvent {
   reasoning?: string;
 }
 
+interface WorkflowReadyEvent {
+  type: "workflowReady";
+  workflowId: string;
+  workflowName?: string;
+}
+
 type CustomEvent =
   | FileTreeSyncEvent
   | FileCreatedEvent
@@ -58,7 +64,8 @@ type CustomEvent =
   | SandboxExpiredEvent
   | ToolProgressEvent
   | ToolResultEvent
-  | TemplateDecidedEvent;
+  | TemplateDecidedEvent
+  | WorkflowReadyEvent;
 
 function findFileInTree(nodes: FileNode[], path: string): boolean {
   for (const node of nodes) {
@@ -236,6 +243,16 @@ export function useAgentStream() {
             body: JSON.stringify({ templateType: event.templateType, templateDecided: true }),
           }).catch(() => {});
         }
+        break;
+      }
+
+      case "workflowReady": {
+        // Agent imported a workflow — deep-link the iframe to it so the user
+        // sees the canvas the agent just built. The page wires this id into
+        // the iframe src as `${proxyUrl}/workflow/${id}`.
+        c.setN8nWorkflowId(event.workflowId);
+        c.setActiveTab("live preview");
+        c.setIframeLoading(true);
         break;
       }
     }

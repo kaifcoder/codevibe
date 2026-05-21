@@ -2,34 +2,36 @@
 import { Template, waitForURL } from 'e2b'
 
 export const template = Template()
-  .fromBunImage('1.3')
+  .fromNodeImage('21-slim')
+  .runCmd(
+    'apt-get update && apt-get install -y curl && apt-get clean && rm -rf /var/lib/apt/lists/*',
+    { user: 'root' }
+  )
   .setWorkdir('/home/user/nextjs-app')
-  // Pinned to Next 15: Next 16 + Turbopack-as-default eats enough RAM in a
-  // ~1GB e2b sandbox to starve the e2b daemon, which makes
-  // /api/sync-filesystem time out and HMR crawl. Production deploys still
-  // ship next@16.2.6 — bumpVulnerableDeps() in
-  // src/app/api/deploy-to-vercel/route.ts rewrites package.json on the way
-  // out, so the sandbox doesn't need to be on 16 to dodge Vercel's
-  // vulnerability warning.
-  //
-  // Next 15 still accepts the `--turbopack` flag, which is the source of the
-  // fast HMR users expect. Don't drop it.
+  .runCmd('npx --yes create-next-app@15.3.3 . --yes')
+  .runCmd('npx --yes shadcn@2.6.3 init --yes -b neutral --force')
+  .runCmd('npx --yes shadcn@2.6.3 add --all --yes')
+  .runCmd('npm install tw-animate-css clsx tailwind-merge')
+  // Guarantee lib/utils.ts exists with the canonical `cn` helper. shadcn
+  // init usually creates this, but if it silently fails (path alias mismatch,
+  // npx network blip, etc.) the entire shadcn UI breaks at runtime with
+  // "Module not found: '@/lib/utils'". Writing it unconditionally makes the
+  // build self-healing — if shadcn already wrote it, we just overwrite with
+  // identical content.
   .runCmd(
-    'bun create next-app@15 --app --ts --tailwind --turbopack --yes --use-bun .'
+    `mkdir -p lib && cat > lib/utils.ts <<'EOF'
+import { type ClassValue, clsx } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+EOF
+test -s lib/utils.ts || { echo "lib/utils.ts write failed" >&2; exit 1; }`
   )
-  // shadcn 4.6 split config into "presets" (Nova/Vega/Maia/...). `--yes` no
-  // longer skips that picker — you have to pass `--preset` explicitly or the
-  // CLI hangs on the arrow-key prompt during the e2b build. Nova = Lucide
-  // icons + Geist font, which matches the agent prompt's assumption that
-  // `lucide-react` is pre-installed. `-b base` sets the base color (4.x
-  // dropped the old neutral/zinc/stone presets, keeping only `base` and
-  // `radix`). If you regenerate codevibe's src/components/ui snapshot for
-  // the deploy fallback, use the same `--preset nova -b base` so the
-  // snapshot matches what fresh sandboxes produce.
-  .runCmd('bunx --bun shadcn@4.6.0 init --yes --force --preset nova -b base')
-  .runCmd('bunx --bun shadcn@4.6.0 add --all --yes')
-  .runCmd(
-    'cp -a /home/user/nextjs-app/. /home/user/ && rm -rf /home/user/nextjs-app'
-  )
+  .runCmd('cp -a /home/user/nextjs-app/. /home/user/ && rm -rf /home/user/nextjs-app')
   .setWorkdir('/home/user')
-  .setStartCmd('bun --bun run dev', waitForURL('http://localhost:3000'))
+  .setStartCmd(
+    "bash -c '(while ! curl -sf -o /dev/null http://localhost:3000; do sleep 0.1; done) & cd /home/user && exec npx next dev --turbopack'",
+    waitForURL('http://localhost:3000')
+  )

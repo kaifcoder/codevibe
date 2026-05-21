@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
+import { ChatPanel, ChatMessage, ChatMessageStep } from "@/components/ChatPanel";
 import { ShareButton } from "@/components/ShareButton";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DeployButton } from "@/components/DeployButton";
@@ -127,6 +127,7 @@ function deriveChatMessages(
     content: string;
     reasoning: string;
     toolCalls: NonNullable<ChatMessage["toolCalls"]>;
+    steps: ChatMessageStep[];
     id: string;
     lastIndex: number;
   } | null = null;
@@ -142,6 +143,7 @@ function deriveChatMessages(
       id: currentAiTurn.id,
       status: isLoading && isLast ? "streaming" : "complete",
       toolCalls: currentAiTurn.toolCalls.length > 0 ? currentAiTurn.toolCalls : undefined,
+      steps: currentAiTurn.steps.length > 0 ? currentAiTurn.steps : undefined,
     });
     currentAiTurn = null;
   };
@@ -181,21 +183,37 @@ function deriveChatMessages(
           content: "",
           reasoning: "",
           toolCalls: [],
+          steps: [],
           id: msg.id || `msg-${i}`,
           lastIndex: i,
         };
       }
       currentAiTurn.lastIndex = i;
 
+      // Per-message ordered emission: reasoning → text → tools. This
+      // matches Anthropic's canonical block order within a single turn,
+      // and across multi-turn agent runs it produces a properly
+      // interleaved sequence (commentary BEFORE the tool calls it
+      // describes, not all bunched at the end).
       if (typeof msg.content === "string") {
-        if (msg.content) currentAiTurn.content += (currentAiTurn.content ? "\n\n" : "") + msg.content;
+        if (msg.content) {
+          currentAiTurn.content += (currentAiTurn.content ? "\n\n" : "") + msg.content;
+          currentAiTurn.steps.push({ kind: "text", content: msg.content });
+        }
       } else if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === "thinking" || block.type === "reasoning") {
+            const r = block.thinking || block.reasoning || "";
+            if (r) {
+              currentAiTurn.reasoning += r;
+              currentAiTurn.steps.push({ kind: "reasoning", content: r });
+            }
+          }
+        }
         for (const block of msg.content) {
           if (block.type === "text" && block.text) {
             currentAiTurn.content += (currentAiTurn.content ? "\n\n" : "") + block.text;
-          }
-          if (block.type === "thinking" || block.type === "reasoning") {
-            currentAiTurn.reasoning += block.thinking || block.reasoning || "";
+            currentAiTurn.steps.push({ kind: "text", content: block.text });
           }
         }
       }
@@ -207,19 +225,21 @@ function deriveChatMessages(
         if (msgToolCalls) {
           for (const tc of msgToolCalls) {
             const match = toolCalls.find((stc) => stc.call.id === tc.id);
-            currentAiTurn.toolCalls.push({
+            const toolEntry = {
               tool: tc.name,
               args: tc.args,
               result: match?.result?.content as string | undefined,
               status:
                 match?.state === "pending"
-                  ? "running"
+                  ? ("running" as const)
                   : match?.state === "error"
-                    ? "error"
+                    ? ("error" as const)
                     : match?.state === "completed"
-                      ? "complete"
-                      : "running",
-            });
+                      ? ("complete" as const)
+                      : ("running" as const),
+            };
+            currentAiTurn.toolCalls.push(toolEntry);
+            currentAiTurn.steps.push({ kind: "tool", tool: toolEntry });
           }
         }
       }
@@ -257,6 +277,10 @@ function ChatPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [message, setMessage] = useState("");
   const [isCheckingExpiration, setIsCheckingExpiration] = useState(false);
+  // For n8n sandboxes: URL of the codevibe-side reverse proxy. Iframes load
+  // from here instead of the e2b URL so the n8n auth cookie lands first-party
+  // (browsers block third-party cookies in iframes even with SameSite=None).
+  const [n8nProxyUrl, setN8nProxyUrl] = useState<string | null>(null);
 
   // --- Refs for one-shot effects ---
   const didInitRef = useRef(false);
@@ -564,6 +588,41 @@ function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.templateType, ctx.activeTab]);
 
+  // n8n iframe routes through codevibe's reverse proxy so its auth cookie
+  // is first-party. Register the active sandbox URL with the proxy whenever
+  // it changes; clear the proxy URL otherwise so the nextjs iframe just uses
+  // ctx.sandboxUrl directly.
+  useEffect(() => {
+    if (ctx.templateType !== "n8n" || !ctx.sandboxUrl) {
+      setN8nProxyUrl(null);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/n8n-proxy/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sandboxUrl: ctx.sandboxUrl }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.proxyUrl) {
+          setN8nProxyUrl(data.proxyUrl);
+        } else {
+          console.error("[n8n-proxy] register failed:", data?.error);
+          setN8nProxyUrl(null);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[n8n-proxy] register threw:", err);
+        setN8nProxyUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.templateType, ctx.sandboxUrl]);
+
   // --- Auto-save session to DB ---
   useEffect(() => {
     if (!sessionId || !sessionExistsRef.current) return;
@@ -713,8 +772,12 @@ function ChatPage() {
               </div>
             )}
             <iframe
-              key={`${sessionId}-${ctx.sandboxUrl}`}
-              src={ctx.sandboxUrl}
+              key={`${sessionId}-${ctx.sandboxUrl}-${n8nProxyUrl ?? ""}-${ctx.n8nWorkflowId ?? ""}`}
+              src={
+                ctx.templateType === "n8n" && n8nProxyUrl
+                  ? `${n8nProxyUrl}${ctx.n8nWorkflowId ? `/workflow/${ctx.n8nWorkflowId}` : ""}`
+                  : ctx.sandboxUrl
+              }
               className={`w-full h-full border-0 transition-opacity duration-300 ${ctx.iframeLoading ? "opacity-0" : "opacity-100"}`}
               onLoad={() => ctx.setIframeLoading(false)}
               title="Sandbox Preview"
@@ -853,7 +916,7 @@ function ChatPage() {
             </TooltipProvider>
           )}
 
-          {isMounted && sessionId && ctx.templateType !== "n8n" && <DownloadButton sessionId={sessionId} />}
+          {isMounted && sessionId && <DownloadButton sessionId={sessionId} />}
           {isMounted && sessionId && ctx.templateType !== "n8n" && <DeployButton sessionId={sessionId} />}
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
         </div>

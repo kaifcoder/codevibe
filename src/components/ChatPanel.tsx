@@ -6,8 +6,38 @@ import { motion, AnimatePresence } from "framer-motion";
 import { LucideSend, Bot, User, ChevronDown, ChevronRight, Brain, AlertCircle, Check, Terminal, Pencil, Eye, FolderOpen, Trash2, Globe, Search, Package, Box, Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+// Force long URLs / curl commands / fenced code to wrap inside the chat panel
+// instead of pushing the layout wider. Applied as element overrides so the
+// Tailwind classes win regardless of CSS layer order.
+const markdownComponents: Components = {
+  pre: ({ children, ...props }) => (
+    <pre
+      {...props}
+      className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-w-full"
+    >
+      {children}
+    </pre>
+  ),
+  code: ({ children, className, ...props }) => (
+    <code
+      {...props}
+      className={cn(
+        "break-words [overflow-wrap:anywhere] [word-break:break-word]",
+        className,
+      )}
+    >
+      {children}
+    </code>
+  ),
+  a: ({ children, ...props }) => (
+    <a {...props} className="break-all [overflow-wrap:anywhere]">
+      {children}
+    </a>
+  ),
+};
 import { QueueList, type MessageQueue } from "@/components/QueueList";
 
 export interface ChatMessage {
@@ -26,7 +56,18 @@ export interface ChatMessage {
     endTime?: number;
   }>;
   reasoning?: string;
+  // Ordered render sequence for AI turns. Preserves the interleaving of text,
+  // tool calls, and thinking across multi-step agent runs (so commentary like
+  // "Now I'll do X" lands BEFORE the tool calls it describes, not after).
+  // When present, AIMessageTimeline renders from `steps` instead of the flat
+  // toolCalls/content/reasoning fields.
+  steps?: ChatMessageStep[];
 }
+
+export type ChatMessageStep =
+  | { kind: "text"; content: string }
+  | { kind: "reasoning"; content: string }
+  | { kind: "tool"; tool: NonNullable<ChatMessage["toolCalls"]>[number] };
 
 function getToolIcon(toolName: string): React.ReactNode {
   const name = toolName.toLowerCase();
@@ -198,6 +239,67 @@ function AIMessageTimeline({ msg, isStreaming }: { msg: ChatMessage; isStreaming
   const hasToolCalls = msg.toolCalls && msg.toolCalls.length > 0;
   const hasContent = !!msg.content && msg.content !== '🔄 Processing...';
   const isThinking = msg.status === 'thinking' && !hasReasoning && !hasToolCalls && !hasContent;
+  const hasSteps = !!msg.steps && msg.steps.length > 0;
+
+  // If we have an ordered step sequence, render it instead of the flat
+  // tools-then-text layout. Trailing text steps render as full markdown
+  // blocks (the "final" message); intermediate text steps render as inline
+  // commentary between tool calls.
+  if (hasSteps) {
+    const steps = msg.steps!;
+    const lastTextIdx = (() => {
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (steps[i].kind === "text") return i;
+      }
+      return -1;
+    })();
+
+    return (
+      <div className="space-y-0 min-w-0 max-w-full">
+        <div className="py-1 min-w-0">
+          {steps.map((step, idx) => {
+            const isLastVisualStep = idx === steps.length - 1 && !isStreaming;
+            if (step.kind === "tool") {
+              return (
+                <TimelineToolStep
+                  key={`s-tool-${idx}`}
+                  tool={step.tool}
+                  isLast={isLastVisualStep}
+                />
+              );
+            }
+            if (step.kind === "reasoning") {
+              return (
+                <TimelineThinkingStep
+                  key={`s-reason-${idx}`}
+                  reasoning={step.content}
+                  isLast={isLastVisualStep}
+                  defaultOpen={false}
+                />
+              );
+            }
+            // text step
+            const isFinalText = idx === lastTextIdx && !isStreaming;
+            return (
+              <div key={`s-text-${idx}`} className={cn(
+                "break-words text-sm leading-relaxed min-w-0 max-w-full overflow-hidden",
+                isFinalText ? "py-1" : "pl-8 pb-3 -mt-1"
+              )}>
+                <div className="markdown-content">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {step.content}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            );
+          })}
+          {isStreaming && (
+            <span className="inline-block w-0.5 h-4 bg-primary animate-pulse ml-1 align-middle" />
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Build timeline steps
   const steps: React.ReactNode[] = [];
@@ -254,9 +356,9 @@ function AIMessageTimeline({ msg, isStreaming }: { msg: ChatMessage; isStreaming
 
       {/* Final response text */}
       {hasContent && (
-        <div className="break-words text-sm leading-relaxed">
+        <div className="break-words text-sm leading-relaxed min-w-0 max-w-full overflow-hidden">
           <div className="markdown-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
               {msg.content}
             </ReactMarkdown>
             {isStreaming && (
