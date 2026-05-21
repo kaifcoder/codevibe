@@ -24,6 +24,7 @@ export type FileNode = {
 export type ConnectionStatus = "connected" | "connecting" | "disconnected";
 export type ConnectedUser = { id: string; name: string; color: string };
 export type MobilePanel = "chat" | "preview" | "code";
+export type TemplateType = "nextjs" | "n8n";
 
 const DISPLAY_NAME_STORAGE_KEY = "codevibe.guestDisplayName";
 
@@ -68,6 +69,12 @@ interface ChatContextValue {
   setSandboxCreatedAt: Dispatch<SetStateAction<number | null>>;
   isSandboxExpired: boolean;
   setIsSandboxExpired: Dispatch<SetStateAction<boolean>>;
+
+  // Template (set by HITL classification on first prompt)
+  templateType: TemplateType;
+  setTemplateType: Dispatch<SetStateAction<TemplateType>>;
+  templateDecided: boolean;
+  setTemplateDecided: Dispatch<SetStateAction<boolean>>;
 
   // UI panels
   activeTab: string;
@@ -133,6 +140,9 @@ export function ChatProvider({
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   const [sandboxCreatedAt, setSandboxCreatedAt] = useState<number | null>(null);
   const [isSandboxExpired, setIsSandboxExpired] = useState(false);
+
+  const [templateType, setTemplateType] = useState<TemplateType>("nextjs");
+  const [templateDecided, setTemplateDecided] = useState(false);
 
   const [activeTab, setActiveTab] = useState<string>("live preview");
   const [showSecondPanel, setShowSecondPanel] = useState(false);
@@ -217,6 +227,10 @@ export function ChatProvider({
     setSandboxCreatedAt,
     isSandboxExpired,
     setIsSandboxExpired,
+    templateType,
+    setTemplateType,
+    templateDecided,
+    setTemplateDecided,
     activeTab,
     setActiveTab,
     showSecondPanel,

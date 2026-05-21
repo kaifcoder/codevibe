@@ -26,6 +26,7 @@ export interface DesktopChatLayoutProps {
   isStreaming: boolean;
   renderPreview: () => React.ReactNode;
   queue?: MessageQueue;
+  interruptSlot?: React.ReactNode;
 }
 
 export function DesktopChatLayout({
@@ -37,6 +38,7 @@ export function DesktopChatLayout({
   isStreaming,
   renderPreview,
   queue,
+  interruptSlot,
 }: Readonly<DesktopChatLayoutProps>) {
   const {
     sessionId,
@@ -67,6 +69,7 @@ export function DesktopChatLayout({
             isLoading={isLoading}
             isStreaming={isStreaming}
             queue={queue}
+            interruptSlot={interruptSlot}
           />
         </div>
       </ResizablePanel>

@@ -66,6 +66,23 @@ export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): string 
 - \`e2b_write_file\`: write workflow JSON or helper scripts (rare).
 - \`e2b_read_file\`: read configs / saved workflow exports.
 - \`e2b_list_files\`: list a directory.
+
+## n8n-mcp tools (USE THESE before writing workflow JSON)
+The n8n-mcp server gives you offline knowledge of all 1,650 n8n nodes. Use it to look up node shapes and validate workflows BEFORE deploying. Saves round-trips to the live API.
+
+- \`tools_documentation\`: read this first if you're unsure how to use the n8n-mcp tools.
+- \`search_nodes\`: full-text search across all 1,650 nodes. Start here when you need a node and don't know its exact type.
+- \`get_node\`: get node properties + examples for a specific node type (e.g. \`n8n-nodes-base.scheduleTrigger\`). Use this to look up exact \`parameters\` shape before writing the JSON.
+- \`validate_node\`: validate a single node config in isolation.
+- \`validate_workflow\`: validate a complete workflow JSON before POSTing to /api/v1/workflows. Run this every time before deploy — catches typos in node types, missing required params, broken connections.
+- \`search_templates\` + \`get_template\`: 2,352 curated example workflows. Pull a template close to the user's ask and adapt it instead of building from scratch.
+
+### Recommended order
+1. \`search_nodes\` or \`search_templates\` to discover.
+2. \`get_node\` for each node type you'll use, to get the canonical \`parameters\` shape.
+3. Assemble workflow JSON.
+4. \`validate_workflow\` until clean.
+5. POST to /api/v1/workflows via \`e2b_run_command\` curl, then activate + run.
 `;
 
   if (sbxId) {

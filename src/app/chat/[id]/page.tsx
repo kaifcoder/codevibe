@@ -10,6 +10,7 @@ import { ChatPanel, ChatMessage } from "@/components/ChatPanel";
 import { ShareButton } from "@/components/ShareButton";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DeployButton } from "@/components/DeployButton";
+import { TemplateApprovalCard } from "@/components/TemplateApprovalCard";
 import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
@@ -309,13 +310,60 @@ function ChatPage() {
       {
         onDisconnect: "continue",
         streamResumable: true,
-        config: { configurable: { sessionId } },
+        config: {
+          configurable: {
+            sessionId,
+            templateType: ctx.templateType,
+            templateDecided: ctx.templateDecided,
+          },
+        },
       } as Record<string, unknown>,
     );
-  }, [message, stream, sessionId]);
+  }, [message, stream, sessionId, ctx.templateType, ctx.templateDecided]);
 
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
+
+  // --- HITL approval handlers (resume the run with approve / edit) ---
+  const resumeWithDecision = useCallback(
+    (decision: { type: "approve" } | { type: "edit"; editedAction: { name: string; args: Record<string, unknown> } }) => {
+      stream.submit(null, {
+        config: {
+          configurable: {
+            sessionId,
+            templateType: ctx.templateType,
+            templateDecided: ctx.templateDecided,
+          },
+        },
+        command: { resume: { decisions: [decision] } },
+      } as Record<string, unknown>);
+    },
+    [stream, sessionId, ctx.templateType, ctx.templateDecided],
+  );
+
+  const interruptValue = stream.interrupt?.value as
+    | { actionRequests?: Array<{ name: string; args: Record<string, unknown>; description?: string }>; reviewConfigs?: Array<{ actionName: string; allowedDecisions: string[] }> }
+    | undefined;
+  const setTemplateRequest =
+    interruptValue?.actionRequests?.find((a) => a.name === "set_template") &&
+    (interruptValue as Parameters<typeof TemplateApprovalCard>[0]["request"]);
+
+  const interruptSlot = setTemplateRequest ? (
+    <TemplateApprovalCard
+      request={setTemplateRequest}
+      disabled={stream.isLoading}
+      onApprove={() => resumeWithDecision({ type: "approve" })}
+      onEdit={(templateType) =>
+        resumeWithDecision({
+          type: "edit",
+          editedAction: {
+            name: "set_template",
+            args: { templateType, reasoning: "User overrode template selection." },
+          },
+        })
+      }
+    />
+  ) : null;
 
   // --- DB session creation ---
   const createDbSession = useMutation(
@@ -397,6 +445,13 @@ function ChatPage() {
             switchedThreadRef.current = true;
             stream.switchThread(session.threadId);
           }
+        }
+
+        if (session.templateType === "nextjs" || session.templateType === "n8n") {
+          ctx.setTemplateType(session.templateType);
+        }
+        if (typeof session.templateDecided === "boolean") {
+          ctx.setTemplateDecided(session.templateDecided);
         }
 
         if (session.fileTree && Array.isArray(session.fileTree)) {
@@ -499,6 +554,15 @@ function ChatPage() {
     if (ctx.isSandboxExpired) ctx.setActiveTab("code");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.isSandboxExpired]);
+
+  // n8n sessions have no code panel — pin the preview tab so the iframe stays
+  // visible even if some other effect tried to flip to "code".
+  useEffect(() => {
+    if (ctx.templateType === "n8n" && ctx.activeTab !== "live preview") {
+      ctx.setActiveTab("live preview");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.templateType, ctx.activeTab]);
 
   // --- Auto-save session to DB ---
   useEffect(() => {
@@ -692,6 +756,7 @@ function ChatPage() {
               isLoading={stream.isLoading}
               isStreaming={stream.isLoading}
               queue={stream.queue}
+              interruptSlot={interruptSlot}
             />
           </div>
         </div>
@@ -709,6 +774,7 @@ function ChatPage() {
           isStreaming={stream.isLoading}
           renderPreview={renderPreview}
           queue={stream.queue}
+          interruptSlot={interruptSlot}
         />
       );
     }
@@ -723,6 +789,7 @@ function ChatPage() {
         isStreaming={stream.isLoading}
         renderPreview={renderPreview}
         queue={stream.queue}
+        interruptSlot={interruptSlot}
       />
     );
   };
@@ -749,7 +816,7 @@ function ChatPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {ctx.showSecondPanel && (
+          {ctx.showSecondPanel && ctx.templateType !== "n8n" && (
             <Tabs value={ctx.activeTab} onValueChange={ctx.setActiveTab}>
               <TabsList className="h-7 bg-muted/50">
                 <TabsTrigger value="live preview" className="text-xs h-6 px-3">
@@ -786,8 +853,8 @@ function ChatPage() {
             </TooltipProvider>
           )}
 
-          {isMounted && sessionId && <DownloadButton sessionId={sessionId} />}
-          {isMounted && sessionId && <DeployButton sessionId={sessionId} />}
+          {isMounted && sessionId && ctx.templateType !== "n8n" && <DownloadButton sessionId={sessionId} />}
+          {isMounted && sessionId && ctx.templateType !== "n8n" && <DeployButton sessionId={sessionId} />}
           {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
         </div>
       </div>

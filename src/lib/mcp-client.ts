@@ -111,6 +111,21 @@ export const NEXTJS_DOCS_MCP_CONFIG: MCPServerConfig = {
   args: ['@taiyokimura/nextjs-docs-mcp@latest'],
 };
 
+// JSON-only mode (no N8N_API_URL/KEY) — exposes the 7 core tools:
+// search_nodes, get_node, validate_node, validate_workflow,
+// search_templates, get_template, tools_documentation. Deployment to the
+// in-sandbox n8n still goes through e2b_run_command + curl.
+export const N8N_MCP_CONFIG: MCPServerConfig = {
+  command: 'npx',
+  args: ['-y', 'n8n-mcp'],
+  env: {
+    ...process.env,
+    MCP_MODE: 'stdio',
+    LOG_LEVEL: 'error',
+    DISABLE_CONSOLE_OUTPUT: 'true',
+  },
+};
+
 /**
  * Factory functions to create MCP tools for different servers
  */
@@ -120,4 +135,8 @@ export async function createPlaywrightMCPTools() {
 
 export async function createNextJsDocsMCPTools() {
   return createMCPTools('nextjs-docs-mcp', NEXTJS_DOCS_MCP_CONFIG);
+}
+
+export async function createN8nMCPTools() {
+  return createMCPTools('n8n-mcp', N8N_MCP_CONFIG);
 }
