@@ -4,10 +4,9 @@ import { createGunzip } from 'node:zlib';
 import { auth } from '@clerk/nextjs/server';
 import JSZip from 'jszip';
 import { extract as tarExtract } from 'tar-stream';
-import { PrismaClient } from '@/generated/prisma';
+import { prisma } from "@/server/db";
 import { getSandbox } from '@/lib/sandbox-utils';
 
-const prisma = new PrismaClient();
 
 // Excluded from the archive — same boundaries the rest of the app uses.
 const TAR_EXCLUDES = [

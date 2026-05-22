@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@/generated/prisma";
+import { prisma } from "@/server/db";
 import { getSandbox } from "@/lib/sandbox-utils";
 import { auth } from "@clerk/nextjs/server";
 import { Client } from "@langchain/langgraph-sdk";
 
-const prisma = new PrismaClient();
 
 const AGENT_URL = process.env.NEXT_PUBLIC_LANGGRAPH_URL || "http://localhost:2024";
 
