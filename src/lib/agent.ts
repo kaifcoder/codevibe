@@ -28,14 +28,21 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 
 // ─── Model ───────────────────────────────────────────────────────────────────
 
+// Proxy that brokers LLM calls. Resolution order:
+//   1. LLM_PROXY_URL env (production / Render — set per-deployment)
+//   2. host.docker.internal when running inside docker-compose locally
+//   3. 0.0.0.0 for bare-metal local dev
+const llmProxyBaseURL =
+  process.env.LLM_PROXY_URL ??
+  (process.env.DOCKER_CONTAINER === 'true'
+    ? 'http://host.docker.internal:3030'
+    : 'http://0.0.0.0:3030');
+
 const model = new ChatAnthropic({
   model: 'claude-sonnet-4-5',
-  apiKey: 'test-key-1',
+  apiKey: process.env.LLM_PROXY_API_KEY ?? 'test-key-1',
   clientOptions: {
-    baseURL: 'http://0.0.0.0:3030',
-  ...(process.env.DOCKER_CONTAINER === 'true'
-    ? { baseURL: 'http://host.docker.internal:3030' }
-    : {}),
+    baseURL: llmProxyBaseURL,
   },
   maxTokens: 16000,
   thinking: {
