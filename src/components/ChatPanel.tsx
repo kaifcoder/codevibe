@@ -534,7 +534,7 @@ export function ChatPanel({
               size="icon"
               disabled={!message.trim()}
               className={cn(
-                "h-8 w-8 rounded-full shrink-0 transition-all",
+                "h-10 w-10 sm:h-8 sm:w-8 rounded-full shrink-0 transition-all",
                 !message.trim() && "opacity-50"
               )}
             >
