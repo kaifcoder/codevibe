@@ -2,8 +2,11 @@ FROM langchain/langgraphjs-api:22
 
 WORKDIR /deps/codevibe
 
-# Copy only dependency manifests first for layer caching
-COPY package.json package-lock.json ./
+# Copy dependency manifests + Prisma schema first, for layer caching.
+# package.json's postinstall runs `prisma generate`, which needs
+# prisma/schema.prisma + prisma.config.ts to exist before `npm ci` runs.
+COPY package.json package-lock.json prisma.config.ts ./
+COPY prisma ./prisma
 
 RUN npm ci
 

@@ -11,7 +11,7 @@
 import { Server } from '@hocuspocus/server';
 import * as Y from 'yjs';
 
-const port = process.env.YJS_PORT || process.argv[2] || 1234;
+const port = process.env.PORT || process.env.YJS_PORT || process.argv[2] || 1234;
 
 // In-memory persistence. Hocuspocus unloads docs after a short debounce when
 // no clients are connected — without an onLoadDocument that returns prior
