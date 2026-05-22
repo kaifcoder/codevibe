@@ -10,6 +10,7 @@ WORKDIR /app
 # minimal set explicitly. Pin to the ranges already in package.json.
 RUN apk add --no-cache --virtual .build-deps tini \
     && npm init -y >/dev/null \
+    && npm pkg set type=module \
     && npm install --omit=dev --no-audit --no-fund \
        @hocuspocus/server@^3.4.3 \
        yjs@^13.6.27
