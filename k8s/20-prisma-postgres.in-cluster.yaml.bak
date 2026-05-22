@@ -1,0 +1,95 @@
+# Application Postgres — backs Prisma's `Session` table (file trees, share
+# tokens, sandboxId persistence, GitHub link, etc.). This is SEPARATE from
+# the Postgres bundled with the LangGraph Helm chart (which stores
+# checkpoints/threads/runs for the agent server).
+#
+# StatefulSet so the PV stays bound to the same pod across reschedules.
+# For real production, swap this for a managed RDS / CloudSQL / Aurora
+# instance and only keep the Service as an ExternalName, or just point
+# DATABASE_URL at the managed host.
+apiVersion: v1
+kind: Service
+metadata:
+  name: prisma-postgres
+  namespace: codevibe
+  labels:
+    app.kubernetes.io/name: prisma-postgres
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  clusterIP: None  # headless — pod DNS via prisma-postgres-0.prisma-postgres.codevibe.svc
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  selector:
+    app.kubernetes.io/name: prisma-postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prisma-postgres
+  namespace: codevibe
+  labels:
+    app.kubernetes.io/name: prisma-postgres
+    app.kubernetes.io/component: database
+spec:
+  serviceName: prisma-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prisma-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prisma-postgres
+    spec:
+      securityContext:
+        # postgres image expects to chown its data dir; fsGroup makes the
+        # mounted PV writable for the postgres user (uid 999).
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: codevibe-postgres-secret
+          env:
+            # postgres:16 expects PGDATA inside an empty subdir, otherwise
+            # the lost+found dir on EBS-backed PVs trips initdb.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # Leave storageClassName unset to use the cluster default. Set it
+        # explicitly (e.g. gp3, premium-rwo) if your cluster needs it.
+        resources:
+          requests:
+            storage: 20Gi

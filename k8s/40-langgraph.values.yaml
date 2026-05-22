@@ -1,0 +1,125 @@
+# Helm values for the official LangChain Agent Server chart.
+# Per https://docs.langchain.com/langsmith/deploy-standalone-server this is
+# the *recommended* way to deploy a LangGraph agent on Kubernetes — instead
+# of hand-rolling Deployment YAML for the langgraph-api image, we let the
+# chart manage it (Deployment + queue worker + Redis + Postgres-for-
+# checkpoints + HPA + PDB + service account).
+#
+# Install (or upgrade) the agent server with:
+#
+#   helm repo add langchain https://langchain-ai.github.io/helm
+#   helm repo update
+#   helm upgrade --install langgraph langchain/langgraph-cloud \
+#     --namespace codevibe \
+#     --values k8s/40-langgraph.values.yaml
+#
+# Run `helm search repo langchain/langgraph-cloud --versions` to pick the
+# chart version explicitly via `--version <x.y.z>`.
+
+# --- Image -------------------------------------------------------------
+# The chart deploys an Agent Server image — by default it uses a stock
+# langgraph runtime, but we override it with the codevibe-specific image
+# built from Dockerfile.agent (which copies our src/ + package.json so the
+# server can import `./src/lib/agent.ts:agent`).
+image:
+  repository: ghcr.io/YOUR_ORG/codevibe-langgraph-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# --- Replicas + scaling ------------------------------------------------
+apiServer:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+# Queue worker pulls runs from the LangGraph task queue (stored in Postgres)
+# and executes them. Scale these up if you see queued runs piling up.
+queue:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+# --- External Postgres (managed) ---------------------------------------
+# Disable the chart's bundled postgres in favor of a managed instance
+# (RDS / Cloud SQL / Azure DB / SAP HANA Cloud Postgres / etc).
+# The connection string lives in `codevibe-langgraph-database` (see
+# 10-secrets.example.yaml) under the key `connection_url`. Use a database
+# name distinct from Prisma's so the two schemas can't collide.
+postgres:
+  enabled: false
+  external:
+    enabled: true
+    existingSecretName: codevibe-langgraph-database
+
+# --- Bundled Redis (pub-sub for streaming run output) ------------------
+redis:
+  enabled: true
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+# --- Env passed into the langgraph-api pods ----------------------------
+# `config.envFrom` mounts our Kubernetes Secret (10-secrets.example.yaml)
+# so the agent picks up ANTHROPIC_API_KEY, E2B_API_KEY, the optional
+# LangSmith keys, and DATABASE_URL (Prisma's app DB — used by the agent's
+# direct DB writes in tools, *not* the langgraph checkpointer DB).
+config:
+  envFrom:
+    - secretRef:
+        name: codevibe-app-secrets
+    - secretRef:
+        name: codevibe-app-database
+  env:
+    # Yjs WebSocket URL the agent uses to push e2b file edits into the
+    # collaborative Y.Docs (server-side connection from inside the cluster).
+    - name: YJS_WS_URL
+      value: "ws://yjs-server.codevibe.svc.cluster.local:1234"
+    # Tells our agent code it's running in a container — used in src/lib
+    # to pick host.docker.internal-style fallbacks vs cluster DNS.
+    - name: DOCKER_CONTAINER
+      value: "true"
+    # The graph entrypoint exported by Dockerfile.agent's image.
+    - name: LANGSERVE_GRAPHS
+      value: '{"agent": "./src/lib/agent.ts:agent"}'
+
+# --- Service / Ingress -------------------------------------------------
+# We expose the API via a ClusterIP only — Next.js (running outside this
+# chart, see your platform's separate deployment) reaches it via the
+# in-cluster DNS name `langgraph-langgraph-cloud.codevibe.svc.cluster.local`.
+# If you want browser access (e.g. for LangGraph Studio), enable the
+# ingress block and set the host below.
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: false
+  # className: nginx
+  # hosts:
+  #   - host: agent.codevibe.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  # tls:
+  #   - secretName: codevibe-agent-tls
+  #     hosts:
+  #       - agent.codevibe.example.com
+
+# --- Pod scheduling ----------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

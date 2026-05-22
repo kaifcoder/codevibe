@@ -1,0 +1,44 @@
+# Optional Ingress for browser-facing endpoints.
+# Both the Yjs WebSocket and (optionally) the LangGraph API need to be
+# reachable from the user's browser, since useStream and the Hocuspocus
+# provider both run client-side and connect with the user's session.
+#
+# This example assumes ingress-nginx. Swap annotations for your controller
+# (Traefik, Contour, AWS LB Controller, GCP GCE, etc.). Update hosts to
+# match your DNS.
+#
+# Why two separate Ingress objects:
+#  - yjs-server speaks plain WS on a custom port; we want path "/" with
+#    websocket support enabled.
+#  - langgraph-api is HTTPS REST + SSE; the Helm chart's own ingress
+#    config (in 40-langgraph.values.yaml) is the cleaner place to expose
+#    it. Toggle ingress.enabled=true there instead of duplicating below.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: yjs-server
+  namespace: codevibe
+  annotations:
+    # ingress-nginx — keep WS connections alive (default 60s idle would
+    # tear down idle Hocuspocus sockets between syncs).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # cert-manager — if you're using it. Drop these two lines otherwise.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - yjs.codevibe.example.com
+      secretName: yjs-server-tls
+  rules:
+    - host: yjs.codevibe.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: yjs-server
+                port:
+                  number: 1234

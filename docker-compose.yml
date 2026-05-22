@@ -16,7 +16,12 @@ services:
         condition: service_healthy
     environment:
       REDIS_URI: "redis://langgraph-redis:6379"
-      POSTGRES_URI: "postgres://postgres:password@host.docker.internal:5433/langgraph?sslmode=disable"
+      # Supabase pooler — the direct host (db.<ref>.supabase.co:5432) resolves
+      # IPv6-only on the free tier and Docker doesn't have IPv6 routing, so we
+      # use the IPv4 pooler. LangGraph needs **session** mode (port 5432 on
+      # the pooler hostname) because its checkpointer relies on prepared
+      # statements that transaction pooling drops. Value lives in .env.
+      POSTGRES_URI: "${LANGGRAPH_POSTGRES_URI}"
       LANGSERVE_GRAPHS: '{"agent": "./src/lib/agent.ts:agent"}'
       DOCKER_CONTAINER: "true"
       YJS_WS_URL: "ws://host.docker.internal:1234"
