@@ -53,6 +53,17 @@ const server = new Server({
     };
   },
 
+  // Plain HTTP /health endpoint for Render health checks + the homepage
+  // warmup ping. Throw a string to short-circuit Hocuspocus's default "OK!"
+  // response after we've written our own.
+  async onRequest({ request, response }) {
+    if (request.url === '/health') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, docs: docStore.size }));
+      throw 'handled';
+    }
+  },
+
   onConnect: (data) => {
     console.log(`[Hocuspocus] ✅ Client connected to document: ${data.documentName}`);
   },

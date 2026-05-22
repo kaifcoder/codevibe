@@ -1,0 +1,23 @@
+# Lightweight container for the n8n reverse proxy.
+# Same minimal-deps pattern as Dockerfile.yjs — don't pull the full project
+# package.json (drags in next/react/prisma); install only what the proxy
+# needs at runtime. tsx runs the .ts file directly so we skip a build step.
+FROM node:20-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache tini \
+    && npm init -y >/dev/null \
+    && npm install --omit=dev --no-audit --no-fund \
+       http-proxy@^1.18.1 \
+       @types/http-proxy@^1.17.17 \
+       tsx@^4.20.3
+
+COPY n8n-proxy.ts ./n8n-proxy.ts
+
+ENV NODE_ENV=production
+ENV N8N_PROXY_PORT=1235
+EXPOSE 1235
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["npx", "tsx", "n8n-proxy.ts"]

@@ -12,6 +12,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SiteHeader } from "@/components/site-header";
+import { BackendWarmup } from "@/components/backend-warmup";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -67,6 +68,7 @@ export default function RootLayout({
                     <SiteHeader />
                   <div className="flex-1 overflow-hidden">
                     <Toaster />
+                    <BackendWarmup />
                     {children}
                   </div>
                 </SidebarInset>
