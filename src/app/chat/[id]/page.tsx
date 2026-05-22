@@ -282,7 +282,7 @@ function ChatPage() {
   // For n8n sandboxes: URL of the codevibe-side reverse proxy. Iframes load
   // from here instead of the e2b URL so the n8n auth cookie lands first-party
   // (browsers block third-party cookies in iframes even with SameSite=None).
-  const [n8nProxyUrl, setN8nProxyUrl] = useState<string | null>(null);
+  const [n8nClaimUrl, setN8nClaimUrl] = useState<string | null>(null);
 
   // --- Refs for one-shot effects ---
   const didInitRef = useRef(false);
@@ -643,39 +643,40 @@ function ChatPage() {
   }, [ctx.templateType, ctx.activeTab]);
 
   // n8n iframe routes through codevibe's reverse proxy so its auth cookie
-  // is first-party. Register the active sandbox URL with the proxy whenever
-  // it changes; clear the proxy URL otherwise so the nextjs iframe just uses
-  // ctx.sandboxUrl directly.
+  // is first-party. Register {sessionId, sandboxUrl} with the proxy whenever
+  // the sandbox changes; the iframe loads the returned claimUrl which sets
+  // a session-scoped routing cookie before redirecting into n8n. Clears when
+  // the template isn't n8n so the nextjs iframe just uses ctx.sandboxUrl.
   useEffect(() => {
-    if (ctx.templateType !== "n8n" || !ctx.sandboxUrl) {
-      setN8nProxyUrl(null);
+    if (ctx.templateType !== "n8n" || !ctx.sandboxUrl || !sessionId) {
+      setN8nClaimUrl(null);
       return;
     }
     let cancelled = false;
     fetch("/api/n8n-proxy/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sandboxUrl: ctx.sandboxUrl }),
+      body: JSON.stringify({ sessionId, sandboxUrl: ctx.sandboxUrl }),
     })
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        if (data?.proxyUrl) {
-          setN8nProxyUrl(data.proxyUrl);
+        if (data?.claimUrl) {
+          setN8nClaimUrl(data.claimUrl);
         } else {
           console.error("[n8n-proxy] register failed:", data?.error);
-          setN8nProxyUrl(null);
+          setN8nClaimUrl(null);
         }
       })
       .catch((err) => {
         if (cancelled) return;
         console.error("[n8n-proxy] register threw:", err);
-        setN8nProxyUrl(null);
+        setN8nClaimUrl(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [ctx.templateType, ctx.sandboxUrl]);
+  }, [ctx.templateType, ctx.sandboxUrl, sessionId]);
 
   // --- Auto-save session to DB ---
   useEffect(() => {
@@ -826,10 +827,10 @@ function ChatPage() {
               </div>
             )}
             <iframe
-              key={`${sessionId}-${ctx.sandboxUrl}-${n8nProxyUrl ?? ""}-${ctx.n8nWorkflowId ?? ""}`}
+              key={`${sessionId}-${ctx.sandboxUrl}-${n8nClaimUrl ?? ""}-${ctx.n8nWorkflowId ?? ""}`}
               src={
-                ctx.templateType === "n8n" && n8nProxyUrl
-                  ? `${n8nProxyUrl}${ctx.n8nWorkflowId ? `/workflow/${ctx.n8nWorkflowId}` : ""}`
+                ctx.templateType === "n8n" && n8nClaimUrl
+                  ? `${n8nClaimUrl}${ctx.n8nWorkflowId ? `/workflow/${ctx.n8nWorkflowId}` : ""}`
                   : ctx.sandboxUrl
               }
               className={`w-full h-full border-0 transition-opacity duration-300 ${ctx.iframeLoading ? "opacity-0" : "opacity-100"}`}
