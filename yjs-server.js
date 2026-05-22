@@ -54,13 +54,16 @@ const server = new Server({
   },
 
   // Plain HTTP /health endpoint for Render health checks + the homepage
-  // warmup ping. Throw a string to short-circuit Hocuspocus's default "OK!"
-  // response after we've written our own.
+  // warmup ping. Hocuspocus' onRequest contract: throw a FALSY value to
+  // short-circuit the default "Welcome to Hocuspocus!" response. Throwing
+  // a truthy value (Error or non-empty string) rethrows and crashes the
+  // process under Node 20's strict unhandled-rejection mode.
+  // See: node_modules/@hocuspocus/server/src/Server.ts:118-135
   async onRequest({ request, response }) {
     if (request.url === '/health') {
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ ok: true, docs: docStore.size }));
-      throw 'handled';
+      throw '';
     }
   },
 
