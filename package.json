@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
-    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
     "yjs": "node --watch yjs-server.js",
