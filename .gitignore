@@ -48,3 +48,6 @@ next-env.d.ts
 /.playwright-mcp/
 # LangGraph API
 .langgraph_api
+
+# Filled-in K8s secret manifests (the .example file is checked in)
+/k8s/10-secrets.yaml

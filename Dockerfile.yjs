@@ -1,0 +1,26 @@
+# Lightweight container for the Hocuspocus/Yjs WebSocket server.
+# This is the only backend service that didn't already have a Dockerfile —
+# langgraph-api uses Dockerfile.agent, the rest are off-the-shelf images.
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Only the deps Hocuspocus needs at runtime — pulling the full project
+# `package.json` would drag in next, react, prisma, etc., so we install a
+# minimal set explicitly. Pin to the ranges already in package.json.
+RUN apk add --no-cache --virtual .build-deps tini \
+    && npm init -y >/dev/null \
+    && npm install --omit=dev --no-audit --no-fund \
+       @hocuspocus/server@^3.4.3 \
+       yjs@^13.6.27
+
+COPY yjs-server.js ./yjs-server.js
+
+ENV NODE_ENV=production
+ENV YJS_PORT=1234
+EXPOSE 1234
+
+# tini reaps zombies and forwards SIGTERM properly so K8s rolling restarts
+# actually trigger the graceful shutdown handler in yjs-server.js.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "yjs-server.js"]

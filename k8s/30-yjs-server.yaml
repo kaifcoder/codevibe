@@ -1,0 +1,87 @@
+# Yjs / Hocuspocus WebSocket server — real-time collaborative editing.
+# In-memory persistence (see yjs-server.js docStore), so we deliberately
+# pin to a single replica — multi-replica would split the `Map<docName,
+# state>` across pods and cause sync drift. To scale horizontally, swap
+# the in-memory store for the official Hocuspocus Postgres extension
+# pointed at prisma-postgres.
+#
+# Image is built from Dockerfile.yjs at the repo root. Push it to your
+# registry and update the `image:` field below.
+apiVersion: v1
+kind: Service
+metadata:
+  name: yjs-server
+  namespace: codevibe
+  labels:
+    app.kubernetes.io/name: yjs-server
+    app.kubernetes.io/component: collaboration
+spec:
+  # ClusterIP because Next.js calls it server-side from inside the cluster.
+  # Browser clients reach it via an Ingress (see 50-ingress.example.yaml)
+  # since WebSocket connections need to be proxied with upgrade support.
+  type: ClusterIP
+  ports:
+    - name: ws
+      port: 1234
+      targetPort: 1234
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: yjs-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yjs-server
+  namespace: codevibe
+  labels:
+    app.kubernetes.io/name: yjs-server
+    app.kubernetes.io/component: collaboration
+spec:
+  replicas: 1
+  strategy:
+    # Recreate so we don't briefly run two pods serving the same room with
+    # divergent in-memory state during a rolling update. Brief downtime
+    # during deploy is acceptable for a collab WS server backed by client-
+    # side CRDTs — clients reconnect and re-sync their local state.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yjs-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yjs-server
+    spec:
+      containers:
+        - name: yjs-server
+          image: ghcr.io/YOUR_ORG/codevibe-yjs:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ws
+              containerPort: 1234
+          env:
+            - name: YJS_PORT
+              value: "1234"
+            - name: NODE_ENV
+              value: production
+          # Hocuspocus speaks plain WS — no /health endpoint, so probe TCP.
+          readinessProbe:
+            tcpSocket:
+              port: 1234
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 1234
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          # In-memory doc store grows with active rooms; restart on signal
+          # is fine because clients re-sync from their local Y.Doc.
+          terminationGracePeriodSeconds: 30

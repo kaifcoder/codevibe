@@ -1,0 +1,24 @@
+# Files Vercel doesn't need — Vercel only runs Next.js. The agent server,
+# Yjs server, and K8s manifests deploy separately.
+
+# Backend services that run elsewhere (AKS / Render / etc.)
+Dockerfile.agent
+Dockerfile.yjs
+docker-compose.yml
+yjs-server.js
+langgraph.json
+
+# Kubernetes manifests
+k8s/
+
+# E2B sandbox templates — built and pushed via the e2b CLI, not by Vercel
+sandbox-templates/
+
+# Prisma migrations — applied from a laptop / CI, not at deploy time.
+# Keep prisma/schema.prisma (Vercel runs `prisma generate` during build).
+prisma/migrations/
+
+# Local dev artifacts
+.langgraph_api/
+.playwright-mcp/
+.clerk/

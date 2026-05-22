@@ -1,0 +1,52 @@
+# Overlay for AKS / small-budget deployments. Apply ON TOP of the base
+# values file:
+#
+#   helm upgrade --install langgraph langchain/langgraph-cloud \
+#     --namespace codevibe \
+#     -f k8s/40-langgraph.values.yaml \
+#     -f k8s/41-langgraph.values.aks.yaml
+#
+# Why these specific cuts:
+# - apiServer + queue both at 1 replica: saves ~3 GiB requested vs default 2+2.
+# - Lower limits: a B2ms node (8 GiB) can't honor 4 GiB × 4 pods anyway.
+# - HPA off + PDB off: keeps the trial cluster from trying to scale to a
+#   second node, which would double the bill.
+# - resources tuned so all three (api + queue + redis) fit on one B2ms
+#   alongside yjs-server (256 Mi) with ~1 GiB headroom for kubelet.
+
+apiServer:
+  replicas: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "768Mi"
+    limits:
+      cpu: "1500m"
+      memory: "2Gi"
+
+queue:
+  replicas: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "768Mi"
+    limits:
+      cpu: "1500m"
+      memory: "2Gi"
+
+redis:
+  enabled: true
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "512Mi"
+
+podDisruptionBudget:
+  enabled: false
