@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { PrismaClient } from '@/generated/prisma';
+import { prisma } from "@/server/db";
 import { getSandbox } from '@/lib/sandbox-utils';
 
-const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
   try {

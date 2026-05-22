@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import { Sandbox } from '@e2b/code-interpreter';
-import { PrismaClient } from '@/generated/prisma';
+import { prisma } from "@/server/db";
 import { getSandbox } from '@/lib/sandbox-utils';
 
-const prisma = new PrismaClient();
 
 const REPO_PATH = '/home/user';
 

@@ -5,11 +5,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { auth } from '@clerk/nextjs/server';
 import { extract as tarExtract } from 'tar-stream';
-import { PrismaClient } from '@/generated/prisma';
+import { prisma } from "@/server/db";
 import { getSandbox } from '@/lib/sandbox-utils';
 import { readFromYjsRoom } from '@/lib/server-yjs-writer';
 
-const prisma = new PrismaClient();
 
 // Same exclusions as the download flow — node_modules / build output / locks
 // add bulk that Vercel rebuilds anyway.
