@@ -23,8 +23,56 @@ export default function HomePage() {
   const [particles, setParticles] = useState<Array<{ id: string; left: string; top: string; duration: number; delay: number }>>([])
   const { isSignedIn, isLoaded } = useAuth()
   const { openSignIn } = useClerk()
-  
+
   const router = useRouter()
+
+  // Persist the in-flight prompt across the Clerk sign-up flow. Email
+  // verification can redirect away and back, which wipes useState. We stash
+  // the prompt + a "pending sign-in" flag in sessionStorage when auth is
+  // triggered, and pick it up again once Clerk hydrates as signed in.
+  const PENDING_PROMPT_KEY = "codevibe.pendingPrompt"
+  const PENDING_FLAG_KEY = "codevibe.pendingSignIn"
+
+  const stashPendingPrompt = (text: string) => {
+    if (!text.trim()) return
+    try {
+      sessionStorage.setItem(PENDING_PROMPT_KEY, text)
+      sessionStorage.setItem(PENDING_FLAG_KEY, "1")
+    } catch {
+      // sessionStorage may be unavailable (private mode, quota) — degrade
+      // silently; the user just loses the prompt the way they did before.
+    }
+  }
+
+  // Restore (or auto-navigate with) any prompt that survived an auth round-trip.
+  useEffect(() => {
+    if (!isLoaded) return
+    let pending: string | null = null
+    let flag: string | null = null
+    try {
+      pending = sessionStorage.getItem(PENDING_PROMPT_KEY)
+      flag = sessionStorage.getItem(PENDING_FLAG_KEY)
+    } catch {
+      return
+    }
+
+    if (isSignedIn && flag && pending?.trim()) {
+      try {
+        sessionStorage.removeItem(PENDING_PROMPT_KEY)
+        sessionStorage.removeItem(PENDING_FLAG_KEY)
+      } catch {}
+      const chatId = crypto.randomUUID()
+      router.replace(`/chat/${chatId}?prompt=${encodeURIComponent(pending)}`)
+      return
+    }
+
+    // Still logged out (modal closed without auth, or returned mid-flow) —
+    // refill the textarea so the user doesn't have to retype.
+    if (!isSignedIn && pending && !prompt) {
+      setPrompt(pending)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, isSignedIn])
 
   useEffect(() => {
     // Generate particles only on client side to avoid hydration mismatch
@@ -89,6 +137,7 @@ export default function HomePage() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (!isSignedIn) {
+        stashPendingPrompt(prompt)
         openSignIn()
         return
       }
@@ -234,6 +283,7 @@ export default function HomePage() {
                   onSubmit={(e) => {
                     e.preventDefault()
                     if (!isSignedIn) {
+                      stashPendingPrompt(prompt)
                       openSignIn()
                       return
                     }
@@ -255,6 +305,7 @@ export default function HomePage() {
                       <Button
                         type="button"
                         size="icon"
+                        onClick={() => stashPendingPrompt(prompt)}
                         className="h-12 w-12 rounded-full shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 transition-all"
                       >
                         <ArrowRight className="w-5 h-5" />
