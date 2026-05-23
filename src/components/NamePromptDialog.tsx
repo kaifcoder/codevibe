@@ -7,10 +7,13 @@ import { Button } from "@/components/ui/button";
 import { useChat } from "@/contexts/chat-context";
 
 export function NamePromptDialog() {
-  const { displayName, setDisplayName, isClerkAuthed } = useChat();
+  const { displayName, setDisplayName, isClerkAuthed, shareToken, isAuthLoaded } = useChat();
   const [value, setValue] = useState("");
 
-  const open = !displayName && !isClerkAuthed;
+  // Only ever prompt on shared-session URLs. Owners (no token) keep their
+  // Clerk name. Wait for Clerk to hydrate so the dialog doesn't flash for
+  // an authenticated collaborator before isSignedIn resolves.
+  const open = !!shareToken && isAuthLoaded && !isClerkAuthed && !displayName;
 
   const submit = () => {
     const trimmed = value.trim();
