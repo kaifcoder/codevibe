@@ -9,7 +9,9 @@ An open-source AI-powered collaborative code editor that turns natural language 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://typescriptlang.org)
-[![Claude](https://img.shields.io/badge/Claude-Sonnet_4-orange?logo=anthropic)](https://anthropic.com)
+[![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-orange?logo=anthropic)](https://anthropic.com)
+
+**[Live Demo →](https://codevibe.mohdkaif.me)**
 
 </div>
 
@@ -19,15 +21,17 @@ An open-source AI-powered collaborative code editor that turns natural language 
 
 You type **"build me a personal finance tracker with charts and a dark theme."**
 
-Then you watch. The AI reasons through the architecture, writes each component one by one, installs packages, handles errors, and spins up a live preview — all streaming in real time across three synced panels. Other users can join your session and edit alongside you.
+Then you watch. The AI classifies your request (web app vs. workflow automation), asks for one-tap approval, then reasons through the architecture, writes each file one by one, installs packages, handles errors, and spins up a live preview — all streaming in real time. Other users can join your session and edit alongside you. When it's ready, push to GitHub or deploy to Vercel in one click.
 
 ## How It Works
 
 ```
-1. Describe  →  Type what you want in plain English
-2. Watch     →  AI builds it file-by-file with live preview
-3. Collaborate → Others join via shared link, edit together
-4. Iterate   →  Ask for changes, AI fixes/adds in real time
+1. Describe    → Type what you want in plain English
+2. Approve     → Confirm "Next.js app" or "n8n workflow" template
+3. Watch       → AI builds it file-by-file with live preview
+4. Collaborate → Others join via shared link, edit together
+5. Iterate     → Ask for changes, AI fixes/adds in real time
+6. Ship        → Push to GitHub or deploy to Vercel
 ```
 
 ## Architecture
@@ -76,7 +80,7 @@ sequenceDiagram
     participant U as User
     participant F as Frontend
     participant A as LangGraph Agent
-    participant C as Claude Sonnet 4
+    participant C as Claude Sonnet 4.5
     participant S as E2B Sandbox
     participant Y as Yjs Server
 
@@ -140,14 +144,19 @@ graph LR
 
 | Feature | Description |
 |---------|-------------|
-| **AI Code Generation** | Claude Sonnet 4 with extended thinking builds full Next.js apps from prompts |
+| **AI Code Generation** | Claude Sonnet 4.5 with extended thinking builds full Next.js apps from prompts |
+| **Dual Templates** | Pick between Next.js web apps or n8n workflow automations — agent classifies and asks for approval |
 | **Live Preview** | Sandboxed app running in E2B with hot reload as code is written |
 | **Real-Time Collab** | Yjs CRDTs + Hocuspocus — cursor presence, conflict-free merging |
 | **Streaming Editor** | Code appears character-by-character with auto-scroll |
+| **Background Runs** | LangGraph + Postgres checkpointer — close the tab, agent keeps working |
+| **GitHub Integration** | Push to a new or existing repo, or import an existing repo into a sandbox |
+| **One-Click Deploy** | Ship the running sandbox straight to Vercel |
+| **Download Project** | Export the full project as a zip at any time |
 | **Session Sharing** | One link to invite collaborators into your session |
 | **Tool Transparency** | Every file write, shell command, and decision visible in chat |
 | **Mobile Ready** | Tab-based interface (Chat / Code / Preview) for mobile |
-| **MCP Integration** | Playwright + Next.js Docs via Model Context Protocol |
+| **MCP Integration** | Playwright + n8n + Next.js Docs via Model Context Protocol |
 
 ## Tech Stack
 
@@ -168,7 +177,7 @@ graph LR
     end
 
     subgraph AI
-        K[LangGraph] --> L[Claude Sonnet 4]
+        K[LangGraph] --> L[Claude Sonnet 4.5]
         K --> M[MCP Tools]
         K --> N[E2B Sandbox]
     end
@@ -205,12 +214,21 @@ npx prisma migrate dev
 ### Environment Variables
 
 ```env
+# Required
 DATABASE_URL=postgresql://...
 E2B_API_KEY=...
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
 CLERK_SECRET_KEY=...
-NEXT_PUBLIC_WS_URL=ws://localhost:1234         # optional
-NEXT_PUBLIC_LANGGRAPH_URL=http://localhost:2024  # optional
+LLM_PROXY_URL=http://0.0.0.0:3030          # or your hosted proxy
+LLM_PROXY_API_KEY=...
+
+# Optional
+NEXT_PUBLIC_APP_URL=https://your-domain    # canonical site URL for SEO/share links
+NEXT_PUBLIC_WS_URL=ws://localhost:1234     # Yjs server
+NEXT_PUBLIC_LANGGRAPH_URL=http://localhost:2024
+N8N_PROXY_URL=http://localhost:1235        # only if using n8n template
+GITHUB_CLIENT_ID=...                       # only if enabling GitHub push/import
+GITHUB_CLIENT_SECRET=...
 ```
 
 ### Run (3 terminals)
@@ -238,25 +256,39 @@ src/
 │   ├── chat/[id]/page.tsx       # Main editor interface
 │   ├── api/sync-filesystem/     # E2B → Frontend file sync
 │   ├── api/write-to-sandbox/    # Editor → E2B write
-│   └── api/session/[token]/     # Session CRUD
+│   ├── api/session/[token]/     # Session CRUD
+│   ├── api/n8n-proxy/register/  # Multi-tenant n8n iframe routing
+│   ├── api/warmup/              # Server-side fan-out keep-alive
+│   ├── opengraph-image.tsx      # Programmatic OG image (edge runtime)
+│   ├── sitemap.ts / robots.ts   # SEO metadata
+│   └── layout.tsx               # Metadata, JSON-LD, theme provider
 ├── lib/
-│   ├── agent.ts                 # LangGraph agent definition
+│   ├── agent.ts                 # LangGraph agent (model + middleware)
 │   ├── e2b-tools.ts             # Sandbox tools (6 tools)
-│   ├── nextjs-agent-prompt.ts   # Agent system prompt
-│   ├── mcp-client.ts            # MCP tool integration
+│   ├── nextjs-agent-prompt.ts   # Next.js builder system prompt
+│   ├── n8n-agent-prompt.ts      # n8n workflow builder system prompt
+│   ├── dispatcher-agent-prompt.ts # Template-classification prompt
+│   ├── sandbox-registry.ts      # Thread-scoped sandbox + template state
+│   ├── mcp-client.ts            # MCP tool integration (Playwright, n8n, docs)
+│   ├── site-url.ts              # Canonical URL resolver (NEXT_PUBLIC_APP_URL → Vercel envs)
 │   └── collaboration/           # Yjs + Hocuspocus setup
+├── contexts/chat-context.tsx    # Per-session client state (replaces former Zustand store)
 ├── hooks/
 │   ├── use-agent-stream.ts      # useStream + custom event handling
 │   └── use-collaboration.ts     # Yjs session per file
-├── components/                  # React UI components
-├── stores/chat-store.ts         # Zustand state
+├── components/                  # React UI components (incl. NamePromptDialog, GithubButton, DeployButton)
 └── trpc/                        # tRPC routers and client
+
+# Top-level servers (run separately)
+yjs-server.js                    # Hocuspocus WebSocket server
+n8n-proxy.ts                     # Multi-tenant n8n reverse proxy
 ```
 
 ## Agent Toolbelt
 
 | Tool | What it does |
 |------|-------------|
+| `set_template` | Classify the request (Next.js vs. n8n) — gated behind one-tap user approval |
 | `e2b_write_file` | Create/overwrite files (streams progressively to editor) |
 | `e2b_read_file` | Read file contents from sandbox |
 | `e2b_run_command` | Execute shell commands (npm install, etc.) |
@@ -264,6 +296,7 @@ src/
 | `e2b_list_files_recursive` | Full project tree with filtering |
 | `e2b_delete_file` | Remove files/directories |
 | **Playwright MCP** | Browser automation and testing |
+| **n8n MCP** | Workflow node lookup, validation, and execution helpers |
 | **Next.js Docs MCP** | Official documentation lookup |
 
 ## Contributing
