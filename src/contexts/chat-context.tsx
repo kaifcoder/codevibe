@@ -37,6 +37,9 @@ interface ChatContextValue {
   displayName: string | null;
   setDisplayName: (name: string) => void;
   isClerkAuthed: boolean;
+  // False until Clerk has finished hydrating. Consumers should wait on this
+  // before branching on isClerkAuthed to avoid a flash of the unauthed UI.
+  isAuthLoaded: boolean;
 
   // Share-link credential for collaborators. Null for the owner. When set,
   // the client appends it to write endpoints so the server can re-authorize.
@@ -170,7 +173,7 @@ export function ChatProvider({
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
 
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn, isLoaded, user } = useUser();
   const searchParams = useSearchParams();
   const shareToken = searchParams?.get("token") ?? null;
   const clerkName = isSignedIn
@@ -221,6 +224,7 @@ export function ChatProvider({
     displayName,
     setDisplayName,
     isClerkAuthed: !!isSignedIn,
+    isAuthLoaded: !!isLoaded,
     shareToken,
     threadId,
     setThreadId,
