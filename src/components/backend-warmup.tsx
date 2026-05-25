@@ -15,6 +15,7 @@ const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
 let lastActivityAt = Date.now();
 
 async function pingWarmup() {
+  if (process.env.NODE_ENV === 'development') return;
   try {
     const res = await fetch('/api/warmup', { cache: 'no-store' });
     const data = await res.json();
