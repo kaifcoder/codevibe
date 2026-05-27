@@ -290,6 +290,194 @@ function ServerRow({ server, onDelete, onConnected }: { server: UserMcpServer; o
   );
 }
 
+function LoopbackConnectDialog({
+  open,
+  onOpenChange,
+  server,
+  onConnected,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  server: UserMcpServer;
+  onConnected: () => void;
+}) {
+  const [step, setStep] = useState<"idle" | "starting" | "awaiting" | "finishing">("idle");
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset state every time the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    setStep("idle");
+    setAuthUrl(null);
+    setCallbackUrl("");
+    setError(null);
+  }, [open]);
+
+  const start = async () => {
+    setStep("starting");
+    setError(null);
+    try {
+      const res = await fetch(`/api/mcp/servers/${server.id}/auth/start`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Failed to start auth");
+        setStep("idle");
+        return;
+      }
+      if (data.alreadyAuthorized) {
+        toast.success(`${server.name} is already connected`);
+        onConnected();
+        return;
+      }
+      setAuthUrl(data.authUrl);
+      window.open(data.authUrl, "_blank", "noopener,noreferrer");
+      setStep("awaiting");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start auth");
+      setStep("idle");
+    }
+  };
+
+  const submit = async (raw: string) => {
+    const url = raw.trim();
+    if (!url) {
+      setError("Paste the URL from your browser first.");
+      return;
+    }
+    setStep("finishing");
+    setError(null);
+    try {
+      const res = await fetch(`/api/mcp/servers/${server.id}/auth/finish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callbackUrl: url }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Failed to finish auth");
+        setStep("awaiting");
+        return;
+      }
+      toast.success(`${server.name} connected`);
+      onConnected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to finish auth");
+      setStep("awaiting");
+    }
+  };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) {
+        setError("Clipboard is empty.");
+        return;
+      }
+      setCallbackUrl(text);
+      // Auto-submit if it looks like the loopback callback.
+      if (/^https?:\/\/127\.0\.0\.1:/.test(text) && text.includes("code=")) {
+        submit(text);
+      } else {
+        setError("That doesn't look like the loopback callback URL — submit manually if you're sure.");
+      }
+    } catch {
+      setError("Browser blocked clipboard access. Paste manually.");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (step !== "starting" && step !== "finishing") onOpenChange(o); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Connect {server.name}</DialogTitle>
+          <DialogDescription>
+            This server uses a loopback OAuth flow. Sign in in a new tab, then bring the URL back here.
+          </DialogDescription>
+        </DialogHeader>
+
+        {step === "idle" && (
+          <div className="space-y-4">
+            <p className="text-sm text-zinc-400">
+              We&apos;ll open <strong>{new URL(server.url).hostname}</strong> in a new tab. Sign in there.
+            </p>
+            {error && <p className="text-sm text-rose-400">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button onClick={start} className="gap-2">
+                <Link2 className="size-3.5" />
+                Open sign-in
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === "starting" && (
+          <div className="py-8 flex justify-center text-zinc-400">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        )}
+
+        {(step === "awaiting" || step === "finishing") && (
+          <div className="space-y-4">
+            <ol className="text-sm text-zinc-400 space-y-2 list-decimal list-inside">
+              <li>
+                The sign-in tab opened. If not,{" "}
+                {authUrl && (
+                  <a href={authUrl} target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">
+                    open it manually
+                  </a>
+                )}
+                .
+              </li>
+              <li>Sign in. Your browser will land on a &ldquo;can&rsquo;t reach this site&rdquo; page at <code className="text-xs bg-white/5 px-1 py-0.5 rounded">127.0.0.1:33418</code>. That&rsquo;s expected.</li>
+              <li>Copy the FULL URL from that tab&rsquo;s address bar (⌘L → ⌘C / Ctrl-L → Ctrl-C).</li>
+              <li>Click <strong>Paste from clipboard</strong> below.</li>
+            </ol>
+
+            <textarea
+              value={callbackUrl}
+              onChange={(e) => setCallbackUrl(e.target.value)}
+              placeholder="http://127.0.0.1:33418/callback?code=..."
+              className="w-full h-20 text-xs font-mono p-2 rounded bg-white/5 border border-white/10 text-zinc-200"
+              disabled={step === "finishing"}
+            />
+
+            {error && <p className="text-sm text-rose-400">{error}</p>}
+
+            <div className="flex justify-end gap-2 flex-wrap">
+              <Button
+                variant="ghost"
+                onClick={() => onOpenChange(false)}
+                disabled={step === "finishing"}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                onClick={pasteFromClipboard}
+                disabled={step === "finishing"}
+                className="gap-2"
+              >
+                Paste from clipboard
+              </Button>
+              <Button
+                onClick={() => submit(callbackUrl)}
+                disabled={step === "finishing" || !callbackUrl.trim()}
+                className="gap-2"
+              >
+                {step === "finishing" && <Loader2 className="size-3.5 animate-spin" />}
+                Submit
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function Tag({ children, tone }: { children: React.ReactNode; tone: "emerald" | "amber" }) {
   return (
     <span
