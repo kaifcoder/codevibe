@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, ReactNode, Suspense, useCallback, useContext, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SettingsModal } from "@/components/settings/SettingsModal";
 
@@ -17,11 +17,24 @@ interface SettingsContextValue {
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
+// Inner component that calls useSearchParams. Wrapped in <Suspense> below
+// because useSearchParams forces CSR bailout, which Next's static prerender
+// of /_not-found can't handle without a Suspense boundary.
+function SettingsAutoOpener({ onSection }: { onSection: (s: Section) => void }) {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const requested = searchParams?.get("settings");
+    if (requested === "apps" || requested === "general") {
+      onSection(requested);
+    }
+  }, [searchParams, onSection]);
+  return null;
+}
+
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [section, setSection] = useState<Section>("apps");
   const [changeTick, setChangeTick] = useState(0);
-  const searchParams = useSearchParams();
 
   const open = useCallback((s: Section = "apps") => {
     setSection(s);
@@ -33,18 +46,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setChangeTick((n) => n + 1);
   }, []);
 
-  // Auto-open on ?settings=apps (used by the OAuth callback redirect to land
-  // the user back inside the modal).
-  useEffect(() => {
-    const requested = searchParams.get("settings");
-    if (requested === "apps" || requested === "general") {
-      setSection(requested);
-      setIsOpen(true);
-    }
-  }, [searchParams]);
+  const handleAutoOpen = useCallback((s: Section) => {
+    setSection(s);
+    setIsOpen(true);
+  }, []);
 
   return (
     <SettingsContext.Provider value={{ open, close, changeTick }}>
+      <Suspense fallback={null}>
+        <SettingsAutoOpener onSection={handleAutoOpen} />
+      </Suspense>
       {children}
       <SettingsModal
         open={isOpen}
