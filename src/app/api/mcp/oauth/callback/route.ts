@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
   const provider = createDbOAuthProvider({
     serverId,
-    redirectUrl: oauthRedirectUrl(serverId),
+    redirectUrl: oauthRedirectUrl(serverId, row.url),
   });
 
   try {

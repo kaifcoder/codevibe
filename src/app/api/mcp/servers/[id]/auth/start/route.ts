@@ -6,24 +6,38 @@ import {
   consumePendingAuthorizationUrl,
   isServerAuthorized,
 } from '@/lib/mcp-oauth-provider';
-import { getUserServer, oauthRedirectUrl } from '@/lib/mcp-user-store';
+import {
+  getUserServer,
+  invalidateUserMcpToolsCache,
+  isLoopbackServer,
+  oauthRedirectUrl,
+} from '@/lib/mcp-user-store';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// Step 1 of the loopback OAuth flow. Frontend POSTs here, we run DCR + build
+// the authorize URL, return it as JSON. Frontend opens that URL in a new tab.
+// Used for OAuth servers (e.g. SAP Jira) whose IdP doesn't allowlist our
+// real redirect URI — we register loopback instead.
+export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { id } = await params;
 
+  const { id } = await params;
   const row = await getUserServer(userId, id);
   if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (row.authType !== 'oauth') {
-    return NextResponse.json({ error: 'Server is not configured for OAuth.' }, { status: 400 });
+    return NextResponse.json({ error: 'Server is not configured for OAuth' }, { status: 400 });
+  }
+  if (!isLoopbackServer(row.url)) {
+    return NextResponse.json(
+      { error: 'This server uses the standard redirect flow; use /auth instead.' },
+      { status: 400 },
+    );
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   if (await isServerAuthorized(id)) {
-    return NextResponse.redirect(new URL(`/?settings=apps&connected=${id}`, appUrl));
+    return NextResponse.json({ ok: true, alreadyAuthorized: true });
   }
 
   const provider = createDbOAuthProvider({
@@ -34,7 +48,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const result = await mcpAuth(provider, { serverUrl: row.url });
     if (result === 'AUTHORIZED') {
-      return NextResponse.redirect(new URL(`/?settings=apps&connected=${id}`, appUrl));
+      invalidateUserMcpToolsCache(userId);
+      return NextResponse.json({ ok: true, alreadyAuthorized: true });
     }
     const authUrl = consumePendingAuthorizationUrl(id);
     if (!authUrl) {
@@ -43,12 +58,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         { status: 500 },
       );
     }
-    return NextResponse.redirect(authUrl.toString());
+    return NextResponse.json({ ok: true, authUrl: authUrl.toString() });
   } catch (err) {
-    console.error(`[mcp-server ${id} /auth] failed:`, err);
+    console.error(`[mcp-server ${id} /auth/start] failed:`, err);
     const message = err instanceof Error ? err.message : 'OAuth start failed';
-    return NextResponse.redirect(
-      new URL(`/?settings=apps&connectError=${encodeURIComponent(message)}`, appUrl),
-    );
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

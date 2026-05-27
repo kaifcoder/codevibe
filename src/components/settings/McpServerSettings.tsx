@@ -123,7 +123,7 @@ export function McpServerSettings() {
       ) : (
         <ul className="divide-y divide-white/5 rounded-xl border border-white/5 overflow-hidden">
           {servers.map((server) => (
-            <ServerRow key={server.id} server={server} onDelete={() => setDeleteTarget(server)} />
+            <ServerRow key={server.id} server={server} onDelete={() => setDeleteTarget(server)} onConnected={refresh} />
           ))}
         </ul>
       )}
@@ -174,9 +174,10 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
-function ServerRow({ server, onDelete }: { server: UserMcpServer; onDelete: () => void }) {
+function ServerRow({ server, onDelete, onConnected }: { server: UserMcpServer; onDelete: () => void; onConnected: () => void }) {
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; toolCount?: number; error?: string } | null>(null);
+  const [loopbackOpen, setLoopbackOpen] = useState(false);
 
   const test = async () => {
     setTesting(true);
@@ -195,8 +196,17 @@ function ServerRow({ server, onDelete }: { server: UserMcpServer; onDelete: () =
     }
   };
 
+  // SAP Jira and any other server whose IdP doesn't allowlist our host uses
+  // a loopback OAuth flow (RFC 8252). The IdP redirects to a dead localhost
+  // URL; the user pastes it back here, server completes the exchange.
+  const isLoopback = server.url === "https://mcp.jira.tools.sap/mcp";
+
   const connect = () => {
-    window.location.href = `/api/mcp/servers/${server.id}/auth`;
+    if (isLoopback) {
+      setLoopbackOpen(true);
+    } else {
+      window.location.href = `/api/mcp/servers/${server.id}/auth`;
+    }
   };
 
   const isOAuth = server.authType === "oauth";
@@ -265,6 +275,17 @@ function ServerRow({ server, onDelete }: { server: UserMcpServer; onDelete: () =
           <Trash2 className="size-3.5" />
         </Button>
       </div>
+      {isLoopback && (
+        <LoopbackConnectDialog
+          open={loopbackOpen}
+          onOpenChange={setLoopbackOpen}
+          server={server}
+          onConnected={() => {
+            setLoopbackOpen(false);
+            onConnected();
+          }}
+        />
+      )}
     </li>
   );
 }
