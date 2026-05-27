@@ -125,6 +125,10 @@ export function createHttpOAuthProvider(opts: FactoryOptions): OAuthClientProvid
     redirectToAuthorization() {
       throw new Error('Agent-side provider cannot redirect; user must visit the auth URL via the UI.');
     },
+
+    state() {
+      return serverId;
+    },
   };
 }
 
