@@ -47,6 +47,10 @@ export function McpServerSettings() {
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UserMcpServer | null>(null);
+  // ?connectLoopback=<id> on the URL means "open the loopback paste dialog
+  // for this server automatically." Set by the agent's sap_jira_connect tool
+  // (which emits a /api/mcp/servers/<id>/auth URL → that route 302s here).
+  const [autoConnectId, setAutoConnectId] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -75,6 +79,7 @@ export function McpServerSettings() {
   useEffect(() => {
     const connected = searchParams.get("connected");
     const connectError = searchParams.get("connectError");
+    const connectLoopback = searchParams.get("connectLoopback");
     const settingsParam = searchParams.get("settings");
     if (connected) {
       toast.success("Server connected");
@@ -83,6 +88,11 @@ export function McpServerSettings() {
     } else if (connectError) {
       toast.error(`Connection failed: ${connectError}`);
       router.replace(settingsParam ? `/?settings=${settingsParam}` : "/");
+    } else if (connectLoopback) {
+      // The settings modal will already auto-open via SettingsProvider; we
+      // just need to flag which server's row should pop its loopback dialog.
+      setAutoConnectId(connectLoopback);
+      router.replace(settingsParam ? `/?settings=${settingsParam}` : "/?settings=apps");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -123,7 +133,14 @@ export function McpServerSettings() {
       ) : (
         <ul className="divide-y divide-white/5 rounded-xl border border-white/5 overflow-hidden">
           {servers.map((server) => (
-            <ServerRow key={server.id} server={server} onDelete={() => setDeleteTarget(server)} onConnected={refresh} />
+            <ServerRow
+              key={server.id}
+              server={server}
+              onDelete={() => setDeleteTarget(server)}
+              onConnected={refresh}
+              autoOpen={autoConnectId === server.id}
+              onAutoOpenHandled={() => setAutoConnectId(null)}
+            />
           ))}
         </ul>
       )}
@@ -174,10 +191,24 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
-function ServerRow({ server, onDelete, onConnected }: { server: UserMcpServer; onDelete: () => void; onConnected: () => void }) {
+function ServerRow({ server, onDelete, onConnected, autoOpen, onAutoOpenHandled }: { server: UserMcpServer; onDelete: () => void; onConnected: () => void; autoOpen?: boolean; onAutoOpenHandled?: () => void }) {
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; toolCount?: number; error?: string } | null>(null);
   const [loopbackOpen, setLoopbackOpen] = useState(false);
+
+  // SAP Jira and any other server whose IdP doesn't allowlist our host uses
+  // a loopback OAuth flow (RFC 8252). The IdP redirects to a dead localhost
+  // URL; the user pastes it back here, server completes the exchange.
+  const isLoopback = server.url === "https://mcp.jira.tools.sap/mcp";
+
+  // When the parent passes autoOpen (because of ?connectLoopback=<id>),
+  // pop the loopback dialog automatically. Only acts on loopback rows.
+  useEffect(() => {
+    if (autoOpen && isLoopback) {
+      setLoopbackOpen(true);
+      onAutoOpenHandled?.();
+    }
+  }, [autoOpen, isLoopback, onAutoOpenHandled]);
 
   const test = async () => {
     setTesting(true);
@@ -195,11 +226,6 @@ function ServerRow({ server, onDelete, onConnected }: { server: UserMcpServer; o
       setTesting(false);
     }
   };
-
-  // SAP Jira and any other server whose IdP doesn't allowlist our host uses
-  // a loopback OAuth flow (RFC 8252). The IdP redirects to a dead localhost
-  // URL; the user pastes it back here, server completes the exchange.
-  const isLoopback = server.url === "https://mcp.jira.tools.sap/mcp";
 
   const connect = () => {
     if (isLoopback) {
