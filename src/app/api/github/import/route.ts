@@ -124,6 +124,9 @@ export async function POST(request: NextRequest) {
     const cloneUrl = `https://x-access-token:${encodeURIComponent(token)}@github.com/${repo}.git`;
 
     const templateType = resolveTemplateType(session.templateType);
+    if (templateType === 'chat') {
+      return NextResponse.json({ error: 'Chat sessions have no sandbox to import into.' }, { status: 400 });
+    }
     const cfg = TEMPLATE_CONFIG[templateType];
 
     const sandbox = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });

@@ -4,6 +4,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
+import { useSettings } from "@/contexts/settings-context";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel, ChatMessage, ChatMessageStep } from "@/components/ChatPanel";
@@ -326,6 +328,29 @@ function ChatPage() {
   }, [stream.messages, stream.toolCalls, stream.isLoading, sessionId]);
 
   // --- Send message via useStream ---
+  const { user } = useUser();
+  const userId = user?.id;
+  const { changeTick: settingsChangeTick } = useSettings();
+
+  // Fetch the user's MCP server list. Re-fetched whenever the settings modal
+  // closes (via settingsChangeTick) so adding a new server in Settings → Apps
+  // takes effect on the next agent message without a page refresh.
+  const [userMcpServers, setUserMcpServers] = useState<
+    Array<{ id: string; name: string; url: string; authType: string }>
+  >([]);
+  useEffect(() => {
+    if (!userId) {
+      setUserMcpServers([]);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/mcp/servers/for-agent")
+      .then((r) => (r.ok ? r.json() : { servers: [] }))
+      .then((d) => { if (!cancelled) setUserMcpServers(d.servers ?? []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId, sessionId, settingsChangeTick]);
+
   const handleSend = useCallback(() => {
     const text = message.trim();
     if (!text) return;
@@ -343,6 +368,8 @@ function ChatPage() {
         config: {
           configurable: {
             sessionId,
+            userId,
+            userMcpServers,
             templateType: ctx.templateType,
             templateDecided: ctx.templateDecided,
             // Forward the sandboxId we currently consider canonical (e.g.
@@ -353,7 +380,7 @@ function ChatPage() {
         },
       } as Record<string, unknown>,
     );
-  }, [message, stream, sessionId, ctx.templateType, ctx.templateDecided, ctx.sandboxId]);
+  }, [message, stream, sessionId, userId, userMcpServers, ctx.templateType, ctx.templateDecided, ctx.sandboxId]);
 
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
@@ -365,6 +392,8 @@ function ChatPage() {
         config: {
           configurable: {
             sessionId,
+            userId,
+            userMcpServers,
             templateType: ctx.templateType,
             templateDecided: ctx.templateDecided,
             sandboxId: ctx.sandboxId,
@@ -373,7 +402,7 @@ function ChatPage() {
         command: { resume: { decisions: [decision] } },
       } as Record<string, unknown>);
     },
-    [stream, sessionId, ctx.templateType, ctx.templateDecided, ctx.sandboxId],
+    [stream, sessionId, userId, userMcpServers, ctx.templateType, ctx.templateDecided, ctx.sandboxId],
   );
 
   const interruptValue = stream.interrupt?.value as

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import { useAuth, useUser, useClerk } from "@clerk/nextjs"
 import { useTheme } from "next-themes"
+import { useSettings } from "@/contexts/settings-context"
 
 import {
   Sidebar,
@@ -57,6 +58,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const router = useRouter()
   const pathname = usePathname()
   const { isSignedIn, isLoaded } = useAuth()
+  const { open: openSettings } = useSettings()
   const { user } = useUser()
   const { openUserProfile, signOut } = useClerk()
   const { setTheme } = useTheme()
@@ -358,6 +360,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="end" className="ml-3 w-56">
+                <DropdownMenuItem onSelect={() => openSettings("apps")}>
+                  <SettingsIcon className="h-4 w-4 mr-2" />
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>
                     <Palette className="h-4 w-4 mr-2" />

@@ -25,6 +25,10 @@ services:
       LANGSERVE_GRAPHS: '{"agent": "./src/lib/agent.ts:agent"}'
       DOCKER_CONTAINER: "true"
       YJS_WS_URL: "ws://host.docker.internal:1234"
+      # Where the Next.js app lives, so the agent can call its internal MCP
+      # credential routes. Must match what `INTERNAL_AGENT_SECRET` is set in.
+      APP_URL: "${APP_URL:-http://host.docker.internal:3000}"
+      INTERNAL_AGENT_SECRET: "${INTERNAL_AGENT_SECRET}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:

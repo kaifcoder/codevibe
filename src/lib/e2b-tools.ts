@@ -28,6 +28,9 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
       const adoptedTemplate = resolveTemplateType(
         entry?.templateType ?? config.configurable?.templateType,
       );
+      if (adoptedTemplate === 'chat') {
+        throw new Error('Sandbox tools cannot be used in chat mode.');
+      }
       const cfg = TEMPLATE_CONFIG[adoptedTemplate];
       const host = sbx.getHost(cfg.port);
       const sandboxUrl = `https://${host}`;
@@ -57,6 +60,9 @@ async function resolveSandbox(config: LangGraphRunnableConfig) {
   const templateType = resolveTemplateType(
     entry?.templateType ?? config.configurable?.templateType,
   );
+  if (templateType === 'chat') {
+    throw new Error('Sandbox tools cannot be used in chat mode.');
+  }
   const cfg = TEMPLATE_CONFIG[templateType];
   const sbx = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });
   const host = sbx.getHost(cfg.port);

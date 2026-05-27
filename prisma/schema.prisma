@@ -31,3 +31,26 @@ model Session {
   @@index([userId])
   @@index([threadId])
 }
+
+model McpServerConfig {
+  id                   String   @id @default(cuid())
+  userId               String
+  name                 String
+  url                  String
+  authType             String   // 'bearer' | 'none' | 'oauth'
+  encryptedBearerToken String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  oauthCredential      McpOAuthCredential?
+
+  @@index([userId])
+}
+
+model McpOAuthCredential {
+  serverId            String  @id
+  encryptedClientInfo String?
+  encryptedTokens     String?
+  codeVerifier        String?
+  updatedAt           DateTime @updatedAt
+  server              McpServerConfig @relation(fields: [serverId], references: [id], onDelete: Cascade)
+}

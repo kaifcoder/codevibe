@@ -23,9 +23,10 @@ interface TemplateApprovalCardProps {
   disabled?: boolean;
 }
 
-const TEMPLATE_LABEL: Record<TemplateType, { name: string; tagline: string; emoji: string }> = {
-  nextjs: { name: "Next.js Web App", tagline: "UI, dashboard, landing page, internal tool", emoji: "🌐" },
-  n8n: { name: "n8n Workflow", tagline: "Automation, schedules, webhooks, integrations", emoji: "🔗" },
+const TEMPLATE_LABEL: Record<TemplateType, { name: string; tagline: string; emoji: string; verb: string }> = {
+  nextjs: { name: "Next.js Web App", tagline: "UI, dashboard, landing page, internal tool", emoji: "🌐", verb: "build" },
+  n8n: { name: "n8n Workflow", tagline: "Automation, schedules, webhooks, integrations", emoji: "🔗", verb: "build" },
+  chat: { name: "Chat / Q&A", tagline: "Lookup & advice — no sandbox, no code generated", emoji: "💬", verb: "answer" },
 };
 
 export function TemplateApprovalCard({ request, onApprove, onEdit, disabled }: TemplateApprovalCardProps) {
@@ -43,12 +44,11 @@ export function TemplateApprovalCard({ request, onApprove, onEdit, disabled }: T
     try {
       fn();
     } finally {
-      // The parent unmounts this card on resume; clearing here is just a fallback.
       setTimeout(() => setBusy(false), 1500);
     }
   };
 
-  const other: TemplateType = proposed === "nextjs" ? "n8n" : "nextjs";
+  const others: TemplateType[] = (["nextjs", "n8n", "chat"] as TemplateType[]).filter((t) => t !== proposed);
 
   return (
     <Card className="p-4 border-amber-300/50 bg-amber-50/50 dark:bg-amber-900/10 dark:border-amber-700/50">
@@ -57,7 +57,7 @@ export function TemplateApprovalCard({ request, onApprove, onEdit, disabled }: T
         <div className="flex-1 min-w-0 space-y-2">
           <div>
             <div className="text-sm font-medium">
-              I&apos;ll build this as a {TEMPLATE_LABEL[proposed].name}
+              I&apos;ll {TEMPLATE_LABEL[proposed].verb} this as a {TEMPLATE_LABEL[proposed].name}
             </div>
             <div className="text-xs text-muted-foreground">
               {TEMPLATE_LABEL[proposed].tagline}
@@ -75,14 +75,17 @@ export function TemplateApprovalCard({ request, onApprove, onEdit, disabled }: T
             <Button size="sm" onClick={wrap(onApprove)} disabled={busy || disabled}>
               Approve
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={wrap(() => onEdit(other))}
-              disabled={busy || disabled}
-            >
-              Switch to {TEMPLATE_LABEL[other].name}
-            </Button>
+            {others.map((t) => (
+              <Button
+                key={t}
+                size="sm"
+                variant="outline"
+                onClick={wrap(() => onEdit(t))}
+                disabled={busy || disabled}
+              >
+                Switch to {TEMPLATE_LABEL[t].name}
+              </Button>
+            ))}
           </div>
         </div>
       </div>

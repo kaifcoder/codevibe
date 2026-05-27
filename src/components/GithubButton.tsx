@@ -38,7 +38,7 @@ interface ImportResponse {
   sandboxUrl: string;
   repo: string;
   branch: string;
-  templateType: "nextjs" | "n8n";
+  templateType: "nextjs" | "n8n" | "chat";
   devReady: "ready" | "timeout" | "fail";
   error?: string;
 }
