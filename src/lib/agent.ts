@@ -141,6 +141,27 @@ const createSandboxTool = tool(
 
 const SAP_JIRA_URL = 'https://mcp.jira.tools.sap/mcp';
 
+async function isSapJiraConnected(serverId: string, userId: string): Promise<boolean> {
+  const appUrl =
+    process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://host.docker.internal:3000';
+  const internalSecret = process.env.INTERNAL_AGENT_SECRET;
+  if (!internalSecret) return false;
+  try {
+    const res = await fetch(
+      `${appUrl}/api/mcp/internal/servers/${serverId}/credentials?userId=${encodeURIComponent(userId)}`,
+      {
+        headers: { Authorization: `Bearer ${internalSecret}` },
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    return Boolean(data?.oauth?.tokens?.access_token);
+  } catch {
+    return false;
+  }
+}
+
 const sapJiraConnectTool = tool(
   async (_input: Record<string, never>, config: LangGraphRunnableConfig) => {
     const userId = config.configurable?.userId as string | undefined;
@@ -151,6 +172,11 @@ const sapJiraConnectTool = tool(
     const sapJira = userServers.find((s) => s.url === SAP_JIRA_URL);
     if (!sapJira) {
       return 'SAP Jira is not provisioned for this user yet. Ask the user to open Settings → Apps once so it can be seeded.';
+    }
+    // Tokens may have arrived since this agent run started (e.g. user just
+    // completed loopback connect). Check Next.js, not our own cache.
+    if (await isSapJiraConnected(sapJira.id, userId)) {
+      return 'SAP Jira IS connected. Tools are loading on the next message — tell the user to retry their request.';
     }
     const authUrl = `/api/mcp/servers/${sapJira.id}/auth`;
     config.writer?.({ type: 'requiresMcpAuth', server: 'sap-jira', authUrl });

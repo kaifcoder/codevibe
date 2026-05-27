@@ -45,7 +45,6 @@ export function createHttpOAuthProvider(opts: FactoryOptions): OAuthClientProvid
 
   async function loadCache() {
     if (cacheLoaded) return;
-    cacheLoaded = true;
     try {
       const res = await fetch(`${credentialsUrl}?userId=${encodeURIComponent(userId)}`, {
         headers,
@@ -58,6 +57,11 @@ export function createHttpOAuthProvider(opts: FactoryOptions): OAuthClientProvid
       const data = await res.json();
       cachedClientInfo = data?.oauth?.clientInfo ?? undefined;
       cachedTokens = data?.oauth?.tokens ?? undefined;
+      // Only mark the cache populated if we actually got tokens. Otherwise
+      // a connect that happens later (e.g. via the loopback flow) wouldn't
+      // be picked up until the agent's MultiServerMCPClient cache (5min)
+      // expires. Re-fetching is cheap (~10ms loopback to Next.js).
+      if (cachedTokens) cacheLoaded = true;
     } catch (err) {
       console.error(`[http-oauth ${serverId}] read error:`, err);
     }
