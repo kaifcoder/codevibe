@@ -121,6 +121,14 @@ export async function buildUserMcpToolsFromConfigs(
     return t;
   });
 
-  cache.set(signature, { client, signature, expiresAt: now + CACHE_TTL_MS });
+  // Don't cache an empty result. If the user just connected an OAuth server
+  // mid-conversation, a cached "no tools" client would block them for 5min.
+  // Rebuilding next turn re-fetches credentials from Next.js and picks up
+  // newly-stored tokens.
+  if (prefixed.length > 0) {
+    cache.set(signature, { client, signature, expiresAt: now + CACHE_TTL_MS });
+  } else {
+    client.close().catch(() => {});
+  }
   return prefixed;
 }
