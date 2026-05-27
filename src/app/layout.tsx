@@ -13,6 +13,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SiteHeader } from "@/components/site-header";
 import { BackendWarmup } from "@/components/backend-warmup";
+import { SettingsProvider } from "@/contexts/settings-context";
 import { getSiteUrl } from "@/lib/site-url";
 
 const geistSans = Geist({
@@ -134,17 +135,19 @@ export default function RootLayout({
                 }
                 className="h-screen"
               >
-                <SignedIn>
-                  <AppSidebar variant="inset" />
-                </SignedIn>
-                <SidebarInset className="flex flex-col overflow-hidden">
-                    <SiteHeader />
-                  <div className="flex-1 overflow-hidden">
-                    <Toaster />
-                    <BackendWarmup />
-                    {children}
-                  </div>
-                </SidebarInset>
+                <SettingsProvider>
+                  <SignedIn>
+                    <AppSidebar variant="inset" />
+                  </SignedIn>
+                  <SidebarInset className="flex flex-col overflow-hidden">
+                      <SiteHeader />
+                    <div className="flex-1 overflow-hidden">
+                      <Toaster />
+                      <BackendWarmup />
+                      {children}
+                    </div>
+                  </SidebarInset>
+                </SettingsProvider>
               </SidebarProvider>
             </ThemeProvider>
           </body>

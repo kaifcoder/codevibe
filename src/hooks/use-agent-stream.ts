@@ -2,6 +2,7 @@
 
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useChat } from "@/contexts/chat-context";
 import type { FileNode } from "@/contexts/chat-context";
 import { useSessionBroadcast } from "@/hooks/use-session-broadcast";
@@ -48,7 +49,7 @@ interface ToolResultEvent {
 
 interface TemplateDecidedEvent {
   type: "templateDecided";
-  templateType: "nextjs" | "n8n";
+  templateType: "nextjs" | "n8n" | "chat";
   reasoning?: string;
 }
 
@@ -56,6 +57,12 @@ interface WorkflowReadyEvent {
   type: "workflowReady";
   workflowId: string;
   workflowName?: string;
+}
+
+interface RequiresMcpAuthEvent {
+  type: "requiresMcpAuth";
+  server: string;
+  authUrl: string;
 }
 
 type CustomEvent =
@@ -66,7 +73,8 @@ type CustomEvent =
   | ToolProgressEvent
   | ToolResultEvent
   | TemplateDecidedEvent
-  | WorkflowReadyEvent;
+  | WorkflowReadyEvent
+  | RequiresMcpAuthEvent;
 
 function findFileInTree(nodes: FileNode[], path: string): boolean {
   for (const node of nodes) {
@@ -254,6 +262,23 @@ export function useAgentStream() {
         c.setN8nWorkflowId(event.workflowId);
         c.setActiveTab("live preview");
         c.setIframeLoading(true);
+        break;
+      }
+
+      case "requiresMcpAuth": {
+        const label =
+          event.server === "loopback-mcp" ? "Connect Jira" : `Connect ${event.server}`;
+        toast.message(`${event.server === "loopback-mcp" ? "loopback server" : event.server} authorization required`, {
+          description: "Sign in once to let the agent access your data.",
+          duration: Infinity,
+          id: `mcp-auth-${event.server}`,
+          action: {
+            label,
+            onClick: () => {
+              window.open(event.authUrl, "_blank", "noopener,noreferrer");
+            },
+          },
+        });
         break;
       }
     }

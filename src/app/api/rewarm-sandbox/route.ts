@@ -223,6 +223,9 @@ export async function POST(request: NextRequest) {
     }
 
     const templateType = resolveTemplateType(session.templateType);
+    if (templateType === 'chat') {
+      return NextResponse.json({ error: 'Chat mode has no sandbox to rewarm.' }, { status: 400 });
+    }
     const cfg = TEMPLATE_CONFIG[templateType];
 
     // Provision a fresh sandbox of the same template the session was using.

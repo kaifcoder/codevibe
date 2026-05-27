@@ -24,7 +24,7 @@ export type FileNode = {
 export type ConnectionStatus = "connected" | "connecting" | "disconnected";
 export type ConnectedUser = { id: string; name: string; color: string };
 export type MobilePanel = "chat" | "preview" | "code";
-export type TemplateType = "nextjs" | "n8n";
+export type TemplateType = "nextjs" | "n8n" | "chat";
 
 const DISPLAY_NAME_STORAGE_KEY = "codevibe.guestDisplayName";
 

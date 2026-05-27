@@ -1,16 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export type TemplateType = 'nextjs' | 'n8n';
+export type TemplateType = 'nextjs' | 'n8n' | 'chat';
 
 // E2B template alias + the port the dev/admin server listens on. Keep in sync
-// with `sandbox-templates/*/build.ts`.
-export const TEMPLATE_CONFIG: Record<TemplateType, { alias: string; port: number }> = {
+// with `sandbox-templates/*/build.ts`. `chat` has no sandbox — it's a pure
+// Q&A / MCP-tool-only mode.
+export const TEMPLATE_CONFIG: Record<Exclude<TemplateType, 'chat'>, { alias: string; port: number }> = {
   nextjs: { alias: 'codevibe-test', port: 3000 },
   n8n: { alias: 'n8n-codevibe', port: 5678 },
 };
 
 export function isTemplateType(v: unknown): v is TemplateType {
-  return v === 'nextjs' || v === 'n8n';
+  return v === 'nextjs' || v === 'n8n' || v === 'chat';
 }
 
 export function resolveTemplateType(v: unknown): TemplateType {

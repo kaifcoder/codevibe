@@ -11,7 +11,7 @@ interface RewarmResponse {
   ok: boolean;
   sandboxId: string;
   sandboxUrl: string;
-  templateType: "nextjs" | "n8n";
+  templateType: "nextjs" | "n8n" | "chat";
   seeded?: { totalFiles: number; written: number; skipped: number };
   devReady?: "ready" | "timeout" | "fail" | "skipped";
   error?: string;
