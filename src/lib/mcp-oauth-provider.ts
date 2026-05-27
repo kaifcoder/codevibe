@@ -110,6 +110,13 @@ export function createDbOAuthProvider(opts: FactoryOptions): OAuthClientProvider
       pendingAuthorizationUrls.set(serverId, url);
     },
 
+    state() {
+      // Embed serverId so the single shared /api/mcp/oauth/callback route
+      // can route the code back to the right server. SDK appends this as
+      // ?state=... to the authorize URL and round-trips it via the IdP.
+      return serverId;
+    },
+
     async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery') {
       const update: { encryptedTokens?: null; encryptedClientInfo?: null; codeVerifier?: null } = {};
       if (scope === 'all' || scope === 'tokens') update.encryptedTokens = null;

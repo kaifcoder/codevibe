@@ -35,8 +35,11 @@ function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 }
 
-export function oauthRedirectUrl(serverId: string): string {
-  return `${appUrl()}/api/mcp/servers/${serverId}/callback`;
+export function oauthRedirectUrl(_serverId: string): string {
+  // Single shared callback path so we only need to allowlist ONE redirect URI
+  // per environment in upstream OAuth servers (upstream IdP rejects unregistered
+  // hosts/paths). The serverId travels in the OAuth `state` param instead.
+  return `${appUrl()}/api/mcp/oauth/callback`;
 }
 
 function toPublic(row: {
