@@ -6,7 +6,7 @@ import {
   consumePendingAuthorizationUrl,
   isServerAuthorized,
 } from '@/lib/mcp-oauth-provider';
-import { getUserServer, oauthRedirectUrl } from '@/lib/mcp-user-store';
+import { getUserServer, isLoopbackServer, oauthRedirectUrl } from '@/lib/mcp-user-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +22,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
+
+  // Loopback servers (e.g. loopback server) can't use the standard browser-redirect
+  // flow because the IdP doesn't allowlist our host. Send the user to the
+  // settings modal which will open the paste-style connect dialog.
+  if (isLoopbackServer(row.url)) {
+    return NextResponse.redirect(new URL(`/?settings=apps&connectLoopback=${id}`, appUrl));
+  }
+
   if (await isServerAuthorized(id)) {
     return NextResponse.redirect(new URL(`/?settings=apps&connected=${id}`, appUrl));
   }
