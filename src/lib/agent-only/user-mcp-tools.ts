@@ -121,11 +121,12 @@ export async function buildUserMcpToolsFromConfigs(
     return t;
   });
 
-  // Don't cache an empty result. If the user just connected an OAuth server
-  // mid-conversation, a cached "no tools" client would block them for 5min.
-  // Rebuilding next turn re-fetches credentials from Next.js and picks up
-  // newly-stored tokens.
-  if (prefixed.length > 0) {
+  // Only cache the client when it's safe to. OAuth servers' auth state can
+  // change between turns (user just connected via loopback flow); a cached
+  // pre-connect client would mask the new tokens until TTL expires. So if
+  // any config is OAuth, skip the cache entirely.
+  const hasOAuth = configs.some((c) => c.authType === 'oauth');
+  if (prefixed.length > 0 && !hasOAuth) {
     cache.set(signature, { client, signature, expiresAt: now + CACHE_TTL_MS });
   } else {
     client.close().catch(() => {});

@@ -51,7 +51,11 @@ export function createHttpOAuthProvider(opts: FactoryOptions): OAuthClientProvid
         cache: 'no-store',
       });
       if (!res.ok) {
-        console.error(`[http-oauth ${serverId}] read failed: ${res.status}`);
+        // Pull the body so we know WHY (auth misconfig, prisma error, etc).
+        const body = await res.text().catch(() => '<no body>');
+        console.error(
+          `[http-oauth ${serverId}] read failed: ${res.status} body=${body.slice(0, 300)}`,
+        );
         return;
       }
       const data = await res.json();
