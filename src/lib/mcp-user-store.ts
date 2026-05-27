@@ -35,7 +35,24 @@ function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 }
 
-export function oauthRedirectUrl(_serverId: string): string {
+// Servers whose IdP only accepts loopback redirect URIs (RFC 8252) because
+// the BTP / prod host isn't on their allowlist. For these we skip the normal
+// callback route and have the user paste the loopback URL back into the UI
+// after IAS dumps them on a dead localhost page.
+const LOOPBACK_PORT = 33418;
+export const LOOPBACK_REDIRECT_URI = `http://127.0.0.1:${LOOPBACK_PORT}/callback`;
+const LOOPBACK_HOST_URLS = new Set<string>([
+  '',
+]);
+
+export function isLoopbackServer(url: string): boolean {
+  return LOOPBACK_HOST_URLS.has(url);
+}
+
+export function oauthRedirectUrl(_serverId: string, serverUrl?: string): string {
+  if (serverUrl && isLoopbackServer(serverUrl)) {
+    return LOOPBACK_REDIRECT_URI;
+  }
   // Single shared callback path so we only need to allowlist ONE redirect URI
   // per environment in upstream OAuth servers (upstream IdP rejects unregistered
   // hosts/paths). The serverId travels in the OAuth `state` param instead.
@@ -186,7 +203,7 @@ export async function probeMcpServer(
       ? new StreamableHTTPClientTransport(new URL(url), {
           authProvider: createDbOAuthProvider({
             serverId,
-            redirectUrl: oauthRedirectUrl(serverId),
+            redirectUrl: oauthRedirectUrl(serverId, url),
           }),
         })
       : new StreamableHTTPClientTransport(new URL(url), {
@@ -279,7 +296,7 @@ export async function getUserMcpTools(userId: string) {
         row.authType === 'oauth'
           ? createDbOAuthProvider({
               serverId: row.id,
-              redirectUrl: oauthRedirectUrl(row.id),
+              redirectUrl: oauthRedirectUrl(row.id, row.url),
             })
           : undefined,
       automaticSSEFallback: false,
