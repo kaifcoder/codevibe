@@ -48,8 +48,8 @@ export function McpServerSettings() {
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UserMcpServer | null>(null);
   // ?connectLoopback=<id> on the URL means "open the loopback paste dialog
-  // for this server automatically." Set by the agent's loopback_mcp_connect tool
-  // (which emits a /api/mcp/servers/<id>/auth URL → that route 302s here).
+  // for this server automatically." The /api/mcp/servers/<id>/auth route
+  // 302s here when a server uses the loopback OAuth flow.
   const [autoConnectId, setAutoConnectId] = useState<string | null>(null);
 
   const refresh = async () => {

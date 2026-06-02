@@ -137,58 +137,6 @@ const createSandboxTool = tool(
   }
 );
 
-// ─── loopback server Connect Tool (OAuth bootstrap) ───────────────────────────────
-
-const LOOPBACK_MCP_URL = '';
-
-async function isLoopbackServerConnected(serverId: string, userId: string): Promise<boolean> {
-  const appUrl =
-    process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://host.docker.internal:3000';
-  const internalSecret = process.env.INTERNAL_AGENT_SECRET;
-  if (!internalSecret) return false;
-  try {
-    const res = await fetch(
-      `${appUrl}/api/mcp/internal/servers/${serverId}/credentials?userId=${encodeURIComponent(userId)}`,
-      {
-        headers: { Authorization: `Bearer ${internalSecret}` },
-        cache: 'no-store',
-      },
-    );
-    if (!res.ok) return false;
-    const data = await res.json();
-    return Boolean(data?.oauth?.tokens?.access_token);
-  } catch {
-    return false;
-  }
-}
-
-const loopbackConnectTool = tool(
-  async (_input: Record<string, never>, config: LangGraphRunnableConfig) => {
-    const userId = config.configurable?.userId as string | undefined;
-    if (!userId) {
-      return 'Cannot start loopback server connection: user is not signed in.';
-    }
-    const userServers = (config.configurable?.userMcpServers ?? []) as UserMcpServerConfig[];
-    const loopbackServer = userServers.find((s) => s.url === LOOPBACK_MCP_URL);
-    if (!loopbackServer) {
-      return 'loopback server is not provisioned for this user yet. Ask the user to open Settings → Apps once so it can be seeded.';
-    }
-    // Tokens may have arrived since this agent run started (e.g. user just
-    // completed loopback connect). Check Next.js, not our own cache.
-    if (await isLoopbackServerConnected(loopbackServer.id, userId)) {
-      return 'loopback server IS connected. Tools are loading on the next message — tell the user to retry their request.';
-    }
-    const authUrl = `/api/mcp/servers/${loopbackServer.id}/auth`;
-    config.writer?.({ type: 'requiresMcpAuth', server: 'loopback-mcp', authUrl });
-    return 'loopback server is not connected yet. Tell the user to click the "Connect Jira" button shown in the chat to authorize, then ask them to retry their request.';
-  },
-  {
-    name: 'loopback_mcp_connect',
-    description: 'Initiate the loopback server OAuth flow when the user asks for Jira data but no loopback_mcp_* tools are available yet. Emits a UI prompt asking the user to authorize. Call once, then stop and wait for the user to retry.',
-    schema: z.object({}).describe('No arguments.'),
-  },
-);
-
 // ─── Dynamic System Prompt ──────────────────────────────────────────────────
 
 // Inject the calling user's MCP tools at model-call time. Server configs
@@ -243,21 +191,13 @@ const userMcpToolsMiddleware = createMiddleware({
   },
 });
 
-const LOOPBACK_MCP_TOOL_HINT = `
-
-## loopback server Tools
-
-If the user asks about Jira issues / Jira tickets / sprints / boards and you do NOT see any tool names containing \`jira\` (e.g. \`Jira__jira_*\`) in your toolset, the user has not connected loopback server yet. Call \`loopback_mcp_connect\` once, then stop and wait — a "Connect Jira" button will appear in the UI for them to authorize. Do not retry until they confirm they've connected.`;
-
 function buildPrompt(templateType: TemplateType, sbxId?: string, sandboxUrl?: string): string {
   if (templateType === 'chat') {
-    // chat-agent-prompt already includes the loopback server hint, so no append.
     return createChatPrompt();
   }
-  const base = templateType === 'n8n'
+  return templateType === 'n8n'
     ? createN8nPrompt(sbxId, sandboxUrl)
     : createNextjsPrompt(sbxId, sandboxUrl);
-  return base + LOOPBACK_MCP_TOOL_HINT;
 }
 
 const sandboxAwarePrompt = dynamicSystemPromptMiddleware(
@@ -320,7 +260,7 @@ const n8nMcpToolsMiddleware = createMiddleware({
 
 export const agent = createAgent({
   model,
-  tools: [setTemplateTool, createSandboxTool, loopbackConnectTool, ...e2bTools],
+  tools: [setTemplateTool, createSandboxTool, ...e2bTools],
   middleware: [
     sandboxAwarePrompt,
     n8nMcpToolsMiddleware,

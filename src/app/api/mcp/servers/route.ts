@@ -6,7 +6,6 @@ import {
   validateInput,
   probeMcpServer,
   invalidateUserMcpToolsCache,
-  ensureLoopbackServerSeeded,
   type AuthType,
 } from '@/lib/mcp-user-store';
 
@@ -16,7 +15,6 @@ export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   try {
-    await ensureLoopbackServerSeeded(userId);
     const servers = await listUserServers(userId);
     return NextResponse.json({ servers });
   } catch (err) {

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { prisma } from '@/server/db';
-import { ensureLoopbackServerSeeded } from '@/lib/mcp-user-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +12,6 @@ export async function GET() {
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    await ensureLoopbackServerSeeded(userId);
     const rows = await prisma.mcpServerConfig.findMany({
       where: { userId },
       orderBy: { createdAt: 'asc' },

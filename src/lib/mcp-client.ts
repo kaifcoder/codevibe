@@ -8,9 +8,9 @@ const cleanEnv = (extra: Record<string, string> = {}): Record<string, string> =>
   return { ...out, ...extra };
 };
 
-// System-managed MCP servers shared by all users. User-added servers (incl.
-// loopback server) live per-user in McpServerConfig and are loaded by
-// getUserMcpTools() — see mcp-user-store.ts.
+// System-managed MCP servers shared by all users. User-added servers live
+// per-user in McpServerConfig and are loaded by getUserMcpTools() — see
+// mcp-user-store.ts.
 const client = new MultiServerMCPClient({
   throwOnLoadError: false,
   prefixToolNameWithServerName: false,
