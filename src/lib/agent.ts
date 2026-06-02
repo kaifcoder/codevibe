@@ -285,15 +285,45 @@ const sandboxAwarePrompt = dynamicSystemPromptMiddleware(
 
 // ─── Default exported agent (for langgraph.json) ────────────────────────────
 
-// Load n8n-mcp tools at module init. Failure returns []; the n8n flow degrades
-// to plain curl-via-shell rather than crashing the whole agent server.
-const n8nMcpTools = await createN8nMCPTools();
+// Lazy-load n8n-mcp tools on first use instead of at module init. The n8n-mcp
+// stdio subprocess does a SQLite warmup that can stall graph resolution past
+// langgraph's startup window — blocking the JS process from reporting ready,
+// which makes Render's port detector kill the container. Loading on first
+// model call defers that work until after the server is healthy.
+let n8nToolsPromise: Promise<unknown[]> | null = null;
+function getN8nTools(): Promise<unknown[]> {
+  if (!n8nToolsPromise) {
+    n8nToolsPromise = createN8nMCPTools().catch((err) => {
+      console.error('[n8nMcpTools] load failed; n8n flow degrades to shell:', err);
+      n8nToolsPromise = null;
+      return [];
+    }) as Promise<unknown[]>;
+  }
+  return n8nToolsPromise;
+}
+
+const n8nMcpToolsMiddleware = createMiddleware({
+  name: 'n8nMcpTools',
+  wrapModelCall: async (request, handler) => {
+    const tools = await getN8nTools();
+    if (tools.length === 0) return handler(request);
+    return handler({ ...request, tools: [...request.tools, ...tools] as typeof request.tools });
+  },
+  wrapToolCall: async (request, handler) => {
+    if (request.tool) return handler(request);
+    const tools = (await getN8nTools()) as Array<{ name: string }>;
+    const match = tools.find((t) => t.name === request.toolCall.name);
+    if (!match) return handler(request);
+    return handler({ ...request, tool: match as unknown as NonNullable<typeof request.tool> });
+  },
+});
 
 export const agent = createAgent({
   model,
-  tools: [setTemplateTool, createSandboxTool, loopbackConnectTool, ...e2bTools, ...n8nMcpTools],
+  tools: [setTemplateTool, createSandboxTool, loopbackConnectTool, ...e2bTools],
   middleware: [
     sandboxAwarePrompt,
+    n8nMcpToolsMiddleware,
     userMcpToolsMiddleware,
     humanInTheLoopMiddleware({
       interruptOn: {
