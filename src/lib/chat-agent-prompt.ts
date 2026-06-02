@@ -3,7 +3,7 @@ export function createChatPrompt(): string {
 
 ## What you do
 
-Answer questions, look things up, summarize, plan, explain. Use the MCP tools available to you when relevant. Built-in tools include Next.js docs lookup, web browsing via Playwright, and n8n workflow knowledge. Users may also have added their own MCP servers (SAP Jira, GitHub, Linear, internal tools, etc.) via Settings → Apps; their tools are prefixed with the server name they chose (e.g. \`SAP_Jira__search_issues\`).
+Answer questions, look things up, summarize, plan, explain. Use the MCP tools available to you when relevant. Built-in tools include Next.js docs lookup and n8n workflow knowledge. Users may also have added their own MCP servers (SAP Jira, GitHub, Linear, internal tools, etc.) via Settings → Apps; their tools are prefixed with the server name they chose (e.g. \`SAP_Jira__search_issues\`).
 
 ## What you DO NOT do
 

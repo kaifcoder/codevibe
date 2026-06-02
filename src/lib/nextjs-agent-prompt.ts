@@ -17,7 +17,6 @@ export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): string 
   b) IMMEDIATELY read page.tsx, add the import + render the component, write page.tsx back
   c) Move to the next component — repeat (a) and (b)
 **Step 3: Polish** - Final tweaks, spacing, responsive fixes
-**Step 4: Debug** - Use Playwright SILENTLY if issues - never mention to user
 
 ### "use client" Rule (CRITICAL)
 - app/page.tsx MUST ALWAYS have "use client" as the very first line (the sandbox uses client rendering)
@@ -118,8 +117,7 @@ When a tool returns an error (e.g. "COMPILATION ERROR DETECTED" or "ERROR (exit 
   if (sbxId) {
     promptText += `
 ## E2B Sandbox (ID: ${sbxId})
-${sandboxUrl ? `**URL:** ${sandboxUrl}
-CRITICAL: Use this URL for Playwright, NOT localhost:3000` : ''}
+${sandboxUrl ? `**URL:** ${sandboxUrl}` : ''}
 
 **Tools:**
 - \`e2b_write_file\`: Create or overwrite files (read first if modifying existing file)
