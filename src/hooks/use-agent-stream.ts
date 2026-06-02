@@ -266,14 +266,12 @@ export function useAgentStream() {
       }
 
       case "requiresMcpAuth": {
-        const label =
-          event.server === "sap-jira" ? "Connect Jira" : `Connect ${event.server}`;
-        toast.message(`${event.server === "sap-jira" ? "SAP Jira" : event.server} authorization required`, {
+        toast.message(`${event.server} authorization required`, {
           description: "Sign in once to let the agent access your data.",
           duration: Infinity,
           id: `mcp-auth-${event.server}`,
           action: {
-            label,
+            label: `Connect ${event.server}`,
             onClick: () => {
               window.open(event.authUrl, "_blank", "noopener,noreferrer");
             },

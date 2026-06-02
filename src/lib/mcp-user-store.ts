@@ -36,9 +36,8 @@ function appUrl(): string {
 }
 
 // Servers whose IdP only accepts loopback redirect URIs (RFC 8252) because
-// the BTP / prod host isn't on their allowlist. For these we skip the normal
-// callback route and have the user paste the loopback URL back into the UI
-// after IAS dumps them on a dead localhost page.
+// their host allowlist won't include our prod URL. The user adds these via
+// Settings → Apps; OAuth is then completed by pasting the loopback URL back.
 const LOOPBACK_PORT = 33418;
 export const LOOPBACK_REDIRECT_URI = `http://127.0.0.1:${LOOPBACK_PORT}/callback`;
 const LOOPBACK_HOST_URLS = new Set<string>([
@@ -145,37 +144,6 @@ export async function deleteUserServer(userId: string, id: string) {
   await deleteOAuthCredential(id);
   const res = await prisma.mcpServerConfig.deleteMany({ where: { id, userId } });
   return res.count > 0;
-}
-
-// Pre-populate the well-known SAP Jira MCP server for a user the first time
-// they hit settings. Keeps the per-user model clean while not making every
-// new user re-discover the URL by hand.
-const SAP_JIRA_NAME = 'SAP Jira';
-const SAP_JIRA_URL = 'https://mcp.jira.tools.sap/mcp';
-
-export async function ensureSapJiraSeeded(userId: string) {
-  const existing = await prisma.mcpServerConfig.findFirst({
-    where: { userId, url: SAP_JIRA_URL },
-    select: { id: true },
-  });
-  if (existing) return existing.id;
-  const row = await prisma.mcpServerConfig.create({
-    data: {
-      userId,
-      name: SAP_JIRA_NAME,
-      url: SAP_JIRA_URL,
-      authType: 'oauth',
-    },
-  });
-  return row.id;
-}
-
-export async function getSapJiraServerId(userId: string): Promise<string | null> {
-  const row = await prisma.mcpServerConfig.findFirst({
-    where: { userId, url: SAP_JIRA_URL },
-    select: { id: true },
-  });
-  return row?.id ?? null;
 }
 
 export function decryptBearer(row: { authType: string; encryptedBearerToken: string | null }): string | undefined {

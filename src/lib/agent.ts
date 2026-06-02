@@ -137,58 +137,6 @@ const createSandboxTool = tool(
   }
 );
 
-// ─── SAP Jira Connect Tool (OAuth bootstrap) ───────────────────────────────
-
-const SAP_JIRA_URL = 'https://mcp.jira.tools.sap/mcp';
-
-async function isSapJiraConnected(serverId: string, userId: string): Promise<boolean> {
-  const appUrl =
-    process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://host.docker.internal:3000';
-  const internalSecret = process.env.INTERNAL_AGENT_SECRET;
-  if (!internalSecret) return false;
-  try {
-    const res = await fetch(
-      `${appUrl}/api/mcp/internal/servers/${serverId}/credentials?userId=${encodeURIComponent(userId)}`,
-      {
-        headers: { Authorization: `Bearer ${internalSecret}` },
-        cache: 'no-store',
-      },
-    );
-    if (!res.ok) return false;
-    const data = await res.json();
-    return Boolean(data?.oauth?.tokens?.access_token);
-  } catch {
-    return false;
-  }
-}
-
-const sapJiraConnectTool = tool(
-  async (_input: Record<string, never>, config: LangGraphRunnableConfig) => {
-    const userId = config.configurable?.userId as string | undefined;
-    if (!userId) {
-      return 'Cannot start SAP Jira connection: user is not signed in.';
-    }
-    const userServers = (config.configurable?.userMcpServers ?? []) as UserMcpServerConfig[];
-    const sapJira = userServers.find((s) => s.url === SAP_JIRA_URL);
-    if (!sapJira) {
-      return 'SAP Jira is not provisioned for this user yet. Ask the user to open Settings → Apps once so it can be seeded.';
-    }
-    // Tokens may have arrived since this agent run started (e.g. user just
-    // completed loopback connect). Check Next.js, not our own cache.
-    if (await isSapJiraConnected(sapJira.id, userId)) {
-      return 'SAP Jira IS connected. Tools are loading on the next message — tell the user to retry their request.';
-    }
-    const authUrl = `/api/mcp/servers/${sapJira.id}/auth`;
-    config.writer?.({ type: 'requiresMcpAuth', server: 'sap-jira', authUrl });
-    return 'SAP Jira is not connected yet. Tell the user to click the "Connect Jira" button shown in the chat to authorize, then ask them to retry their request.';
-  },
-  {
-    name: 'sap_jira_connect',
-    description: 'Initiate the SAP Jira OAuth flow when the user asks for Jira data but no sap_jira_* tools are available yet. Emits a UI prompt asking the user to authorize. Call once, then stop and wait for the user to retry.',
-    schema: z.object({}).describe('No arguments.'),
-  },
-);
-
 // ─── Dynamic System Prompt ──────────────────────────────────────────────────
 
 // Inject the calling user's MCP tools at model-call time. Server configs
@@ -243,21 +191,13 @@ const userMcpToolsMiddleware = createMiddleware({
   },
 });
 
-const SAP_JIRA_TOOL_HINT = `
-
-## SAP Jira Tools
-
-If the user asks about Jira issues / SAP tickets / sprints / boards and you do NOT see any tool names containing \`jira\` (e.g. \`SAP_Jira__jira_*\`) in your toolset, the user has not connected SAP Jira yet. Call \`sap_jira_connect\` once, then stop and wait — a "Connect Jira" button will appear in the UI for them to authorize. Do not retry until they confirm they've connected.`;
-
 function buildPrompt(templateType: TemplateType, sbxId?: string, sandboxUrl?: string): string {
   if (templateType === 'chat') {
-    // chat-agent-prompt already includes the SAP Jira hint, so no append.
     return createChatPrompt();
   }
-  const base = templateType === 'n8n'
+  return templateType === 'n8n'
     ? createN8nPrompt(sbxId, sandboxUrl)
     : createNextjsPrompt(sbxId, sandboxUrl);
-  return base + SAP_JIRA_TOOL_HINT;
 }
 
 const sandboxAwarePrompt = dynamicSystemPromptMiddleware(
@@ -320,7 +260,7 @@ const n8nMcpToolsMiddleware = createMiddleware({
 
 export const agent = createAgent({
   model,
-  tools: [setTemplateTool, createSandboxTool, sapJiraConnectTool, ...e2bTools],
+  tools: [setTemplateTool, createSandboxTool, ...e2bTools],
   middleware: [
     sandboxAwarePrompt,
     n8nMcpToolsMiddleware,

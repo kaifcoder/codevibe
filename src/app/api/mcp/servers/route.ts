@@ -6,7 +6,6 @@ import {
   validateInput,
   probeMcpServer,
   invalidateUserMcpToolsCache,
-  ensureSapJiraSeeded,
   type AuthType,
 } from '@/lib/mcp-user-store';
 
@@ -16,7 +15,6 @@ export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   try {
-    await ensureSapJiraSeeded(userId);
     const servers = await listUserServers(userId);
     return NextResponse.json({ servers });
   } catch (err) {
