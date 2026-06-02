@@ -7,5 +7,10 @@ COPY package.json package-lock.json ./
 
 RUN npm ci
 
+# Pre-install MCP servers into the global npm cache so `npx --no-install`
+# resolves them instantly at runtime instead of fetching on first request
+# (which OOMs the 512MB Render instance — see logs from 2026-05-30).
+RUN npm i -g @taiyokimura/nextjs-docs-mcp n8n-mcp
+
 # Copy the rest of the source code (cache-busting only rebuilds from here)
 COPY . .

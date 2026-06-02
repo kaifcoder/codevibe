@@ -16,17 +16,10 @@ const client = new MultiServerMCPClient({
   prefixToolNameWithServerName: false,
   useStandardContentBlocks: true,
   mcpServers: {
-    playwright: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@playwright/mcp@latest'],
-      env: cleanEnv({ PLAYWRIGHT_HEADLESS: 'true' }),
-    },
-
     'nextjs-docs-mcp': {
       transport: 'stdio',
       command: 'npx',
-      args: ['@taiyokimura/nextjs-docs-mcp@latest'],
+      args: ['--no-install', '@taiyokimura/nextjs-docs-mcp'],
     },
 
     // JSON-only mode — exposes the 7 core tools (search_nodes, get_node,
@@ -35,7 +28,7 @@ const client = new MultiServerMCPClient({
     'n8n-mcp': {
       transport: 'stdio',
       command: 'npx',
-      args: ['-y', 'n8n-mcp'],
+      args: ['--no-install', 'n8n-mcp'],
       env: cleanEnv({
         MCP_MODE: 'stdio',
         LOG_LEVEL: 'error',
@@ -56,10 +49,6 @@ export async function getMCPTools(...serverNames: string[]) {
     console.error('Failed to load MCP tools:', error);
     return [];
   }
-}
-
-export async function createPlaywrightMCPTools() {
-  return getMCPTools('playwright');
 }
 
 export async function createNextJsDocsMCPTools() {
