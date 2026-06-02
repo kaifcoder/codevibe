@@ -25,6 +25,11 @@ interface CachedClient {
 
 const cache = new Map<string, CachedClient>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+// OAuth clients use a much shorter TTL so a mid-session reconnect (new tokens
+// in the DB) is picked up quickly. We can't close an OAuth client right after
+// getTools() — its connection is what backs every subsequent tool invocation
+// in the same turn, and closing it produces "Not connected" errors.
+const OAUTH_CACHE_TTL_MS = 30 * 1000;
 
 function configsSignature(configs: UserMcpServerConfig[]): string {
   return configs
@@ -121,13 +126,14 @@ export async function buildUserMcpToolsFromConfigs(
     return t;
   });
 
-  // Only cache the client when it's safe to. OAuth servers' auth state can
-  // change between turns (user just connected via loopback flow); a cached
-  // pre-connect client would mask the new tokens until TTL expires. So if
-  // any config is OAuth, skip the cache entirely.
+  // Cache so subsequent middleware invocations within the same turn (and
+  // adjacent turns) reuse the live connection. OAuth servers get a shorter
+  // TTL so a user's reconnect is picked up promptly without leaving the
+  // current turn's tool calls dangling against a closed client.
   const hasOAuth = configs.some((c) => c.authType === 'oauth');
-  if (prefixed.length > 0 && !hasOAuth) {
-    cache.set(signature, { client, signature, expiresAt: now + CACHE_TTL_MS });
+  if (prefixed.length > 0) {
+    const ttl = hasOAuth ? OAUTH_CACHE_TTL_MS : CACHE_TTL_MS;
+    cache.set(signature, { client, signature, expiresAt: now + ttl });
   } else {
     client.close().catch(() => {});
   }

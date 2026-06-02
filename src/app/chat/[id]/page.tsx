@@ -229,6 +229,10 @@ function deriveChatMessages(
         if (msgToolCalls) {
           for (const tc of msgToolCalls) {
             const match = toolCalls.find((stc) => stc.call.id === tc.id);
+            // If the run has stopped streaming and a tool still has no
+            // resolved state, treat it as errored — otherwise it stays in
+            // the "running" branch forever and the UI spinner never clears.
+            const stalled = !isLoading && !match?.state;
             const toolEntry = {
               tool: tc.name,
               args: tc.args,
@@ -236,7 +240,7 @@ function deriveChatMessages(
               status:
                 match?.state === "pending"
                   ? ("running" as const)
-                  : match?.state === "error"
+                  : match?.state === "error" || stalled
                     ? ("error" as const)
                     : match?.state === "completed"
                       ? ("complete" as const)
