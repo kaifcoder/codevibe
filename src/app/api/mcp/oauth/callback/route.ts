@@ -14,8 +14,8 @@ export const dynamic = 'force-dynamic';
 // in the `state` param (set by the provider's state() method); we look it up
 // to find the right server, validate the user owns it, and finish the token
 // exchange. This lets us register exactly ONE redirect URI per environment
-// upstream — important for OAuth servers (e.g. upstream IdP) that reject any URI
-// not on a strict allowlist.
+// upstream — important for OAuth servers that reject any URI not on a
+// strict allowlist.
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';

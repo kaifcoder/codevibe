@@ -17,8 +17,8 @@ export const dynamic = 'force-dynamic';
 
 // Step 1 of the loopback OAuth flow. Frontend POSTs here, we run DCR + build
 // the authorize URL, return it as JSON. Frontend opens that URL in a new tab.
-// Used for OAuth servers (e.g. loopback server) whose IdP doesn't allowlist our
-// real redirect URI — we register loopback instead.
+// Used for OAuth servers whose IdP doesn't allowlist our real redirect
+// URI — we register loopback instead.
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

@@ -41,7 +41,7 @@ function appUrl(): string {
 const LOOPBACK_PORT = 33418;
 export const LOOPBACK_REDIRECT_URI = `http://127.0.0.1:${LOOPBACK_PORT}/callback`;
 const LOOPBACK_HOST_URLS = new Set<string>([
-  '',
+  // Add loopback-only MCP server URLs here
 ]);
 
 export function isLoopbackServer(url: string): boolean {
@@ -53,7 +53,7 @@ export function oauthRedirectUrl(_serverId: string, serverUrl?: string): string 
     return LOOPBACK_REDIRECT_URI;
   }
   // Single shared callback path so we only need to allowlist ONE redirect URI
-  // per environment in upstream OAuth servers (upstream IdP rejects unregistered
+  // per environment in upstream OAuth servers (they reject unregistered
   // hosts/paths). The serverId travels in the OAuth `state` param instead.
   return `${appUrl()}/api/mcp/oauth/callback`;
 }

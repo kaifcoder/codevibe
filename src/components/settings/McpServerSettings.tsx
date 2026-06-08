@@ -28,6 +28,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
+// URLs of MCP servers that require loopback OAuth (RFC 8252).
+const LOOPBACK_HOST_URLS = new Set<string>([]);
+function isLoopbackServer(url: string) { return LOOPBACK_HOST_URLS.has(url); }
+
 interface UserMcpServer {
   id: string;
   name: string;
@@ -196,10 +200,10 @@ function ServerRow({ server, onDelete, onConnected, autoOpen, onAutoOpenHandled 
   const [status, setStatus] = useState<{ ok: boolean; toolCount?: number; error?: string } | null>(null);
   const [loopbackOpen, setLoopbackOpen] = useState(false);
 
-  // loopback server and any other server whose IdP doesn't allowlist our host uses
-  // a loopback OAuth flow (RFC 8252). The IdP redirects to a dead localhost
-  // URL; the user pastes it back here, server completes the exchange.
-  const isLoopback = server.url === "";
+  // Servers whose IdP doesn't allowlist our host use a loopback OAuth flow
+  // (RFC 8252). The IdP redirects to a dead localhost URL; the user pastes
+  // it back here, server completes the exchange.
+  const isLoopback = isLoopbackServer(server.url);
 
   // When the parent passes autoOpen (because of ?connectLoopback=<id>),
   // pop the loopback dialog automatically. Only acts on loopback rows.

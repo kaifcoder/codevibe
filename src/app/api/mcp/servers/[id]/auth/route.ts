@@ -23,9 +23,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
-  // Loopback servers (e.g. loopback server) can't use the standard browser-redirect
-  // flow because the IdP doesn't allowlist our host. Send the user to the
-  // settings modal which will open the paste-style connect dialog.
+  // Loopback servers can't use the standard browser-redirect flow because
+  // the IdP doesn't allowlist our host. Send the user to the settings modal
+  // which will open the paste-style connect dialog.
   if (isLoopbackServer(row.url)) {
     return NextResponse.redirect(new URL(`/?settings=apps&connectLoopback=${id}`, appUrl));
   }
