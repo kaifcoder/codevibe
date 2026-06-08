@@ -13,6 +13,9 @@ An open-source AI-powered collaborative code editor that turns natural language 
 
 **[Live Demo →](https://codevibe.mohdkaif.me)**
 
+<img width="1728" height="951" alt="image" src="https://github.com/user-attachments/assets/634bcc16-c7be-43fa-971e-8e54d1f19a97" />
+
+
 </div>
 
 ---
