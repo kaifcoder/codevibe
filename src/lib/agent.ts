@@ -6,7 +6,7 @@ import {
   summarizationMiddleware,
   tool,
 } from 'langchain';
-import { ChatAnthropic } from '@langchain/anthropic';
+import { ChatBedrockConverse } from '@langchain/aws';
 import { z } from 'zod';
 import { e2bTools } from './e2b-tools';
 import { createN8nMCPTools } from './mcp-client';
@@ -29,26 +29,26 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 
 // ─── Model ───────────────────────────────────────────────────────────────────
 
-// Proxy that brokers LLM calls. Resolution order:
-//   1. LLM_PROXY_URL env (production / Render — set per-deployment)
-//   2. host.docker.internal when running inside docker-compose locally
-//   3. 0.0.0.0 for bare-metal local dev
-const llmProxyBaseURL =
-  process.env.LLM_PROXY_URL ??
-  (process.env.DOCKER_CONTAINER === 'true'
-    ? 'http://host.docker.internal:3030'
-    : 'http://0.0.0.0:3030');
-
-const model = new ChatAnthropic({
-  model: 'claude-sonnet-4-5',
-  apiKey: process.env.LLM_PROXY_API_KEY ?? 'test-key-1',
-  clientOptions: {
-    baseURL: llmProxyBaseURL,
-  },
+// Claude Sonnet 4.5 via AWS Bedrock on the developer's personal AWS account.
+// Direct call — no proxy. Region defaults to us-west-2 (broadest Bedrock model
+// menu for Anthropic). Credentials resolve from the standard AWS chain
+// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, ~/.aws/credentials, or an
+// instance role on the deploy host).
+//
+// Model ID uses the `us.` cross-region inference profile so Bedrock can route
+// across us-east-1/us-west-2 for capacity — required for Sonnet 4.5 in most
+// accounts. Bedrock passes Anthropic-specific request fields through
+// `additionalModelRequestFields`; that's where extended thinking config goes
+// when targeting Claude on Bedrock.
+const model = new ChatBedrockConverse({
+  model: process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  region: process.env.AWS_REGION ?? 'us-west-2',
   maxTokens: 16000,
-  thinking: {
-    type: 'enabled',
-    budget_tokens: 5000,
+  additionalModelRequestFields: {
+    thinking: {
+      type: 'enabled',
+      budget_tokens: 5000,
+    },
   },
 });
 
