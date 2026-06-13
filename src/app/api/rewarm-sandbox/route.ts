@@ -251,6 +251,19 @@ export async function POST(request: NextRequest) {
         written = result.written;
         skipped = result.skipped;
         failedSamples = result.failed.slice(0, 5);
+        console.log(
+          '[rewarm-sandbox] seeded',
+          {
+            sessionId,
+            sandboxId: sandbox.sandboxId,
+            totalFiles,
+            written,
+            skipped,
+            failed: result.failed.length,
+            configChanged: result.configChanged,
+            packageJsonChanged: result.packageJsonChanged,
+          },
+        );
         if (result.failed.length > 0) {
           console.warn(
             '[rewarm-sandbox] failed to seed',
@@ -267,6 +280,16 @@ export async function POST(request: NextRequest) {
         } else {
           devReady = 'skipped';
         }
+      } else {
+        // Most common cause of "rewarm succeeded but sandbox is empty": the
+        // session row in Postgres has an empty fileTree, so there's nothing
+        // to seed *from*. Surface this loudly in logs — silent skip used to
+        // make this look like a sandbox/E2B problem when it was a DB-state
+        // problem.
+        console.warn(
+          '[rewarm-sandbox] no fileTree on session row — sandbox will come up empty',
+          { sessionId, sandboxId: sandbox.sandboxId, fileTreeRaw: session.fileTree },
+        );
       }
     }
 

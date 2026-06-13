@@ -759,12 +759,23 @@ function ChatPage() {
     };
   }, [ctx.templateType, ctx.sandboxUrl, sessionId]);
 
-  // --- Auto-save session to DB ---
+  // --- Auto-save session state to DB ---
+  // The `fileTree` and `sandbox*` fields are agent-driven artifacts: the agent
+  // creates files, the rewarm flow swaps sandboxes — none of these require the
+  // user to type or click. Persisting them on every change keeps the session
+  // row in sync with what the user actually has, so:
+  //   - reloading the tab brings back the file tree the agent built
+  //   - rewarming reseeds from a populated `session.fileTree` (was failing
+  //     when a passive viewer never typed and the tree was never persisted)
+  //   - share-link visitors see the latest project state
+  //
+  // We deliberately do NOT gate this on `hasUserInteractedRef` — that gate was
+  // there to prevent a passive open from bumping `updatedAt` and re-ordering
+  // the sidebar, but the agent doing real work is also a legitimate reason to
+  // persist. The title-setting effect below keeps the user-interaction gate
+  // because that one really should only fire on user-initiated turns.
   useEffect(() => {
     if (!sessionId || !sessionExistsRef.current) return;
-    // Skip until the user actually interacts — prevents a passive open
-    // from bumping `updatedAt` and re-ordering the sidebar.
-    if (!hasUserInteractedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       fetch(`/api/session/${sessionId}`, {
