@@ -537,24 +537,34 @@ function ChatPage() {
 
         if (session.sandboxId) {
           ctx.setSandboxId(session.sandboxId);
-          ctx.setIsSyncingFilesystem(true);
-          setTimeout(async () => {
-            try {
-              const res = await fetch("/api/sync-filesystem", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ sandboxId: session.sandboxId, sessionId }),
-              });
-              if (res.ok) {
-                const data = await res.json();
-                if (data.fileTree) ctx.setFileTree(data.fileTree);
+          // Only run a full rescan when we don't already have a tree from the
+          // DB row. The agent emits `fileCreated` events on every write while
+          // it's running, so an existing tree stays fresh without a tar+extract
+          // round-trip that competes with `next dev` for sandbox I/O.
+          // Manual refresh button (DesktopChatLayout sidebar) still triggers
+          // the full rescan when the user wants it.
+          const hasCachedTree =
+            Array.isArray(session.fileTree) && session.fileTree.length > 0;
+          if (!hasCachedTree) {
+            ctx.setIsSyncingFilesystem(true);
+            setTimeout(async () => {
+              try {
+                const res = await fetch("/api/sync-filesystem", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ sandboxId: session.sandboxId, sessionId }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.fileTree) ctx.setFileTree(data.fileTree);
+                }
+              } catch (err) {
+                console.error("[Sync] Auto-sync failed:", err);
+              } finally {
+                ctx.setIsSyncingFilesystem(false);
               }
-            } catch (err) {
-              console.error("[Sync] Auto-sync failed:", err);
-            } finally {
-              ctx.setIsSyncingFilesystem(false);
-            }
-          }, 1000);
+            }, 1000);
+          }
         }
 
         if (session.sandboxUrl) {

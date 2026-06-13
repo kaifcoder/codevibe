@@ -106,42 +106,36 @@ export function MobileChatLayout({
         )}
         {mobileActivePanel === "code" && (
           <div className="h-full flex flex-col overflow-hidden">
-            {isSyncingFilesystem ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center space-y-2">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-                  <p className="text-sm text-muted-foreground">Syncing filesystem...</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center bg-muted/20 border-b overflow-x-auto">
-                  {openFiles.map((filePath) => {
-                    const fileName = filePath.split('/').pop() || filePath;
-                    const isActive = filePath === selectedFile;
-                    return (
-                      <button
-                        key={filePath}
-                        className={`flex items-center gap-1.5 px-3 py-2 text-xs border-r cursor-pointer hover:bg-accent/50 transition-colors whitespace-nowrap ${
-                          isActive ? 'bg-background' : 'bg-muted/20'
-                        }`}
-                        onClick={() => setSelectedFile(filePath)}
-                      >
-                        <span className={isActive ? 'font-medium' : ''}>{fileName}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="flex-1 min-h-0 overflow-hidden relative">
-                  <CodeEditor
-                    yText={yText}
-                    provider={provider}
-                    language="typescript"
-                    initialContent={selectedFileContent}
-                  />
-                </div>
-              </>
-            )}
+            <div className="flex items-center bg-muted/20 border-b overflow-x-auto">
+              {openFiles.map((filePath) => {
+                const fileName = filePath.split('/').pop() || filePath;
+                const isActive = filePath === selectedFile;
+                return (
+                  <button
+                    key={filePath}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs border-r cursor-pointer hover:bg-accent/50 transition-colors whitespace-nowrap ${
+                      isActive ? 'bg-background' : 'bg-muted/20'
+                    }`}
+                    onClick={() => setSelectedFile(filePath)}
+                  >
+                    <span className={isActive ? 'font-medium' : ''}>{fileName}</span>
+                  </button>
+                );
+              })}
+              {isSyncingFilesystem && (
+                <span className="px-3 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Syncing…
+                </span>
+              )}
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden relative">
+              <CodeEditor
+                yText={yText}
+                provider={provider}
+                language="typescript"
+                initialContent={selectedFileContent}
+              />
+            </div>
           </div>
         )}
       </div>
