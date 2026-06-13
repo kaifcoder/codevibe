@@ -38,11 +38,6 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 //
 // Cost-tuned defaults:
 //   - maxTokens: 4000 — typical agent turns generate 200–2000 output tokens.
-//   - reasoning_config: "low" — Kimi's reasoning knob (NOT Anthropic's
-//     `thinking` parameter shape). Values: "low" | "medium" | "high".
-//     "low" is enough for codevibe's per-turn planning; "high" burns budget
-//     on internal reasoning the agent doesn't need for mostly-mechanical
-//     tool-call loops. Override via BEDROCK_REASONING_LEVEL if needed.
 //   - recursionLimit: 60 (set on the agent below) — guards against the
 //     occasional tool-call loop. Kimi loops less than DeepSeek but still
 //     occasionally over-fetches; recursion cap is the safety net.
@@ -51,10 +46,7 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 const model = new ChatBedrockConverse({
   model: process.env.BEDROCK_MODEL_ID ?? 'moonshotai.kimi-k2.5',
   region: process.env.AWS_REGION ?? 'ap-south-1',
-  maxTokens: 4000,
-  additionalModelRequestFields: {
-    reasoning_config: 'high',
-  },
+  maxTokens: 4000
 });
 
 // ─── Set Template Tool (HITL-gated dispatcher decision) ────────────────────
