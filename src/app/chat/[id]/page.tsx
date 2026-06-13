@@ -15,9 +15,11 @@ import { DeployButton } from "@/components/DeployButton";
 import { GithubButton } from "@/components/GithubButton";
 import { TemplateApprovalCard } from "@/components/TemplateApprovalCard";
 import { SandboxExpiredPanel } from "@/components/SandboxExpiredPanel";
+import { BackendWarmingBanner } from "@/components/BackendWarmingBanner";
 import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
+import { useAgentReady } from "@/hooks/use-agent-ready";
 import { MobileChatLayout } from "@/components/MobileChatLayout";
 import { DesktopChatLayout } from "@/components/DesktopChatLayout";
 import { PreviewShimmer } from "@/components/ui/shimmer";
@@ -280,6 +282,7 @@ function ChatPage() {
   const { sessionId } = ctx;
 
   const stream = useAgentStream();
+  const agentReady = useAgentReady();
 
   // --- Local UI state ---
   const [isMounted, setIsMounted] = useState(false);
@@ -360,31 +363,66 @@ function ChatPage() {
     if (!text) return;
     setMessage("");
     hasUserInteractedRef.current = true;
-    stream.submit(
-      { messages: [{ type: "human", content: text }] },
-      {
-        onDisconnect: "continue",
-        streamResumable: true,
-        // Tell the server to enqueue this run if one is already in flight
-        // (instead of the default reject/replace). useStream then surfaces
-        // pending entries via stream.queue, which <QueueList> renders.
-        multitaskStrategy: "enqueue",
-        config: {
-          configurable: {
-            sessionId,
-            userId,
-            userMcpServers,
-            templateType: ctx.templateType,
-            templateDecided: ctx.templateDecided,
-            // Forward the sandboxId we currently consider canonical (e.g.
-            // freshly provisioned by the rewarm flow). resolveSandbox in the
-            // agent will adopt it instead of trying its stale registry entry.
-            sandboxId: ctx.sandboxId,
-          },
+
+    const submitConfig = {
+      onDisconnect: "continue" as const,
+      streamResumable: true,
+      // Tell the server to enqueue this run if one is already in flight
+      // (instead of the default reject/replace). useStream then surfaces
+      // pending entries via stream.queue, which <QueueList> renders.
+      multitaskStrategy: "enqueue" as const,
+      config: {
+        configurable: {
+          sessionId,
+          userId,
+          userMcpServers,
+          templateType: ctx.templateType,
+          templateDecided: ctx.templateDecided,
+          // Forward the sandboxId we currently consider canonical (e.g.
+          // freshly provisioned by the rewarm flow). resolveSandbox in the
+          // agent will adopt it instead of trying its stale registry entry.
+          sandboxId: ctx.sandboxId,
         },
-      } as Record<string, unknown>,
-    );
-  }, [message, stream, sessionId, userId, userMcpServers, ctx.templateType, ctx.templateDecided, ctx.sandboxId]);
+      },
+    };
+
+    // Cold-start guard for new users on a sleeping Render dyno. If the agent
+    // already reported ready (cached for the session), submit immediately —
+    // no UX cost on warm visits. Otherwise wait up to 90s for the dyno to
+    // wake; on submit failure that *looks* like a cold start, retry once
+    // after re-probing readiness instead of leaving the thread silently stuck.
+    const submitWithGuard = async () => {
+      if (!agentReady.ready) {
+        const ok = await agentReady.waitUntilReady(90_000);
+        if (!ok) {
+          toast.error("Backend is taking longer than expected to wake up. Please try again.");
+          setMessage(text); // restore so the user doesn't lose their prompt
+          return;
+        }
+      }
+      try {
+        stream.submit(
+          { messages: [{ type: "human", content: text }] },
+          submitConfig as Record<string, unknown>,
+        );
+      } catch (err) {
+        console.warn("[handleSend] submit failed, re-probing agent and retrying:", err);
+        agentReady.invalidate();
+        const ok = await agentReady.waitUntilReady(60_000);
+        if (!ok) {
+          toast.error("Couldn't reach the backend. Please refresh and try again.");
+          setMessage(text);
+          return;
+        }
+        stream.submit(
+          { messages: [{ type: "human", content: text }] },
+          submitConfig as Record<string, unknown>,
+        );
+      }
+    };
+
+    void submitWithGuard();
+  }, [message, stream, sessionId, userId, userMcpServers, ctx.templateType, ctx.templateDecided, ctx.sandboxId, agentReady]);
 
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
@@ -1013,6 +1051,7 @@ function ChatPage() {
         </div>
       </div>
 
+      <BackendWarmingBanner warming={agentReady.warming} />
       <div className="flex-1 min-h-0 overflow-hidden">{renderMainContent()}</div>
     </div>
   );

@@ -50,6 +50,14 @@ function isSandboxHealth(req: Request): boolean {
   return url.pathname === '/api/sandbox-health'
 }
 
+// /api/agent-ready — anonymous probe so the home page can show "Waking up
+// the backend" before the user signs in. No session data leaves the route;
+// it just forwards a HEAD-style GET to the LangGraph dyno.
+function isAgentReady(req: Request): boolean {
+  const url = new URL(req.url)
+  return url.pathname === '/api/agent-ready'
+}
+
 // GET /api/session/<id> stays accessible without `?token=` for owners hitting
 // it from a normal Clerk session. Non-owners get 403 from the route handler.
 function isPublicSessionRead(req: Request): boolean {
@@ -75,6 +83,7 @@ export default clerkMiddleware(async (auth, req) => {
     || isVercelDeploy(req)
     || isSandboxRewarm(req)
     || isSandboxHealth(req)
+    || isAgentReady(req)
     || isPublicSessionRead(req)
     || isInternalMcpRoute(req)
   ) return

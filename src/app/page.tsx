@@ -15,11 +15,14 @@ import {
   Sparkles,
 } from "lucide-react"
 import { useAuth, SignInButton, useClerk } from "@clerk/nextjs"
+import { useAgentReady } from "@/hooks/use-agent-ready"
+import { BackendWarmingBanner } from "@/components/BackendWarmingBanner"
 
 
 
 export default function HomePage() {
   const [prompt, setPrompt] = useState("")
+  const agentReady = useAgentReady()
   const [particles, setParticles] = useState<Array<{ id: string; left: string; top: string; duration: number; delay: number }>>([])
   const { isSignedIn, isLoaded } = useAuth()
   const { openSignIn } = useClerk()
@@ -166,6 +169,9 @@ export default function HomePage() {
 
   return (
     <div className="flex h-full rounded-b-lg bg-gradient-to-b from-white to-gray-50 dark:from-[#0a0a0a] dark:to-[#0f0f0f] dark:text-white relative overflow-hidden">
+      <div className="absolute top-0 inset-x-0 z-50">
+        <BackendWarmingBanner warming={agentReady.warming} />
+      </div>
       {/* Animated Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         {/* Gradient Orbs */}
