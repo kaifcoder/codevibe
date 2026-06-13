@@ -28,15 +28,32 @@ import {
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 
 // ─── Model ───────────────────────────────────────────────────────────────────
+
+// Kimi K2.5 (Moonshot) via AWS Bedrock. Strong tool-use training makes it the
+// best price/quality point on Bedrock for codevibe's agent workload — ~6×
+// cheaper than Claude Sonnet 4.5 with quality that's close enough for the
+// launch phase. Indian payment-instrument restrictions on AWS Marketplace
+// don't affect Moonshot models, so this works on the existing $179 of credits
+// where Anthropic models don't.
+//
+// Cost-tuned defaults:
+//   - maxTokens: 4000 — typical agent turns generate 200–2000 output tokens.
+//   - reasoning_config: "low" — Kimi's reasoning knob (NOT Anthropic's
+//     `thinking` parameter shape). Values: "low" | "medium" | "high".
+//     "low" is enough for codevibe's per-turn planning; "high" burns budget
+//     on internal reasoning the agent doesn't need for mostly-mechanical
+//     tool-call loops. Override via BEDROCK_REASONING_LEVEL if needed.
+//   - recursionLimit: 60 (set on the agent below) — guards against the
+//     occasional tool-call loop. Kimi loops less than DeepSeek but still
+//     occasionally over-fetches; recursion cap is the safety net.
+//   - summarization trigger: 50000 — compact context before the prompt prefix
+//     grows unbounded across long sessions.
 const model = new ChatBedrockConverse({
   model: process.env.BEDROCK_MODEL_ID ?? 'moonshotai.kimi-k2.5',
   region: process.env.AWS_REGION ?? 'ap-south-1',
   maxTokens: 4000,
   additionalModelRequestFields: {
-    thinking: {
-      type: 'enabled',
-      budget_tokens: 1500,
-    },
+    reasoning_config: 'high',
   },
 });
 
