@@ -28,26 +28,14 @@ import {
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 
 // ─── Model ───────────────────────────────────────────────────────────────────
-
-// Claude Sonnet 4.5 via AWS Bedrock on the developer's personal AWS account.
-// Direct call — no proxy. Region defaults to us-west-2 (broadest Bedrock model
-// menu for Anthropic). Credentials resolve from the standard AWS chain
-// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, ~/.aws/credentials, or an
-// instance role on the deploy host).
-//
-// Model ID uses the `us.` cross-region inference profile so Bedrock can route
-// across us-east-1/us-west-2 for capacity — required for Sonnet 4.5 in most
-// accounts. Bedrock passes Anthropic-specific request fields through
-// `additionalModelRequestFields`; that's where extended thinking config goes
-// when targeting Claude on Bedrock.
 const model = new ChatBedrockConverse({
-  model: process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
-  region: process.env.AWS_REGION ?? 'us-west-2',
-  maxTokens: 16000,
+  model: process.env.BEDROCK_MODEL_ID ?? 'moonshotai.kimi-k2.5',
+  region: process.env.AWS_REGION ?? 'ap-south-1',
+  maxTokens: 4000,
   additionalModelRequestFields: {
     thinking: {
       type: 'enabled',
-      budget_tokens: 5000,
+      budget_tokens: 1500,
     },
   },
 });
@@ -238,9 +226,9 @@ export const agent = createAgent({
     }),
     summarizationMiddleware({
       model,
-      trigger: { tokens: 80000 },
+      trigger: { tokens: 50000 },
       keep: { messages: 12 },
     }),
   ],
   version: 'v1',
-}).withConfig({ recursionLimit: 200 });
+}).withConfig({ recursionLimit: 60 });
