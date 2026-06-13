@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   createAgent,
   createMiddleware,
@@ -8,7 +7,6 @@ import {
   tool,
 } from 'langchain';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { Sandbox } from '@e2b/code-interpreter';
 import { z } from 'zod';
 import { e2bTools } from './e2b-tools';
 import { createN8nMCPTools } from './mcp-client';
@@ -20,14 +18,11 @@ import { createSystemPrompt as createNextjsPrompt } from './nextjs-agent-prompt'
 import { createSystemPrompt as createN8nPrompt } from './n8n-agent-prompt';
 import { createChatPrompt } from './chat-agent-prompt';
 import { createDispatcherPrompt } from './dispatcher-agent-prompt';
-import { getSandbox } from './sandbox-utils';
 import {
-  registerSandbox,
   getThreadSandbox,
   hydrateThreadTemplate,
   resolveTemplateType,
   setThreadTemplate,
-  TEMPLATE_CONFIG,
   type TemplateType,
 } from './sandbox-registry';
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
@@ -88,53 +83,6 @@ const setTemplateTool = tool(
         .describe('One short sentence explaining the classification.'),
     }),
   },
-);
-
-// ─── Create Sandbox Tool (legacy - sandbox auto-creates via e2b tools) ─────
-
-const createSandboxTool = tool(
-  async (
-    { templateType }: { templateType?: TemplateType },
-    config: LangGraphRunnableConfig,
-  ) => {
-    const threadId = config.configurable?.thread_id as string;
-    const requested = resolveTemplateType(
-      templateType ?? config.configurable?.templateType,
-    );
-    if (requested === 'chat') {
-      return 'Chat mode has no sandbox. Skip create_sandbox and answer the user directly using your other tools.';
-    }
-
-    const existing = getThreadSandbox(threadId);
-    if (existing?.sandboxId) {
-      const sbx = await getSandbox(existing.sandboxId);
-      if (sbx) {
-        config.writer?.({ type: 'sandboxCreated', sandboxId: existing.sandboxId, sandboxUrl: existing.sandboxUrl, isNew: false });
-        return `Sandbox already exists: ${existing.sandboxId} at ${existing.sandboxUrl} (template: ${existing.templateType}). Use e2b tools directly.`;
-      }
-    }
-
-    const cfg = TEMPLATE_CONFIG[requested as Exclude<TemplateType, 'chat'>];
-    const sbx = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });
-    const host = sbx.getHost(cfg.port);
-    const sandboxUrl = `https://${host}`;
-
-    registerSandbox(threadId, sbx.sandboxId, sandboxUrl, requested);
-
-    config.writer?.({ type: 'sandboxCreated', sandboxId: sbx.sandboxId, sandboxUrl, isNew: true });
-
-    return `Sandbox created: ${sbx.sandboxId} at ${sandboxUrl} (template: ${requested}). You can now use e2b tools to write files.`;
-  },
-  {
-    name: 'create_sandbox',
-    description: 'You do NOT need to call this — sandboxes are created automatically by e2b tools. Only use if explicitly asked to reset or swap the sandbox template.',
-    schema: z.object({
-      templateType: z
-        .enum(['nextjs', 'n8n', 'chat'])
-        .optional()
-        .describe('Which sandbox image to provision. Defaults to the session\'s configured template. "chat" mode has no sandbox.'),
-    }),
-  }
 );
 
 // ─── Dynamic System Prompt ──────────────────────────────────────────────────
@@ -260,7 +208,11 @@ const n8nMcpToolsMiddleware = createMiddleware({
 
 export const agent = createAgent({
   model,
-  tools: [setTemplateTool, createSandboxTool, ...e2bTools],
+  // create_sandbox is intentionally not exposed: resolveSandbox() in e2b-tools
+  // auto-provisions on the first e2b_* call AND adopts the frontend-forwarded
+  // sandboxId from rewarm. Exposing it lets the model spin up a duplicate
+  // sandbox even though prompts say "NEVER call create_sandbox".
+  tools: [setTemplateTool, ...e2bTools],
   middleware: [
     sandboxAwarePrompt,
     n8nMcpToolsMiddleware,

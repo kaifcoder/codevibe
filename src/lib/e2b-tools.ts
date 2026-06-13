@@ -95,8 +95,8 @@ async function scanAndEmitFileTree(sbx: Sandbox, config: LangGraphRunnableConfig
   config.writer?.({ type: 'fileTreeSync', fileTree });
 }
 
-// Exported wrapper so other entry points (e.g. createSandboxTool in agent.ts,
-// any future manual sandbox provisioner) can guarantee the same initial tree
+// Exported wrapper so other entry points (e.g. any future manual sandbox
+// provisioner) can guarantee the same initial tree
 // emission as the implicit auto-create path inside resolveSandbox.
 export async function emitInitialFileTree(sbx: Sandbox, config: LangGraphRunnableConfig) {
   try {
