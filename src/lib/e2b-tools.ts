@@ -110,7 +110,40 @@ const runCommand = tool(
   async ({ command }: { command: string }, config: LangGraphRunnableConfig) => {
     config.writer?.({ type: 'tool_progress', tool: 'e2b_run_command', args: { command }, message: `Running: ${command}`, status: 'running' });
     const sbx = await resolveSandbox(config);
-    const result = await sbx.commands.run(command, { timeoutMs: 60000 });
+    // Per-command timeout: long enough for typical builds (npm install, dev
+    // server startup) but short enough that a hung process doesn't kill the
+    // whole agent run. If `sbx.commands.run` exceeds this it throws a
+    // TimeoutError — caught below and returned as an error string so the
+    // model can react (try a different approach) instead of the graph dying
+    // with `[deadline_exceeded]`.
+    const COMMAND_TIMEOUT_MS = 60_000;
+    let result;
+    try {
+      result = await sbx.commands.run(command, { timeoutMs: COMMAND_TIMEOUT_MS });
+    } catch (err) {
+      const e = err as { name?: string; message?: string; result?: { stdout?: string; stderr?: string } };
+      const isTimeout = (e.name ?? '').includes('Timeout') || /timed out|deadline/i.test(e.message ?? '');
+      if (isTimeout) {
+        const partialOut = e.result?.stdout ?? '';
+        const partialErr = e.result?.stderr ?? '';
+        const errorOutput =
+          `ERROR: command exceeded ${COMMAND_TIMEOUT_MS / 1000}s timeout and was killed. ` +
+          `If this was a long-running process (dev server, polling trigger, interactive REPL), ` +
+          `run it with '&' or 'nohup ... &' to background it. ` +
+          `If this was 'n8n execute' on a credential-required workflow, skip the execute — ` +
+          `it hangs waiting for OAuth. Partial output:\n` +
+          `${partialOut ? `STDOUT (last 200 chars): ${partialOut.slice(-200)}\n` : ''}` +
+          `${partialErr ? `STDERR (last 200 chars): ${partialErr.slice(-200)}` : ''}`;
+        config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: `TIMEOUT after ${COMMAND_TIMEOUT_MS / 1000}s` });
+        return errorOutput;
+      }
+      // Non-timeout errors: also return as a string instead of throwing, so
+      // the agent loop continues and the model can try a different command.
+      const message = e.message ?? String(err);
+      const errorOutput = `ERROR: ${message.slice(0, 500)}`;
+      config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: `FAILED: ${message.slice(0, 200)}` });
+      return errorOutput;
+    }
     if (result.exitCode !== 0) {
       const errorOutput = `ERROR (exit ${result.exitCode}):\n${result.stderr || result.stdout || 'Unknown error'}`;
       config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: `FAILED: ${errorOutput.slice(0, 200)}` });

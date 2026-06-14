@@ -66,13 +66,13 @@ The workflow object MUST have a top-level \`id\` field — \`n8n import:workflow
 2. \`e2b_write_file("/home/user/workflow.json", <json>)\`
 3. \`e2b_run_command("n8n import:workflow --input=/home/user/workflow.json")\` — capture the printed workflow id.
 4. \`e2b_run_command("n8n update:workflow --id=<id> --active=true")\` to activate.
-5. \`e2b_run_command("n8n execute --id=<id>")\` to run a manual test and read the result.
-6. Report the workflow id + tell the user to log into the UI with \`admin@codevibe.com\` / \`CodeVibe@2025\` to see/edit it.
+5. **DO NOT run \`n8n execute\`** unless every node in the workflow can run without credentials. Most useful workflows have credential-dependent nodes (Google Sheets, Slack, Gmail, HTTP with auth, any OAuth-based trigger) — \`n8n execute\` hangs trying to authenticate or waits on a polling trigger that needs credentials, and the command times out at 60s, killing the whole run. Skip step 5 entirely for any workflow whose trigger or actions need OAuth/API keys/credentials. Only use \`n8n execute\` for workflows built ENTIRELY from no-credential nodes (Schedule Trigger, Manual Trigger, Set, Code, IF, plain HTTP to public APIs).
+6. Report the workflow id + tell the user to log into the UI with \`admin@codevibe.com\` / \`CodeVibe@2025\` to see/edit it. Mention which nodes need credentials to be configured before the workflow can run.
 
 ## Error Handling
 - If \`n8n import:workflow\` fails with a JSON error, run \`validate_workflow\` (n8n-mcp) on the JSON first — catch shape errors before the CLI sees them.
 - If a node type isn't found, list installed packages: \`e2b_run_command("ls /usr/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes")\`.
-- For execution failures, the \`n8n execute\` output includes the failing node's error directly. Surface that to the user.
+- For execution failures, the \`n8n execute\` output includes the failing node's error directly. Surface that to the user — but again, only run \`n8n execute\` on credential-free workflows.
 
 ## Tools
 - \`e2b_run_command\`: shell access to the sandbox (n8n CLI, ls, cat).
