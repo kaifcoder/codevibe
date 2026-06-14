@@ -12,6 +12,7 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./N8nBuildCanvas.css";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 //
@@ -59,16 +60,21 @@ interface CodevibeNodeData extends Record<string, unknown> {
   label: string;
   nodeType: string;
   isPlaceholder?: boolean;
+  /** Per-node entry delay in ms. The container staggers nodes so they don't
+   *  all pop in at once — eye lands on each one in turn. */
+  enterDelayMs?: number;
 }
 
 function CodevibeNode({ data }: NodeProps) {
-  const { label, nodeType, isPlaceholder } = data as CodevibeNodeData;
+  const { label, nodeType, isPlaceholder, enterDelayMs } = data as CodevibeNodeData;
   const initial = label.trim().charAt(0).toUpperCase() || "?";
+  const delayStyle = enterDelayMs ? { animationDelay: `${enterDelayMs}ms` } : undefined;
   return (
     <div
-      className={`group relative flex flex-col items-center gap-1.5 transition-all ${
+      className={`codevibe-node-enter group relative flex flex-col items-center gap-1.5 ${
         isPlaceholder ? "opacity-60 animate-pulse" : "opacity-100"
       }`}
+      style={delayStyle}
     >
       <Handle
         type="target"
@@ -124,9 +130,15 @@ const nodeTypes = { codevibe: CodevibeNode };
 // During `exploring`, we have only nodeType strings — lay them out in a
 // horizontal row in the lower third (the "parking lot") so they read as
 // candidates that haven't been arranged yet.
+//
+// Per-node enterDelayMs staggers the entry animation so nodes land one
+// after another instead of all at once. Stagger is small enough (~70ms)
+// that the whole graph reveals over ~600-800ms — fast enough to feel
+// responsive, slow enough that the eye registers each landing.
 
 const PLACEHOLDER_Y = 320;
 const PLACEHOLDER_X_STEP = 140;
+const ENTRY_STAGGER_MS = 70;
 
 function buildExploringNodes(nodeTypes: string[]): Node[] {
   return nodeTypes.map((t, i) => ({
@@ -137,6 +149,7 @@ function buildExploringNodes(nodeTypes: string[]): Node[] {
       label: shortenType(t),
       nodeType: t,
       isPlaceholder: true,
+      enterDelayMs: i * ENTRY_STAGGER_MS,
     } as CodevibeNodeData,
   }));
 }
@@ -145,9 +158,6 @@ function buildDraftGraph(draft: { nodes: N8nNode[]; connections: N8nConnections 
   nodes: Node[];
   edges: Edge[];
 } {
-  // Normalize positions so the smallest x/y land at a comfortable margin.
-  // n8n positions are absolute and can land at weird coordinates — keep
-  // their relative shape, just shift into view.
   const xs = draft.nodes.map((n) => n.position[0]);
   const ys = draft.nodes.map((n) => n.position[1]);
   const minX = xs.length ? Math.min(...xs) : 0;
@@ -155,10 +165,17 @@ function buildDraftGraph(draft: { nodes: N8nNode[]; connections: N8nConnections 
   const offsetX = 80 - minX;
   const offsetY = 80 - minY;
 
-  // n8n IDs aren't guaranteed unique across all reasonable graphs (sometimes
-  // missing). Fall back to name as the React Flow id; we use name everywhere
-  // anyway because connections reference by name.
-  const nodes: Node[] = draft.nodes.map((n) => ({
+  // Order nodes left-to-right, top-to-bottom so the entry-stagger reads
+  // along the natural flow direction (trigger → action → fallback) rather
+  // than in arbitrary JSON order.
+  const sortedIndices = draft.nodes
+    .map((n, i) => ({ i, x: n.position[0], y: n.position[1] }))
+    .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x))
+    .map((entry) => entry.i);
+  const renderOrder = new Map<number, number>();
+  sortedIndices.forEach((origIdx, renderIdx) => renderOrder.set(origIdx, renderIdx));
+
+  const nodes: Node[] = draft.nodes.map((n, origIdx) => ({
     id: n.name,
     type: "codevibe",
     position: { x: n.position[0] + offsetX, y: n.position[1] + offsetY },
@@ -166,9 +183,14 @@ function buildDraftGraph(draft: { nodes: N8nNode[]; connections: N8nConnections 
       label: n.name,
       nodeType: n.type,
       isPlaceholder: false,
+      enterDelayMs: (renderOrder.get(origIdx) ?? 0) * ENTRY_STAGGER_MS,
     } as CodevibeNodeData,
   }));
 
+  // Edges: animate via `codevibe-edge` className so the path draws itself
+  // after the source node has had time to land. The 200ms hardcoded delay
+  // inside the CSS keyframe + the per-node entry stagger keeps edges
+  // landing slightly after their source tile finishes its entry.
   const edges: Edge[] = [];
   for (const [sourceName, conn] of Object.entries(draft.connections)) {
     const mainOutputs = conn.main?.[0] ?? [];
@@ -178,7 +200,8 @@ function buildDraftGraph(draft: { nodes: N8nNode[]; connections: N8nConnections 
         source: sourceName,
         target: target.node,
         type: "smoothstep",
-        animated: true,
+        animated: false, // we draw via stroke-dashoffset; no need for n8n's marching ants
+        className: "codevibe-edge",
         style: { stroke: "rgb(161 161 170)", strokeWidth: 1.5 },
       });
     }
@@ -205,8 +228,18 @@ function N8nBuildCanvasInner({ phase, exploredNodeTypes, draft }: N8nBuildCanvas
         ? `${draft?.nodes.length ?? 0} nodes · ${edges.length} connections`
         : "";
 
+  // When the parent flips phase to 'finalized', apply the fadeout class so
+  // opacity transitions to 0 over 360ms before the parent unmounts us. The
+  // parent is expected to keep this component mounted for ~400ms past the
+  // phase flip via a delayed-unmount effect (see use in chat/[id]/page.tsx).
+  const isFadingOut = phase === "finalized";
+
   return (
-    <div className="relative h-full w-full bg-zinc-950">
+    <div
+      className={`relative h-full w-full bg-zinc-950 ${
+        isFadingOut ? "codevibe-canvas-fadeout" : ""
+      }`}
+    >
       {/* Header */}
       <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur">
         <div className="flex flex-col">
@@ -216,8 +249,17 @@ function N8nBuildCanvasInner({ phase, exploredNodeTypes, draft }: N8nBuildCanvas
           )}
         </div>
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider">
-          <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-          <span className="text-amber-400">Building</span>
+          {isFadingOut ? (
+            <>
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <span className="text-emerald-400">Imported</span>
+            </>
+          ) : (
+            <>
+              <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-amber-400">Building</span>
+            </>
+          )}
         </div>
       </div>
       {/* Canvas */}
