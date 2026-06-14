@@ -16,6 +16,7 @@ import { GithubButton } from "@/components/GithubButton";
 import { TemplateApprovalCard } from "@/components/TemplateApprovalCard";
 import { SandboxExpiredPanel } from "@/components/SandboxExpiredPanel";
 import { BackendWarmingBanner } from "@/components/BackendWarmingBanner";
+import { N8nBuildCanvas } from "@/components/N8nBuildCanvas";
 import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
@@ -845,6 +846,23 @@ function ChatPage() {
           <div className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-16 w-16" />
           <p className="text-sm text-muted-foreground">Checking sandbox status...</p>
         </div>
+      );
+    }
+
+    // n8n build canvas — replaces the iframe while the agent is composing the
+    // workflow. Snaps from placeholders (exploring) to a positioned canonical
+    // graph (drafting) before handing off to the real n8n UI in the iframe
+    // once `workflowReady` flips phase to `finalized`.
+    if (
+      ctx.templateType === "n8n"
+      && (ctx.n8nBuildState.phase === "exploring" || ctx.n8nBuildState.phase === "drafting")
+    ) {
+      return (
+        <N8nBuildCanvas
+          phase={ctx.n8nBuildState.phase}
+          exploredNodeTypes={ctx.n8nBuildState.exploredNodeTypes}
+          draft={ctx.n8nBuildState.draft}
+        />
       );
     }
 
