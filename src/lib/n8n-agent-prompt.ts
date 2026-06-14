@@ -83,15 +83,19 @@ The n8n-mcp server gives you offline knowledge of all 1,650 n8n nodes. Use it to
 - \`search_nodes\`: full-text search across all 1,650 nodes. Start here when you need a node and don't know its exact type.
 - \`get_node\`: get node properties + examples for a specific node type (e.g. \`n8n-nodes-base.scheduleTrigger\`). Use this to look up exact \`parameters\` shape before writing the JSON.
 - \`validate_node\`: validate a single node config in isolation.
-- \`validate_workflow\`: validate a complete workflow JSON before importing. Run this every time before \`n8n import:workflow\` — catches typos in node types, missing required params, broken connections.
+- \`validate_workflow\`: optional pre-import sanity check. Run AT MOST ONCE before \`n8n import:workflow\` — if it returns errors, fix the obvious ones and import anyway. The n8n CLI is the source of truth; it'll reject anything actually broken with a precise error you can react to. Do NOT loop validate→rewrite→validate; that wastes turns on cosmetic issues the CLI doesn't care about.
 - \`search_templates\` + \`get_template\`: 2,352 curated example workflows. Pull a template close to the user's ask and adapt it instead of building from scratch.
 
 ### Recommended order
 1. \`search_nodes\` or \`search_templates\` to discover.
 2. \`get_node\` for each node type you'll use, to get the canonical \`parameters\` shape.
 3. Assemble workflow JSON.
-4. \`validate_workflow\` until clean.
+4. (Optional) \`validate_workflow\` ONCE. Don't re-validate after fixes — proceed to import.
 5. \`e2b_write_file\` + \`n8n import:workflow --input=...\` + \`n8n update:workflow --active=true\` + \`n8n execute --id=...\`.
+6. **If \`n8n import:workflow\` returns an error, fix only that specific error and re-import.** Do NOT go back to \`validate_workflow\`.
+
+### Tool-loop discipline
+After a tool returns a result, your default action is to **proceed to the next step**, not re-run the same tool with adjusted args. If you've called \`validate_workflow\` once and it returned errors, your next action is \`e2b_write_file\` + \`n8n import:workflow\` — NOT another \`validate_workflow\` call. The CLI's error message tells you exactly what's wrong if anything is.
 `;
 
   if (sbxId) {

@@ -176,6 +176,11 @@ const sandboxAwarePrompt = dynamicSystemPromptMiddleware(
 // langgraph's startup window — blocking the JS process from reporting ready,
 // which makes Render's port detector kill the container. Loading on first
 // model call defers that work until after the server is healthy.
+//
+// We DO kick off the load asynchronously at module init (without awaiting)
+// so the first n8n turn doesn't pay the 3-5s SQLite warmup at user wait time.
+// The eager call hits getN8nTools()'s in-flight promise; lazy callers either
+// resolve immediately (warm) or await the same promise (still warming).
 let n8nToolsPromise: Promise<unknown[]> | null = null;
 function getN8nTools(): Promise<unknown[]> {
   if (!n8nToolsPromise) {
@@ -187,6 +192,16 @@ function getN8nTools(): Promise<unknown[]> {
   }
   return n8nToolsPromise;
 }
+
+// Fire-and-forget pre-warm. Schedules the n8n-mcp stdio subprocess to spin up
+// shortly after the agent server reports ready — so the first n8n turn finds
+// tools already loaded instead of paying the warmup cost at the user's wait.
+// setTimeout(0) defers past the langgraph startup health check.
+setTimeout(() => {
+  getN8nTools().catch(() => {
+    /* error already logged inside getN8nTools */
+  });
+}, 0);
 
 const n8nMcpToolsMiddleware = createMiddleware({
   name: 'n8nMcpTools',
