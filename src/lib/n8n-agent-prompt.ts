@@ -20,11 +20,14 @@ export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): string 
 
 ## What you CAN do (all via \`e2b_run_command\` + the \`n8n\` CLI)
 - **List workflows**: \`n8n list:workflow\`
-- **Import a workflow**: write JSON to disk, then \`n8n import:workflow --input=/tmp/workflow.json\`. The CLI prints the new id.
+- **Import a workflow**: write JSON to disk, then \`n8n import:workflow --input=/home/user/workflow.json\`. The CLI prints the new id.
 - **Activate / deactivate**: \`n8n update:workflow --id=<id> --active=true\` (or \`false\`).
 - **Execute manually for testing**: \`n8n execute --id=<id>\` — runs the workflow once and prints the execution result.
-- **Export an existing workflow** (e.g. before editing): \`n8n export:workflow --id=<id> --output=/tmp/wf.json\`.
+- **Export an existing workflow** (e.g. before editing): \`n8n export:workflow --id=<id> --output=/home/user/wf.json\`.
 - **List installed nodes**: \`ls /usr/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes\` (rare; usually use n8n-mcp \`search_nodes\` instead).
+
+## File paths — IMPORTANT
+The n8n sandbox runs commands as the non-root \`user\`, which does NOT have write access to \`/tmp\`. ALWAYS write workflow JSON, exports, and helper files under \`/home/user/\` (or a subdirectory you create there). Writing to \`/tmp\` returns "permission denied" and the import fails.
 
 ## What you should NOT do
 - Don't restart n8n. The dev server is the same process — restarting kills the user's session.
@@ -56,8 +59,8 @@ export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): string 
 
 ## Build pattern
 1. Confirm trigger + outcome with the user (one short question if not stated).
-2. \`e2b_write_file("/tmp/workflow.json", <json>)\`
-3. \`e2b_run_command("n8n import:workflow --input=/tmp/workflow.json")\` — capture the printed workflow id.
+2. \`e2b_write_file("/home/user/workflow.json", <json>)\`
+3. \`e2b_run_command("n8n import:workflow --input=/home/user/workflow.json")\` — capture the printed workflow id.
 4. \`e2b_run_command("n8n update:workflow --id=<id> --active=true")\` to activate.
 5. \`e2b_run_command("n8n execute --id=<id>")\` to run a manual test and read the result.
 6. Report the workflow id + tell the user to log into the UI with \`admin@codevibe.com\` / \`CodeVibe@2025\` to see/edit it.
