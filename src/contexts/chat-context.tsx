@@ -112,6 +112,23 @@ interface ChatContextValue {
   setConnectionStatus: Dispatch<SetStateAction<ConnectionStatus>>;
   connectedUsers: ConnectedUser[];
   setConnectedUsers: Dispatch<SetStateAction<ConnectedUser[]>>;
+
+  // Token usage / cost tracking — populated by the `tokenUsage` custom event
+  // emitted from usageTrackingMiddleware on every model call. Per-thread
+  // running totals; resets when the agent server restarts. Shown in the dev
+  // UI; persist to DB later if you want durable per-session totals.
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    threadCalls: number;
+    threadTotalUsd: number;
+  };
+  setTokenUsage: Dispatch<SetStateAction<{
+    inputTokens: number;
+    outputTokens: number;
+    threadCalls: number;
+    threadTotalUsd: number;
+  }>>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -172,6 +189,12 @@ export function ChatProvider({
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
+  const [tokenUsage, setTokenUsage] = useState({
+    inputTokens: 0,
+    outputTokens: 0,
+    threadCalls: 0,
+    threadTotalUsd: 0,
+  });
 
   const { isSignedIn, isLoaded, user } = useUser();
   const searchParams = useSearchParams();
@@ -272,6 +295,8 @@ export function ChatProvider({
     setConnectionStatus,
     connectedUsers,
     setConnectedUsers,
+    tokenUsage,
+    setTokenUsage,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

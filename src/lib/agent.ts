@@ -25,6 +25,7 @@ import {
   setThreadTemplate,
   type TemplateType,
 } from './sandbox-registry';
+import { usageTrackingMiddleware } from './usage-tracking';
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 
 // ─── Model ───────────────────────────────────────────────────────────────────
@@ -212,6 +213,7 @@ export const agent = createAgent({
   tools: [setTemplateTool, ...e2bTools],
   middleware: [
     sandboxAwarePrompt,
+    usageTrackingMiddleware,
     n8nMcpToolsMiddleware,
     userMcpToolsMiddleware,
     humanInTheLoopMiddleware({

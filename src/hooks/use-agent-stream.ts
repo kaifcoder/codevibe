@@ -65,6 +65,16 @@ interface RequiresMcpAuthEvent {
   authUrl: string;
 }
 
+interface TokenUsageEvent {
+  type: "tokenUsage";
+  threadId: string;
+  callCostUsd: number;
+  threadTotalUsd: number;
+  threadCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 type CustomEvent =
   | FileTreeSyncEvent
   | FileCreatedEvent
@@ -74,7 +84,8 @@ type CustomEvent =
   | ToolResultEvent
   | TemplateDecidedEvent
   | WorkflowReadyEvent
-  | RequiresMcpAuthEvent;
+  | RequiresMcpAuthEvent
+  | TokenUsageEvent;
 
 function findFileInTree(nodes: FileNode[], path: string): boolean {
   for (const node of nodes) {
@@ -276,6 +287,19 @@ export function useAgentStream() {
               window.open(event.authUrl, "_blank", "noopener,noreferrer");
             },
           },
+        });
+        break;
+      }
+
+      case "tokenUsage": {
+        // Per-thread running totals — already aggregated server-side, just
+        // mirror the latest snapshot. UI components read this from context
+        // to render a running cost indicator.
+        c.setTokenUsage({
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
+          threadCalls: event.threadCalls,
+          threadTotalUsd: event.threadTotalUsd,
         });
         break;
       }
