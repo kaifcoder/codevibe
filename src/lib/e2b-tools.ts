@@ -160,6 +160,34 @@ const writeFile = tool(
     // fileTreeSync rescans. The actual content lives in Yjs (below).
     config.writer?.({ type: 'fileCreated', filePath: path });
 
+    // n8n workflow detection: if the file looks like an n8n workflow JSON
+    // (path matches *workflow*.json AND content parses with the n8n shape),
+    // emit a `workflowDraft` event so the frontend can render the canonical
+    // workflow on its custom canvas before the import lands. The agent calls
+    // this tool ~5–10s before `n8n import:workflow`, so this is the earliest
+    // point at which we know the workflow's final shape. Pure best-effort —
+    // any parse error is silent (the file write itself already succeeded).
+    if (/workflow.*\.json$/i.test(path)) {
+      try {
+        const parsed = JSON.parse(content);
+        const looksLikeN8nWorkflow =
+          parsed && typeof parsed === 'object'
+          && Array.isArray(parsed.nodes)
+          && parsed.connections
+          && typeof parsed.connections === 'object';
+        if (looksLikeN8nWorkflow) {
+          config.writer?.({
+            type: 'workflowDraft',
+            name: typeof parsed.name === 'string' ? parsed.name : 'Workflow',
+            nodes: parsed.nodes,
+            connections: parsed.connections,
+          });
+        }
+      } catch {
+        /* not a JSON file or malformed — skip silently */
+      }
+    }
+
     // Yjs mirror + compile-error check are independent — run them in parallel
     // so the tool doesn't block the agent for ~3s per file write. Still
     // awaited (not fire-and-forget) because Monaco loads file content from

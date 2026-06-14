@@ -75,6 +75,33 @@ interface TokenUsageEvent {
   outputTokens: number;
 }
 
+interface N8nWorkflowNode {
+  id?: string;
+  name: string;
+  type: string;
+  typeVersion?: number;
+  position: [number, number];
+  parameters?: Record<string, unknown>;
+}
+
+interface N8nWorkflowConnections {
+  [sourceNodeName: string]: {
+    main?: Array<Array<{ node: string; type: string; index: number }>>;
+  };
+}
+
+interface WorkflowDraftEvent {
+  type: "workflowDraft";
+  name: string;
+  nodes: N8nWorkflowNode[];
+  connections: N8nWorkflowConnections;
+}
+
+interface NodeExploringEvent {
+  type: "nodeExploring";
+  nodeType: string;
+}
+
 type CustomEvent =
   | FileTreeSyncEvent
   | FileCreatedEvent
@@ -85,7 +112,9 @@ type CustomEvent =
   | TemplateDecidedEvent
   | WorkflowReadyEvent
   | RequiresMcpAuthEvent
-  | TokenUsageEvent;
+  | TokenUsageEvent
+  | WorkflowDraftEvent
+  | NodeExploringEvent;
 
 function findFileInTree(nodes: FileNode[], path: string): boolean {
   for (const node of nodes) {
@@ -273,6 +302,9 @@ export function useAgentStream() {
         c.setN8nWorkflowId(event.workflowId);
         c.setActiveTab("live preview");
         c.setIframeLoading(true);
+        // Build canvas hand-off: flip the n8n build canvas to `finalized` so
+        // the layout swaps from custom React Flow to the n8n iframe.
+        c.setN8nBuildState((prev) => ({ ...prev, phase: "finalized" }));
         break;
       }
 
@@ -300,6 +332,39 @@ export function useAgentStream() {
           outputTokens: event.outputTokens,
           threadCalls: event.threadCalls,
           threadTotalUsd: event.threadTotalUsd,
+        });
+        break;
+      }
+
+      case "nodeExploring": {
+        // Agent called n8n-mcp `get_node` for a node type — track it so the
+        // build canvas can show a placeholder for that type during the
+        // exploring phase. Idempotent: same nodeType called twice doesn't
+        // duplicate.
+        c.setN8nBuildState((prev) => {
+          if (prev.exploredNodeTypes.includes(event.nodeType)) return prev;
+          return {
+            ...prev,
+            phase: prev.phase === "idle" ? "exploring" : prev.phase,
+            exploredNodeTypes: [...prev.exploredNodeTypes, event.nodeType],
+          };
+        });
+        break;
+      }
+
+      case "workflowDraft": {
+        // Agent wrote a workflow.json — the canonical structure is now known.
+        // Snap from `exploring` (placeholders) to `drafting` (positioned
+        // canonical workflow). The build canvas reads this draft state to
+        // render the final layout before the iframe takes over.
+        c.setN8nBuildState({
+          phase: "drafting",
+          exploredNodeTypes: [],
+          draft: {
+            name: event.name,
+            nodes: event.nodes,
+            connections: event.connections,
+          },
         });
         break;
       }
