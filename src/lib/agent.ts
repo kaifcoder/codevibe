@@ -211,22 +211,6 @@ const n8nMcpToolsMiddleware = createMiddleware({
     return handler({ ...request, tools: [...request.tools, ...tools] as typeof request.tools });
   },
   wrapToolCall: async (request, handler) => {
-    // Surface n8n-mcp `get_node` calls as a `nodeExploring` event so the
-    // frontend's build canvas can show a placeholder for that node type
-    // before the canonical workflow.json arrives. This is the "exploring"
-    // phase of the build animation — fires ~5–15s before the workflowDraft.
-    const toolName = request.toolCall.name;
-    if (toolName === 'get_node') {
-      const args = request.toolCall.args as { nodeType?: string } | undefined;
-      const nodeType = args?.nodeType;
-      if (nodeType) {
-        const cfg = request.runtime?.configurable as Record<string, unknown> | undefined;
-        const writer = (request.runtime as { writer?: (e: Record<string, unknown>) => void } | undefined)?.writer
-          ?? (cfg?.writer as ((e: Record<string, unknown>) => void) | undefined);
-        writer?.({ type: 'nodeExploring', nodeType });
-      }
-    }
-
     if (request.tool) return handler(request);
     const tools = (await getN8nTools()) as Array<{ name: string }>;
     const match = tools.find((t) => t.name === request.toolCall.name);

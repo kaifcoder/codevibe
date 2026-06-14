@@ -129,50 +129,6 @@ interface ChatContextValue {
     threadCalls: number;
     threadTotalUsd: number;
   }>>;
-
-  // n8n build canvas state — drives the custom React Flow canvas that shows
-  // the agent's workflow being assembled before the n8n iframe loads. Phase
-  // transitions:
-  //   idle      — no n8n activity yet
-  //   exploring — agent has called get_node on at least one node type;
-  //               canvas shows pulsing placeholders
-  //   drafting  — agent has written workflow.json; canvas shows the canonical
-  //               workflow with positioned nodes and connections
-  //   finalized — `workflowReady` fired; iframe takes over
-  n8nBuildState: {
-    phase: "idle" | "exploring" | "drafting" | "finalized";
-    exploredNodeTypes: string[];
-    draft: {
-      name: string;
-      nodes: Array<{
-        id?: string;
-        name: string;
-        type: string;
-        typeVersion?: number;
-        position: [number, number];
-      }>;
-      connections: Record<string, {
-        main?: Array<Array<{ node: string; type: string; index: number }>>;
-      }>;
-    } | null;
-  };
-  setN8nBuildState: Dispatch<SetStateAction<{
-    phase: "idle" | "exploring" | "drafting" | "finalized";
-    exploredNodeTypes: string[];
-    draft: {
-      name: string;
-      nodes: Array<{
-        id?: string;
-        name: string;
-        type: string;
-        typeVersion?: number;
-        position: [number, number];
-      }>;
-      connections: Record<string, {
-        main?: Array<Array<{ node: string; type: string; index: number }>>;
-      }>;
-    } | null;
-  }>>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -238,27 +194,6 @@ export function ChatProvider({
     outputTokens: 0,
     threadCalls: 0,
     threadTotalUsd: 0,
-  });
-  const [n8nBuildState, setN8nBuildState] = useState<{
-    phase: "idle" | "exploring" | "drafting" | "finalized";
-    exploredNodeTypes: string[];
-    draft: {
-      name: string;
-      nodes: Array<{
-        id?: string;
-        name: string;
-        type: string;
-        typeVersion?: number;
-        position: [number, number];
-      }>;
-      connections: Record<string, {
-        main?: Array<Array<{ node: string; type: string; index: number }>>;
-      }>;
-    } | null;
-  }>({
-    phase: "idle",
-    exploredNodeTypes: [],
-    draft: null,
   });
 
   const { isSignedIn, isLoaded, user } = useUser();
@@ -362,8 +297,6 @@ export function ChatProvider({
     setConnectedUsers,
     tokenUsage,
     setTokenUsage,
-    n8nBuildState,
-    setN8nBuildState,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

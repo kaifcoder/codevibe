@@ -16,7 +16,6 @@ import { GithubButton } from "@/components/GithubButton";
 import { TemplateApprovalCard } from "@/components/TemplateApprovalCard";
 import { SandboxExpiredPanel } from "@/components/SandboxExpiredPanel";
 import { BackendWarmingBanner } from "@/components/BackendWarmingBanner";
-import { N8nBuildCanvas } from "@/components/N8nBuildCanvas";
 import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
@@ -304,26 +303,6 @@ function ChatPage() {
   // from here instead of the e2b URL so the n8n auth cookie lands first-party
   // (browsers block third-party cookies in iframes even with SameSite=None).
   const [n8nClaimUrl, setN8nClaimUrl] = useState<string | null>(null);
-  // Build-canvas hand-off latch: stays true while the n8n build canvas is
-  // active (exploring/drafting) AND for ~400ms past the phase flip to
-  // 'finalized', so the canvas can run its CSS fade-out before the iframe
-  // takes over. Without this latch, the canvas unmounts the instant the
-  // workflowReady event arrives and the user sees a hard cut to the iframe.
-  const [keepBuildCanvasMounted, setKeepBuildCanvasMounted] = useState(false);
-  useEffect(() => {
-    const phase = ctx.n8nBuildState.phase;
-    if (phase === "exploring" || phase === "drafting") {
-      setKeepBuildCanvasMounted(true);
-      return;
-    }
-    if (phase === "finalized" && keepBuildCanvasMounted) {
-      // Already mounted — hold for the fade-out duration then unmount.
-      const timer = setTimeout(() => setKeepBuildCanvasMounted(false), 400);
-      return () => clearTimeout(timer);
-    }
-    // 'idle' or fresh-mount on 'finalized' — no canvas to keep.
-    if (phase === "idle") setKeepBuildCanvasMounted(false);
-  }, [ctx.n8nBuildState.phase, keepBuildCanvasMounted]);
 
   // --- Refs for one-shot effects ---
   const didInitRef = useRef(false);
@@ -866,22 +845,6 @@ function ChatPage() {
           <div className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-16 w-16" />
           <p className="text-sm text-muted-foreground">Checking sandbox status...</p>
         </div>
-      );
-    }
-
-    // n8n build canvas — replaces the iframe while the agent is composing the
-    // workflow. Snaps from placeholders (exploring) to a positioned canonical
-    // graph (drafting) before handing off to the real n8n UI in the iframe
-    // once `workflowReady` flips phase to `finalized`. The keepBuildCanvasMounted
-    // latch holds the canvas in the DOM ~400ms past the phase flip so its
-    // CSS fade-out can play before the iframe takes over.
-    if (ctx.templateType === "n8n" && keepBuildCanvasMounted) {
-      return (
-        <N8nBuildCanvas
-          phase={ctx.n8nBuildState.phase}
-          exploredNodeTypes={ctx.n8nBuildState.exploredNodeTypes}
-          draft={ctx.n8nBuildState.draft}
-        />
       );
     }
 
