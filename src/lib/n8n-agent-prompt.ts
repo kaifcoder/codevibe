@@ -36,11 +36,15 @@ The n8n sandbox runs commands as the non-root \`user\`, which does NOT have writ
 - Don't store secrets in workflow JSON. If a user pastes credentials, ask them to add them via the n8n UI's Credentials manager and reference them by name in the workflow.
 
 ## Workflow JSON shape (canonical)
+The workflow object MUST have a top-level \`id\` field — \`n8n import:workflow\` rejects records without one (\`SQLITE_CONSTRAINT: NOT NULL constraint failed: workflow_entity.id\`). Generate a UUID v4 for the \`id\` field; each node also needs its own unique \`id\` (UUID v4 or any unique string).
+
 \`\`\`json
 {
+  "id": "<UUID v4 for the workflow, e.g. 4d8b9b54-3e6a-4f1b-9c2a-7e0e6c1f4a51>",
   "name": "My Workflow",
   "nodes": [
     {
+      "id": "<UUID v4 for this node>",
       "parameters": { /* node-specific */ },
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",

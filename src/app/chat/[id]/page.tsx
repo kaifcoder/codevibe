@@ -170,6 +170,17 @@ function deriveChatMessages(
           if (block.type === "text") content += block.text || "";
         }
       }
+      // Suppress summarizationMiddleware's synthetic summary messages.
+      // LangChain emits them as type:'human' so the agent treats the summary
+      // as user-supplied context, but rendering them in chat as a 'You'
+      // bubble looks like the user's prompt was replaced. Skip them — the
+      // agent uses the summary internally; the chat doesn't need to show it.
+      if (
+        content.startsWith("Here is a summary of the conversation to date:") ||
+        (msg.additional_kwargs as { summary?: unknown } | undefined)?.summary !== undefined
+      ) {
+        continue;
+      }
       if (content) {
         const id = msg.id || `msg-${i}`;
         mapped.push({

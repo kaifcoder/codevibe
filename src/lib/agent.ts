@@ -252,7 +252,15 @@ export const agent = createAgent({
     }),
     summarizationMiddleware({
       model,
-      trigger: { tokens: 50000 },
+      // Raised from 50000 to 120000. Summarization works correctly but the
+      // synthesized 'summary' message is rendered as a 'You' user bubble in
+      // the chat (LangChain emits it as type:'human'), which looks broken to
+      // demo viewers. For typical codevibe sessions (<30 turns, ~50-80K total
+      // tokens) summarization shouldn't fire at all — pushing the trigger
+      // above the practical session size keeps the chat clean. Re-evaluate
+      // once we have actual long-running sessions and the frontend renders
+      // summaries as a proper system/info message instead of a user message.
+      trigger: { tokens: 120000 },
       keep: { messages: 12 },
     }),
   ],
