@@ -313,6 +313,144 @@ const deleteFile = tool(
   }
 );
 
+// ─── e2b_patch_file ────────────────────────────────────────────────────────
+//
+// Targeted in-place edits via search-and-replace blocks. Far cheaper in
+// output tokens than rewriting a 5k-token file when only 20 lines change,
+// and immune to the "JSX truncation → cat >> EOF" loop we kept seeing
+// because the model can't accidentally drop a closing tag — old_string
+// must match verbatim or the patch errors back to the model.
+//
+// Format mirrors Claude Code / Cursor: each edit is { oldString, newString }.
+// `oldString` must match EXACTLY once unless `replaceAll` is set; if it
+// doesn't appear, or appears multiple times without replaceAll, the tool
+// returns a hard error so the model retries with more context instead of
+// silently smearing the file. Multiple edits in one call are applied in
+// order against the same buffer — a later edit can see the result of an
+// earlier one in the same call.
+
+interface PatchEdit {
+  oldString: string;
+  newString: string;
+  replaceAll?: boolean;
+}
+
+function applyEdits(content: string, edits: PatchEdit[]): { ok: true; result: string; applied: number } | { ok: false; error: string } {
+  let buf = content;
+  let applied = 0;
+  for (let i = 0; i < edits.length; i++) {
+    const edit = edits[i];
+    if (!edit.oldString) {
+      return { ok: false, error: `Edit #${i + 1}: oldString is empty (use e2b_write_file to create a new file).` };
+    }
+    if (edit.oldString === edit.newString) {
+      return { ok: false, error: `Edit #${i + 1}: oldString === newString — nothing to do.` };
+    }
+    if (edit.replaceAll) {
+      const before = buf;
+      buf = buf.split(edit.oldString).join(edit.newString);
+      if (buf === before) {
+        return { ok: false, error: `Edit #${i + 1}: oldString not found in file. Re-read the file and use the EXACT text (including indentation).` };
+      }
+      applied++;
+      continue;
+    }
+    const first = buf.indexOf(edit.oldString);
+    if (first === -1) {
+      return { ok: false, error: `Edit #${i + 1}: oldString not found. Re-read the file and copy the EXACT text (including whitespace and indentation). First 80 chars of oldString: ${JSON.stringify(edit.oldString.slice(0, 80))}` };
+    }
+    const second = buf.indexOf(edit.oldString, first + edit.oldString.length);
+    if (second !== -1) {
+      return { ok: false, error: `Edit #${i + 1}: oldString matches multiple times. Add more surrounding context (full lines above/below) so it's unique, or set replaceAll: true if you want every occurrence replaced.` };
+    }
+    buf = buf.slice(0, first) + edit.newString + buf.slice(first + edit.oldString.length);
+    applied++;
+  }
+  return { ok: true, result: buf, applied };
+}
+
+const patchFile = tool(
+  async (
+    { path, edits }: { path: string; edits: PatchEdit[] },
+    config: LangGraphRunnableConfig,
+  ) => {
+    if (!Array.isArray(edits) || edits.length === 0) {
+      return 'ERROR: edits must be a non-empty array of { oldString, newString } objects.';
+    }
+    const sbx = await resolveSandbox(config);
+    config.writer?.({ type: 'tool_progress', tool: 'e2b_patch_file', args: { path, count: edits.length }, message: `Patching ${path} (${edits.length} edit${edits.length === 1 ? '' : 's'})...`, status: 'running' });
+
+    let original: string;
+    try {
+      original = await sbx.files.read(path);
+    } catch (err) {
+      const msg = (err as Error).message ?? String(err);
+      const errOut = `ERROR: could not read ${path} — ${msg.slice(0, 200)}. Use e2b_write_file to create a new file.`;
+      config.writer?.({ type: 'tool_result', tool: 'e2b_patch_file', args: { path }, result: errOut.slice(0, 200) });
+      return errOut;
+    }
+
+    const outcome = applyEdits(original, edits);
+    if (!outcome.ok) {
+      config.writer?.({ type: 'tool_result', tool: 'e2b_patch_file', args: { path }, result: `FAILED: ${outcome.error.slice(0, 160)}` });
+      return `ERROR patching ${path}: ${outcome.error}`;
+    }
+    if (outcome.result === original) {
+      config.writer?.({ type: 'tool_result', tool: 'e2b_patch_file', args: { path }, result: 'No-op (file unchanged)' });
+      return `No-op: ${path} unchanged after applying edits.`;
+    }
+
+    await sbx.files.write(path, outcome.result);
+    config.writer?.({ type: 'fileCreated', filePath: path });
+
+    // Mirror the new content into Yjs so collaborators / Monaco see the
+    // result without waiting for a rescan. Same pattern as e2b_write_file.
+    const sessionId = config.configurable?.sessionId as string | undefined;
+    if (sessionId) {
+      try {
+        await writeToYjsRoom(`${sessionId}-${path}`, outcome.result);
+      } catch (err) {
+        console.warn('[e2b_patch_file] Yjs mirror failed:', path, '-', (err as Error).message);
+      }
+    }
+
+    const result = `Patched ${path} — applied ${outcome.applied}/${edits.length} edit${edits.length === 1 ? '' : 's'} (${original.length} → ${outcome.result.length} chars).`;
+    config.writer?.({ type: 'tool_result', tool: 'e2b_patch_file', args: { path }, result });
+    return result;
+  },
+  {
+    name: 'e2b_patch_file',
+    description:
+      'Apply one or more search-and-replace edits to an EXISTING file. Cheaper than rewriting a full file when only a few lines change, and impossible to truncate JSX. ' +
+      'For each edit, oldString must match the file EXACTLY (whitespace and indentation included) and uniquely — add surrounding context lines if the snippet alone appears more than once. ' +
+      'Use replaceAll: true to replace every occurrence (e.g. renaming an identifier across the file). ' +
+      'If you need to create a NEW file, use e2b_write_file instead. If the change is large enough that picking small unique snippets is awkward, prefer e2b_write_file.',
+    schema: z.object({
+      path: z.string().min(1).describe('File path to patch (must already exist).'),
+      edits: z
+        .array(
+          z.object({
+            oldString: z
+              .string()
+              .min(1)
+              .describe(
+                'Exact text to find in the file. Must include enough surrounding context to be unique. Whitespace, indentation, and newlines must match verbatim.',
+              ),
+            newString: z
+              .string()
+              .describe('Replacement text. Use an empty string to delete the matched region.'),
+            replaceAll: z
+              .boolean()
+              .optional()
+              .describe('If true, replace every occurrence of oldString. Defaults to false (must match exactly once).'),
+          }),
+        )
+        .min(1)
+        .describe('Ordered list of edits. Each later edit sees the result of all earlier edits in the same call.'),
+    }),
+  },
+);
+
 const listFilesRecursive = tool(
   async ({ rootPath = '/home/user', excludePaths }: {
     rootPath?: string;
@@ -408,4 +546,4 @@ const listFilesRecursive = tool(
   }
 );
 
-export const e2bTools = [runCommand, writeFile, readFile, listFiles, deleteFile, listFilesRecursive];
+export const e2bTools = [runCommand, writeFile, patchFile, readFile, listFiles, deleteFile, listFilesRecursive];

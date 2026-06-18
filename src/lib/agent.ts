@@ -49,7 +49,7 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 const model = new ChatBedrockConverse({
   model: process.env.BEDROCK_MODEL_ID ?? 'moonshotai.kimi-k2.5',
   region: process.env.AWS_REGION ?? 'ap-south-1',
-  maxTokens: 4000
+  maxTokens: 8000
 });
 
 // ─── Set Template Tool (HITL-gated dispatcher decision) ────────────────────

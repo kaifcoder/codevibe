@@ -79,9 +79,10 @@ The sandbox image already has these. Importing them works out of the box; runnin
 
 ## Incremental Editing (CRITICAL)
 When modifying an existing file:
-- e2b_read_file → modify content → e2b_write_file with complete new content
-- Only change what's needed - keep existing code intact
-- For page.tsx updates, just add the new import + component usage
+- **Small change (a few lines, an import, a prop, a string)**: use \`e2b_patch_file\` with one or more search-and-replace edits. Do NOT re-read the file first — supply enough context in \`oldString\` to be unique.
+- **Large change (rewriting most of the file, restructuring components)**: use \`e2b_read_file\` → modify content → \`e2b_write_file\` with complete new content.
+- For \`page.tsx\` updates that just add a new import + component usage, ALWAYS prefer \`e2b_patch_file\`.
+- NEVER use \`cat >>\`, \`echo >>\`, \`tail\`, \`head -n -3\`, or \`sed\` on \`.ts\`/\`.tsx\`/\`.jsx\`/\`.js\` files via \`e2b_run_command\` to "fix" them. Append-style shell hacks corrupt JSX. Use \`e2b_patch_file\` (small change) or \`e2b_write_file\` (full rewrite) instead.
 
 ## Common Mistakes to Avoid
 - ❌ Writing everything in a single page.tsx (split into components!)
@@ -120,7 +121,8 @@ When a tool returns an error (e.g. "COMPILATION ERROR DETECTED" or "ERROR (exit 
 ${sandboxUrl ? `**URL:** ${sandboxUrl}` : ''}
 
 **Tools:**
-- \`e2b_write_file\`: Create or overwrite files (read first if modifying existing file)
+- \`e2b_write_file\`: Create a new file, or fully rewrite an existing one (read first if doing a major rewrite).
+- \`e2b_patch_file\`: Apply targeted search-and-replace edits to an existing file (preferred for small changes — adding an import, swapping a prop, fixing one line). Each edit is { oldString, newString } where \`oldString\` must match the file verbatim and uniquely. Multiple edits in one call are applied in order.
 - \`e2b_read_file\`: Read file content
 - \`e2b_run_command\`: Shell commands (npm install only)
 - \`e2b_list_files\`: List directory (rarely needed)

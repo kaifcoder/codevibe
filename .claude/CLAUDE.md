@@ -108,6 +108,7 @@ import { api } from "@/trpc/server"   // server-side (RSC)
 |------|---------|
 | `e2b_run_command` | Execute shell commands in sandbox |
 | `e2b_write_file` | Create/overwrite files (emits codePatch events) |
+| `e2b_patch_file` | Targeted search-and-replace edits to existing files (cheap; preferred for small changes) |
 | `e2b_read_file` | Read file contents |
 | `e2b_list_files` | List directory contents |
 | `e2b_delete_file` | Delete files/directories |
