@@ -461,16 +461,74 @@ export function useAgentStream() {
     },
   });
 
-  // Attempt to rejoin a running stream on mount (page refresh)
-  const rejoinAttemptedRef = useRef(false);
+  // useStream's exact return type varies by generic params; access dynamic
+  // fields (toolCalls, joinStream, switchThread, client) through an `any` cast.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s = stream as any;
+
+  // ─── Rejoin on refresh ─────────────────────────────────────────────────
+  // On a hard refresh `runId` resets to null in state and only repopulates
+  // after `chat-context` rehydrates from the DB or a peer's Yjs broadcast
+  // arrives. The earlier one-shot rejoin missed that window. Two paths now:
+  //
+  //   1. Whenever ctx.runId transitions from null → real, joinStream to it.
+  //      Covers the Yjs-peer-still-running and the DB-restored cases.
+  //   2. When threadId hydrates but we still don't see a runId, ask the
+  //      agent server directly for any pending/running run on this thread
+  //      and join the most recent. Covers the "I refreshed mid-run while
+  //      the only tab was mine" case where the broadcast YMap doesn't
+  //      help — there's no peer to mirror from.
+  const rejoinedRunIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (rejoinAttemptedRef.current) return;
-    rejoinAttemptedRef.current = true;
-    const rid = ctxRef.current.runId;
-    if (rid && stream.joinStream) {
-      stream.joinStream(rid);
+    const rid = ctx.runId;
+    if (!rid || !s.joinStream) return;
+    if (rejoinedRunIdsRef.current.has(rid)) return;
+    rejoinedRunIdsRef.current.add(rid);
+    try {
+      s.joinStream(rid);
+    } catch (err) {
+      console.error("[useStream] joinStream(local) failed:", err);
     }
-  }, [stream]);
+  }, [ctx.runId, s.joinStream, s]);
+
+  const fallbackProbedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const tid = ctx.threadId;
+    if (!tid || !s.client?.runs?.list || !s.joinStream) return;
+    // Already have a runId being rejoined by the effect above, or we've
+    // already probed for this thread — skip.
+    if (ctx.runId) return;
+    if (fallbackProbedRef.current === tid) return;
+    fallbackProbedRef.current = tid;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        // Pending runs first (queued but not yet started); then running.
+        const candidates = (
+          await Promise.all([
+            s.client.runs.list(tid, { status: "pending", limit: 1 }),
+            s.client.runs.list(tid, { status: "running", limit: 1 }),
+          ])
+        ).flat() as Array<{ run_id: string }>;
+        if (cancelled || candidates.length === 0) return;
+        const live = candidates[0];
+        if (!live?.run_id) return;
+        if (rejoinedRunIdsRef.current.has(live.run_id)) return;
+        rejoinedRunIdsRef.current.add(live.run_id);
+        ctxRef.current.setRunId(live.run_id);
+        s.joinStream(live.run_id);
+      } catch (err) {
+        // Auth / network — silent. The user can always retry by sending a
+        // new message; this is a best-effort restore.
+        console.error("[useStream] runs.list probe failed:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.threadId, ctx.runId, s, s.client, s.joinStream]);
 
   // Auto-rejoin when tab becomes visible
   useEffect(() => {
@@ -484,11 +542,6 @@ export function useAgentStream() {
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [stream]);
-
-  // useStream's exact return type varies by generic params; access dynamic
-  // fields (toolCalls, joinStream, switchThread) through an `any` cast.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const s = stream as any;
 
   // Keep joinStream callable from inside the broadcast observer without
   // re-binding the observer every render (joinStream's identity changes).
