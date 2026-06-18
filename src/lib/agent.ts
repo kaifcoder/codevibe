@@ -275,4 +275,4 @@ export const agent = createAgent({
     }),
   ],
   version: 'v1',
-}).withConfig({ recursionLimit: 60 });
+}).withConfig({ recursionLimit: 120 });

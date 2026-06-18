@@ -197,6 +197,12 @@ export function useAgentStream() {
     };
   }, []);
 
+  // Hoisted ref for the stream's submit function — assigned after useStream
+  // returns (see below). Pre-declared here so error/event callbacks
+  // (onError) can reference it without hitting a TDZ on the initial render.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const submitRef = useRef<((values: any, options?: any) => void) | null>(null);
+
   // Tracks the threadId we've already persisted for this session so we don't
   // re-PATCH (and bump updatedAt) when useStream emits onThreadId with the
   // same id on every revisit. Updated synchronously in render to mirror the
@@ -396,6 +402,62 @@ export function useAgentStream() {
     },
     onError: (error: unknown) => {
       console.error("[useStream] Error:", error);
+      if (!mountedRef.current) return;
+
+      const msg = error instanceof Error ? error.message : String(error);
+
+      // Hard caps the agent server can return. We surface each as a
+      // distinct, actionable toast — the recursion / call-limit cases
+      // are recoverable: the thread checkpointer keeps state, so the
+      // user can resume by sending "continue" on the same thread and a
+      // fresh run starts with a full budget.
+      const isRecursion = /recursion limit|GRAPH_RECURSION_LIMIT/i.test(msg);
+      const isCallLimit =
+        /ModelCallLimit|ToolCallLimit|call limit/i.test(msg);
+      const isRateLimit = /rate limit|429/i.test(msg);
+
+      if (isRecursion || isCallLimit) {
+        const submit = submitRef.current;
+        toast.error("Agent paused — too many steps", {
+          id: "agent-step-cap",
+          description:
+            "I hit the per-run step cap. Click Continue to resume from where I left off, or rephrase the request to be more specific.",
+          duration: 12_000,
+          action: submit
+            ? {
+                label: "Continue",
+                onClick: () => {
+                  submit({
+                    messages: [
+                      {
+                        type: "human",
+                        content: "Continue from where you left off.",
+                      },
+                    ],
+                  });
+                },
+              }
+            : undefined,
+        });
+        return;
+      }
+
+      if (isRateLimit) {
+        toast.error("You're going too fast", {
+          id: "agent-rate-limit",
+          description: "Wait a minute before sending another request.",
+          duration: 8_000,
+        });
+        return;
+      }
+
+      // Unknown / network / model failures — show enough detail to help
+      // a user retry without dumping a full stack into a notification.
+      toast.error("Agent error", {
+        id: "agent-error",
+        description: msg.slice(0, 200),
+        duration: 10_000,
+      });
     },
   });
 
@@ -496,6 +558,11 @@ export function useAgentStream() {
     }
     rawSubmitRef.current(values, options);
   }, []);
+
+  // Mirror the queue-aware submit into the pre-declared ref so onError
+  // (which closes over submitRef before useStream returns) can resume the
+  // run after a recursion / call-limit stop.
+  submitRef.current = wrappedSubmit;
 
   // Drain one item per isLoading→false transition. Submitting flips
   // isLoading back to true, which prevents this effect from re-firing
