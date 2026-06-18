@@ -80,6 +80,63 @@ function blank(): ThreadUsage {
   };
 }
 
+// ─── Fire-and-forget ingest to Next.js ─────────────────────────────────────
+//
+// We POST one row per model call to /api/ingest/usage with a 1.5s timeout.
+// Failures are swallowed (logged, never thrown) — this is observability,
+// not the source of truth for the agent run.
+
+const INGEST_TIMEOUT_MS = 1_500;
+
+interface UsageIngestPayload {
+  userId: string;
+  threadId: string;
+  sessionId?: string;
+  modelId?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  costUsd: number;
+}
+
+async function postUsageIngest(payload: UsageIngestPayload): Promise<void> {
+  const appUrl =
+    process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? null;
+  const secret = process.env.INTERNAL_AGENT_SECRET;
+  if (!appUrl || !secret) {
+    // No place to send to (local dev or misconfigured). The console.log
+    // above is still grep-able, so we lose nothing critical.
+    return;
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), INGEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${appUrl}/api/ingest/usage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      console.error(
+        '[usage-ingest] non-2xx:',
+        res.status,
+        await res.text().catch(() => ''),
+      );
+    }
+  } catch (err) {
+    // Don't propagate — agent runs must not fail because the ingest endpoint
+    // is slow or down.
+    console.error('[usage-ingest] failed:', (err as Error).message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ─── Middleware ─────────────────────────────────────────────────────────────
 //
 // Wraps every model call: extract usage from the response, compute cost
@@ -176,6 +233,25 @@ export const usageTrackingMiddleware = createMiddleware({
         threadCalls: cur.modelCalls,
       }),
     );
+
+    // Fire-and-forget POST to the Vercel ingest endpoint so a Usage row
+    // gets persisted per call. The agent process MUST NOT touch Postgres
+    // directly (separate Render deployment, separate concerns); HTTP keeps
+    // the boundary clean and means a Vercel outage degrades gracefully —
+    // we lose one row, the agent run still completes.
+    if (userId) {
+      void postUsageIngest({
+        userId,
+        threadId,
+        sessionId,
+        modelId,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens: cacheRead,
+        cacheCreateTokens: cacheCreate,
+        costUsd: Number(cost.toFixed(6)),
+      });
+    }
 
     // Forward a custom event to the frontend so the running total can be
     // shown in the UI (dev builds only — gated client-side; emitting is

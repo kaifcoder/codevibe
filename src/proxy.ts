@@ -66,12 +66,16 @@ function isPublicSessionRead(req: Request): boolean {
   return /^\/api\/session\/[^/]+\/?$/.test(url.pathname)
 }
 
-// /api/mcp/internal/* are server-to-server routes used by the langgraph-api
-// container to read/write MCP credentials. They authenticate via a shared
-// INTERNAL_AGENT_SECRET (route handler validates), not via Clerk.
+// /api/mcp/internal/* and /api/ingest/* are server-to-server routes used by
+// the langgraph-api container to read/write MCP credentials and emit
+// usage/abuse signals. They authenticate via a shared INTERNAL_AGENT_SECRET
+// (route handler validates), not via Clerk.
 function isInternalMcpRoute(req: Request): boolean {
   const url = new URL(req.url)
-  return url.pathname.startsWith('/api/mcp/internal/')
+  return (
+    url.pathname.startsWith('/api/mcp/internal/')
+    || url.pathname.startsWith('/api/ingest/')
+  )
 }
 
 export default clerkMiddleware(async (auth, req) => {

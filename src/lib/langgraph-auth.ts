@@ -47,6 +47,46 @@ function getRedis(): Redis | null {
   return redis;
 }
 
+// ─── Fire-and-forget abuse signals → Next.js ingest ────────────────────────
+//
+// The Next.js side owns Postgres + Slack alerting. We POST a JSON signal
+// here when we spot abuse; Vercel persists an AbuseEvent row (with cooldown
+// dedupe) and triggers a Slack message. Failures are swallowed — abuse
+// tracking must never break a request that already passed auth checks.
+
+const ABUSE_INGEST_TIMEOUT_MS = 1_500;
+
+type AbuseKind = 'rate_limit' | 'auth_failed' | 'sandbox_spam' | 'cost_spike';
+
+async function postAbuseSignal(
+  userId: string,
+  kind: AbuseKind,
+  message: string,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
+  const appUrl =
+    process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? null;
+  const secret = process.env.INTERNAL_AGENT_SECRET;
+  if (!appUrl || !secret) return;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ABUSE_INGEST_TIMEOUT_MS);
+  try {
+    await fetch(`${appUrl}/api/ingest/abuse`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify({ userId, kind, message, metadata }),
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    console.error('[abuse-ingest] failed:', (err as Error).message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ─── Rate limiter (fixed window, atomic INCR + EXPIRE) ──────────────────────
 
 const RATE_LIMIT = Number(process.env.AGENT_RATE_LIMIT ?? '60');
@@ -66,6 +106,17 @@ async function checkRateLimit(userId: string): Promise<void> {
       await r.expire(key, RATE_WINDOW_SEC + 1);
     }
     if (count > RATE_LIMIT) {
+      // Fire abuse signal exactly once per window — count === RATE_LIMIT + 1
+      // is the first request that *trips* the cap; later trips in the same
+      // bucket re-trigger this branch but Vercel's cooldown dedupes them
+      // server-side anyway.
+      if (count === RATE_LIMIT + 1) {
+        void postAbuseSignal(userId, 'rate_limit', `Hit ${RATE_LIMIT} req / ${RATE_WINDOW_SEC}s`, {
+          count,
+          limit: RATE_LIMIT,
+          windowSec: RATE_WINDOW_SEC,
+        });
+      }
       throw new HTTPException(429, {
         message: `Rate limit exceeded: ${RATE_LIMIT} requests per ${RATE_WINDOW_SEC}s`,
       });
@@ -109,6 +160,38 @@ async function verifyClerkJwt(token: string): Promise<AuthedUser> {
   }
 }
 
+// ─── Auth-failure burst tracking ────────────────────────────────────────────
+//
+// Counts JWT verification failures by token-prefix (no PII) so a brute force
+// or spammed-bad-token attack surfaces one Slack alert per window instead of
+// silently 401'ing in the logs.
+
+const AUTH_FAIL_THRESHOLD = Number(process.env.AGENT_AUTH_FAIL_THRESHOLD ?? '5');
+const AUTH_FAIL_WINDOW_SEC = 60;
+
+async function recordAuthFailure(tokenPrefix: string): Promise<void> {
+  const r = getRedis();
+  if (!r) return;
+  const bucket = Math.floor(Date.now() / 1000 / AUTH_FAIL_WINDOW_SEC);
+  const key = `cv:auth:fail:${tokenPrefix}:${bucket}`;
+  try {
+    const count = await r.incr(key);
+    if (count === 1) await r.expire(key, AUTH_FAIL_WINDOW_SEC + 1);
+    if (count === AUTH_FAIL_THRESHOLD) {
+      // Cross the threshold exactly once per window. Vercel has its own
+      // cooldown anyway, but this avoids sending N webhooks during a flood.
+      void postAbuseSignal(
+        `anon:${tokenPrefix}`,
+        'auth_failed',
+        `${AUTH_FAIL_THRESHOLD}+ JWT verification failures in ${AUTH_FAIL_WINDOW_SEC}s`,
+        { tokenPrefix, count, windowSec: AUTH_FAIL_WINDOW_SEC },
+      );
+    }
+  } catch (err) {
+    console.error('[langgraph-auth] auth-fail counter failed:', err);
+  }
+}
+
 // ─── Auth instance ──────────────────────────────────────────────────────────
 
 export const auth = new Auth()
@@ -133,7 +216,17 @@ export const auth = new Auth()
       throw new HTTPException(401, { message: 'Missing bearer token' });
     }
 
-    const user = await verifyClerkJwt(token);
+    let user: AuthedUser;
+    try {
+      user = await verifyClerkJwt(token);
+    } catch (err) {
+      // Track verification failures so a brute-force run shows up in Slack
+      // instead of vanishing into 401 noise. Use the first 8 chars of the
+      // (rejected) token as a coarse fingerprint — not PII, can't be used
+      // to recover the secret.
+      void recordAuthFailure(token.slice(0, 8));
+      throw err;
+    }
     await checkRateLimit(user.identity);
     return user;
   })
