@@ -3,6 +3,8 @@ import {
   createMiddleware,
   dynamicSystemPromptMiddleware,
   humanInTheLoopMiddleware,
+  modelCallLimitMiddleware,
+  toolCallLimitMiddleware,
   summarizationMiddleware,
   tool,
 } from 'langchain';
@@ -229,6 +231,14 @@ export const agent = createAgent({
   middleware: [
     sandboxAwarePrompt,
     usageTrackingMiddleware,
+    // Hard cost ceilings: a single agent run can never burn through more than
+    // these counts of model/tool calls, and an entire conversation (thread)
+    // tops out at the threadLimit. This is the cheap, deterministic backstop
+    // for the runaway-loop class of failure that recursionLimit alone misses
+    // (it resets every turn). Numbers are tuned to comfortably fit a normal
+    // build-a-Next.js-app session while killing prompt-injection loops fast.
+    modelCallLimitMiddleware({ runLimit: 50, threadLimit: 300 }),
+    toolCallLimitMiddleware({ runLimit: 200, threadLimit: 1500 }),
     n8nMcpToolsMiddleware,
     userMcpToolsMiddleware,
     humanInTheLoopMiddleware({

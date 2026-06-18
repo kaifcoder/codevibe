@@ -4,5 +4,26 @@
   "graphs": {
     "agent": "./src/lib/agent.ts:agent"
   },
+  "auth": {
+    "path": "./src/lib/langgraph-auth.ts:auth"
+  },
+  "http": {
+    "middleware_order": "auth_first",
+    "cors": {
+      "allow_origins": [
+        "http://localhost:3000",
+        "https://codevibeai.tech",
+        "https://www.codevibeai.tech",
+        "https://codevibe.mohdkaif.me",
+        "https://codevibe-drk.vercel.app"
+      ],
+      "allow_methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      "allow_headers": ["Authorization", "Content-Type", "X-Internal-Secret"],
+      "allow_credentials": true,
+      "max_age": 600
+    },
+    "disable_meta": true,
+    "disable_assistants": true
+  },
   "env": ".env"
 }

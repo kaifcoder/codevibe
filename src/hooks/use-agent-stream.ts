@@ -1,6 +1,7 @@
 "use client";
 
 import { useStream } from "@langchain/langgraph-sdk/react";
+import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useChat } from "@/contexts/chat-context";
@@ -153,6 +154,27 @@ function findFirstFile(nodes: FileNode[]): string | null {
 export function useAgentStream() {
   const ctx = useChat();
   const { sessionId, threadId } = ctx;
+
+  // Clerk session JWT — fetched on demand and forwarded to every request the
+  // SDK makes to the LangGraph server (Render). The agent server's auth.ts
+  // verifies it via `verifyToken` before any /runs or /threads call lands.
+  // We use a custom fetch (not defaultHeaders) because session tokens rotate;
+  // re-evaluating getToken() per request keeps a long-lived stream from
+  // sending an expired token after Clerk silently refreshes.
+  const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+
+  const authedFetch = useMemo<typeof fetch>(() => {
+    return async (input, init) => {
+      const token = await getTokenRef.current?.().catch(() => null);
+      const headers = new Headers(init?.headers);
+      if (token && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+      return fetch(input, { ...init, headers });
+    };
+  }, []);
 
   // Session-wide Yjs Y.Map used to mirror the active runId between browsers
   // collaborating on this chat — see joinStream effect below.
@@ -308,6 +330,7 @@ export function useAgentStream() {
 
   const stream = useStream({
     apiUrl: AGENT_URL,
+    callerOptions: { fetch: authedFetch },
     assistantId: "agent",
     threadId: threadId ?? undefined,
     onThreadId: (id: string) => {
