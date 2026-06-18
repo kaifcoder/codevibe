@@ -16,6 +16,7 @@ import { BackendWarmup } from "@/components/backend-warmup";
 import { SettingsProvider } from "@/contexts/settings-context";
 import { getSiteUrl } from "@/lib/site-url";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import { Analytics } from '@vercel/analytics/next';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -152,6 +153,7 @@ export default function RootLayout({
               </SidebarProvider>
             </ThemeProvider>
             <SpeedInsights />
+            <Analytics />
           </body>
         </html>
       </TRPCReactProvider>
