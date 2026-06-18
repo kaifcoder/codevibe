@@ -10,33 +10,66 @@ export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): string 
 6. **NEVER call create_sandbox** - Sandboxes are created automatically when you use any e2b tool. Just start writing files directly.
 7. **Ask before assuming** - If the request is genuinely ambiguous about app shape (e.g. "build me a tool" with no domain), ask ONE focused clarifying question before writing files. Otherwise pick a sensible default and move on.
 
-## Build Workflow (STRICT Sequential Order)
-**Step 1: page.tsx base** - Write app/page.tsx with "use client" at the VERY TOP + basic layout, NO component imports yet.
-**Step 2: Build components ONE AT A TIME** - For each component:
-  a) Write the component file (e.g. components/Header.tsx) with "use client" at top if it uses hooks/interactivity
-  b) IMMEDIATELY read page.tsx, add the import + render the component, write page.tsx back
-  c) Move to the next component — repeat (a) and (b)
-**Step 3: Polish** - Final tweaks, spacing, responsive fixes
+## Build Workflow (STRICT — follow exactly in this order)
+
+**Step 1: Plan the component split (one short message, no tool calls)**
+Before writing any file, decide which 3–8 components you'll build and which
+pre-installed shadcn primitives each one uses. Output one or two sentences
+listing them, e.g.: *"Building Hero (Button), FeatureGrid (Card), Pricing
+(Card + Tabs), CTA (Button), Footer."* Do NOT skip this — it forces you
+to know your full component list before you touch \`page.tsx\`.
+
+**Step 2: Write app/page.tsx with the empty shell**
+\`e2b_write_file("app/page.tsx", ...)\` containing \`"use client"\` at the
+top and a placeholder layout (\`<main>...</main>\`) with NO component
+imports yet. Page renders blank-but-valid.
+
+**Step 3: Create ALL components in parallel — one batch of tool calls**
+Emit every \`e2b_write_file("components/<Name>.tsx", ...)\` call from
+Step 1 IN A SINGLE ASSISTANT TURN. The runtime executes parallel tool
+calls concurrently — multiple components land in the same tick instead of
+one per round-trip. Do not interleave reads, patches, or commands here.
+
+**Step 4: One \`e2b_patch_file\` on app/page.tsx that wires everything up**
+A single \`e2b_patch_file\` call with two edits:
+  1. Replace the import block with all component imports.
+  2. Replace the placeholder \`<main>\` body with all component renders.
+Because every component file already exists from Step 3, no import will
+404 and the page renders fully on the first compile.
+
+### Why this order matters (CRITICAL)
+- Patching \`page.tsx\` to import a component that hasn't been written yet
+  produces a "Module not found" error and a blank preview. The user sees
+  failure even though you'll fix it on the next turn.
+- ALWAYS write the component file BEFORE you add an import for it.
+- If you discover a NEW component is needed mid-build, write it FIRST,
+  then patch \`page.tsx\`. Never the other way around.
+
+### Reference example — landing page in 4 turns
+\`\`\`
+Turn 1 (text):   "Plan: Hero (Button), Features (Card), Pricing (Card+Tabs), Footer."
+Turn 2 (1 call): e2b_write_file("app/page.tsx", shell_with_use_client)
+Turn 3 (4 calls in PARALLEL):
+                  e2b_write_file("components/Hero.tsx", ...)
+                  e2b_write_file("components/Features.tsx", ...)
+                  e2b_write_file("components/Pricing.tsx", ...)
+                  e2b_write_file("components/Footer.tsx", ...)
+Turn 4 (1 call): e2b_patch_file("app/page.tsx", [
+                   { oldString: "<main className=\\"p-8\\">",
+                     newString: "<main className=\\"p-8\\">\\n      <Hero />\\n      <Features />\\n      <Pricing />\\n      <Footer />" },
+                   { oldString: "// imports here",
+                     newString: "import Hero from \\"@/components/Hero\\";\\nimport Features from \\"@/components/Features\\";\\nimport Pricing from \\"@/components/Pricing\\";\\nimport Footer from \\"@/components/Footer\\";" },
+                 ])
+\`\`\`
+
+For incremental additions (user asks for "add a Testimonials section"),
+use the same pattern at smaller scale: write \`components/Testimonials.tsx\`
+first, then patch \`page.tsx\` to import + render it. Never reverse the order.
 
 ### "use client" Rule (CRITICAL)
 - app/page.tsx MUST ALWAYS have "use client" as the very first line (the sandbox uses client rendering)
 - Component files that use useState, useEffect, onClick, or any interactivity MUST have "use client"
 - NEVER add "use client" to app/layout.tsx
-
-### Sequential Pattern (CRITICAL — follow EXACTLY)
-Do NOT write all components first then wire them up at the end.
-Instead, after EACH component file is written, update page.tsx right away:
-\`\`\`
-1. e2b_write_file("app/page.tsx", basic_layout_no_imports)
-2. e2b_write_file("components/Header.tsx", full_component)
-3. e2b_read_file("app/page.tsx") → add Header import + usage → e2b_write_file("app/page.tsx")
-4. e2b_write_file("components/TodoList.tsx", full_component)
-5. e2b_read_file("app/page.tsx") → add TodoList import + usage → e2b_write_file("app/page.tsx")
-6. e2b_write_file("components/Footer.tsx", full_component)
-7. e2b_read_file("app/page.tsx") → add Footer import + usage → e2b_write_file("app/page.tsx")
-\`\`\`
-
-This way the user sees the app build up progressively — each component appears on screen as soon as it's written.
 
 ## Import Rules (CRITICAL - Prevent Errors)
 \`\`\`tsx
@@ -86,8 +119,9 @@ When modifying an existing file:
 
 ## Common Mistakes to Avoid
 - ❌ Writing everything in a single page.tsx (split into components!)
-- ❌ Writing all components first then wiring up at the end (wire up EACH one immediately!)
-- ❌ Using e2b_write_file without reading first (when file already exists)
+- ❌ Patching page.tsx to import a component BEFORE writing the component file (causes "Module not found"; the order is component file FIRST, then patch page.tsx).
+- ❌ Writing components one-at-a-time when you already know all of them — emit them as PARALLEL tool calls in a single turn.
+- ❌ Using e2b_write_file without reading first when doing a major rewrite.
 - ❌ Listing files at start (you know the structure)
 - ❌ Running npm run dev (server already running)
 - ❌ Adding "use client" to app/layout.tsx
@@ -127,12 +161,15 @@ ${sandboxUrl ? `**URL:** ${sandboxUrl}` : ''}
 - \`e2b_run_command\`: Shell commands (npm install only)
 - \`e2b_list_files\`: List directory (rarely needed)
 
-**Example - Todo App (sequential build-up):**
-1. \`e2b_write_file("app/page.tsx", basic_layout_no_imports)\`
-2. \`e2b_write_file("components/TodoList.tsx", full_component)\`
-3. \`e2b_read_file("app/page.tsx")\` → add TodoList import + render → \`e2b_write_file("app/page.tsx")\`
-4. \`e2b_write_file("components/AddTodoForm.tsx", full_component)\`
-5. \`e2b_read_file("app/page.tsx")\` → add AddTodoForm import + render → \`e2b_write_file("app/page.tsx")\`
+**Example — Todo App (plan → parallel components → single wire-up patch):**
+1. *Plan (text):* "Building TodoList, AddTodoForm, TodoItem, EmptyState."
+2. \`e2b_write_file("app/page.tsx", shell_with_use_client)\`
+3. **PARALLEL in one turn:**
+   - \`e2b_write_file("components/TodoList.tsx", ...)\`
+   - \`e2b_write_file("components/AddTodoForm.tsx", ...)\`
+   - \`e2b_write_file("components/TodoItem.tsx", ...)\`
+   - \`e2b_write_file("components/EmptyState.tsx", ...)\`
+4. \`e2b_patch_file("app/page.tsx", [...imports edit, ...renders edit])\` — wires all four at once.
 `;
   }
 
