@@ -85,3 +85,32 @@ export function hydrateThreadTemplate(
 export function getThreadSandbox(threadId: string): SandboxRegistryEntry | null {
   return getSandboxRegistry().get(threadId) ?? null;
 }
+
+// ─── In-flight provisioning de-dupe ─────────────────────────────────────────
+//
+// Holds a promise for the currently-running Sandbox.create() per thread, so
+// concurrent tool calls (e.g. four parallel e2b_write_file in one turn)
+// share one provision instead of each spinning up a separate sandbox. The
+// promise is cleared the moment it settles, so a later expired-sandbox
+// respawn can run cleanly.
+
+const INFLIGHT_PROVISION_KEY = Symbol.for('codevibe.inflightProvision');
+
+function getInflightMap(): Map<string, Promise<unknown>> {
+  if (!(globalThis as any)[INFLIGHT_PROVISION_KEY]) {
+    (globalThis as any)[INFLIGHT_PROVISION_KEY] = new Map();
+  }
+  return (globalThis as any)[INFLIGHT_PROVISION_KEY];
+}
+
+export function getInflightProvision<T = unknown>(threadId: string): Promise<T> | null {
+  return (getInflightMap().get(threadId) as Promise<T> | undefined) ?? null;
+}
+
+export function setInflightProvision<T>(threadId: string, p: Promise<T>): void {
+  getInflightMap().set(threadId, p as Promise<unknown>);
+}
+
+export function clearInflightProvision(threadId: string): void {
+  getInflightMap().delete(threadId);
+}

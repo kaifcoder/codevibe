@@ -9,11 +9,39 @@ import {
   registerSandbox,
   resolveTemplateType,
   TEMPLATE_CONFIG,
+  getInflightProvision,
+  setInflightProvision,
+  clearInflightProvision,
 } from './sandbox-registry';
 import { writeToYjsRoom } from './server-yjs-writer';
 import { scanSandboxToTree } from './sandbox-scan';
 
-async function resolveSandbox(config: LangGraphRunnableConfig) {
+async function resolveSandbox(config: LangGraphRunnableConfig): Promise<Sandbox> {
+  // De-dupe concurrent provisioning per thread. With the parallel-component
+  // workflow (multiple e2b_write_file tool calls in one assistant turn), N
+  // copies of this function fire at once — without this guard, each one
+  // finds the registry empty, calls Sandbox.create(), and we end up with
+  // N sandboxes for a single thread (and burned E2B credits).
+  //
+  // The first concurrent caller stores its in-flight promise on the registry
+  // entry; subsequent callers await it and reuse the result. Once it
+  // resolves we clear the field so future expired-sandbox respawns work.
+  const threadId = config.configurable?.thread_id as string;
+  const inflight = getInflightProvision<Sandbox>(threadId);
+  if (inflight) return inflight;
+
+  const promise: Promise<Sandbox> = (async () => {
+    try {
+      return await resolveSandboxInner(config);
+    } finally {
+      clearInflightProvision(threadId);
+    }
+  })();
+  setInflightProvision(threadId, promise);
+  return promise;
+}
+
+async function resolveSandboxInner(config: LangGraphRunnableConfig): Promise<Sandbox> {
   const threadId = config.configurable?.thread_id as string;
   const entry = getThreadSandbox(threadId);
 
