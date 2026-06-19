@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Dispatch, SetStateAction, useRef, useEffect, useState, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { LucideSend, Bot, User, ChevronDown, ChevronRight, Brain, AlertCircle, Check, Terminal, Pencil, Eye, FolderOpen, Trash2, Globe, Search, Package, Box, Loader2 } from "lucide-react";
+import { LucideSend, Bot, User, ChevronDown, ChevronRight, Brain, AlertCircle, Check, Terminal, Pencil, Eye, FolderOpen, Trash2, Globe, Search, Package, Box, Loader2, Square } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -387,6 +387,7 @@ interface ChatPanelProps {
   message: string;
   setMessage: Dispatch<SetStateAction<string>>;
   onSend: () => void;
+  onStop?: () => void;
   isLoading?: boolean;
   isStreaming?: boolean;
   readOnly?: boolean;
@@ -462,6 +463,7 @@ export function ChatPanel({
   message,
   setMessage,
   onSend,
+  onStop,
   isStreaming,
   readOnly = false,
   queue,
@@ -529,20 +531,38 @@ export function ChatPanel({
               className="flex-1 min-h-[36px] max-h-[200px] resize-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent dark:bg-transparent px-0 py-2 leading-5"
               rows={1}
             />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!message.trim()}
-              className={cn(
-                "h-10 w-10 sm:h-8 sm:w-8 rounded-full shrink-0 transition-all",
-                !message.trim() && "opacity-50"
-              )}
-            >
-              <LucideSend className="w-4 h-4" />
-            </Button>
+            {isStreaming && onStop ? (
+              // Streaming: send button becomes a stop button. type="button" so it
+              // doesn't trigger the form's onSubmit; aria-label stays consistent
+              // for assistive tech.
+              <Button
+                type="button"
+                size="icon"
+                onClick={onStop}
+                aria-label="Stop run"
+                title="Stop run"
+                variant="destructive"
+                className="h-10 w-10 sm:h-8 sm:w-8 rounded-full shrink-0 transition-all"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!message.trim()}
+                aria-label="Send message"
+                className={cn(
+                  "h-10 w-10 sm:h-8 sm:w-8 rounded-full shrink-0 transition-all",
+                  !message.trim() && "opacity-50"
+                )}
+              >
+                <LucideSend className="w-4 h-4" />
+              </Button>
+            )}
           </form>
           <p className="text-[11px] text-muted-foreground mt-2 text-center">
-            {isStreaming ? "Messages will be queued and processed in order" : "Enter to send · Shift+Enter for new line"}
+            {isStreaming ? "Click stop to cancel · Type to queue a follow-up" : "Enter to send · Shift+Enter for new line"}
           </p>
         </div>
       )}

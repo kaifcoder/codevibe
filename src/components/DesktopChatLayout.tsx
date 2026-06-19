@@ -22,6 +22,7 @@ export interface DesktopChatLayoutProps {
   message: string;
   setMessage: Dispatch<SetStateAction<string>>;
   handleSend: () => void;
+  handleStop?: () => void;
   isLoading: boolean;
   isStreaming: boolean;
   renderPreview: () => React.ReactNode;
@@ -34,6 +35,7 @@ export function DesktopChatLayout({
   message,
   setMessage,
   handleSend,
+  handleStop,
   isLoading,
   isStreaming,
   renderPreview,
@@ -68,6 +70,7 @@ export function DesktopChatLayout({
             message={message}
             setMessage={setMessage}
             onSend={handleSend}
+            onStop={handleStop}
             isLoading={isLoading}
             isStreaming={isStreaming}
             queue={queue}

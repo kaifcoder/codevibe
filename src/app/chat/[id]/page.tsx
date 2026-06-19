@@ -438,6 +438,22 @@ function ChatPage() {
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
 
+  // Cancel the active run on the agent server. Best-effort: if stop()
+  // throws (e.g. server unreachable) we still surface a toast so the user
+  // knows. The server already releases the run lock asynchronously, so a
+  // failed stop() won't leave anything wedged.
+  const handleStop = useCallback(() => {
+    if (!stream.stop) return;
+    Promise.resolve(stream.stop())
+      .then(() => toast.success("Run stopped"))
+      .catch((err) => {
+        console.error("[handleStop] failed:", err);
+        toast.error("Couldn't stop the run", {
+          description: err instanceof Error ? err.message.slice(0, 200) : undefined,
+        });
+      });
+  }, [stream]);
+
   // --- HITL approval handlers (resume the run with approve / edit) ---
   const resumeWithDecision = useCallback(
     (decision: { type: "approve" } | { type: "edit"; editedAction: { name: string; args: Record<string, unknown> } }) => {
@@ -964,6 +980,7 @@ function ChatPage() {
               message={message}
               setMessage={setMessage}
               onSend={handleSend}
+              onStop={handleStop}
               isLoading={stream.isLoading}
               isStreaming={stream.isLoading}
               queue={stream.queue}
@@ -981,6 +998,7 @@ function ChatPage() {
           message={message}
           setMessage={setMessage}
           handleSend={handleSend}
+          handleStop={handleStop}
           isLoading={stream.isLoading}
           isStreaming={stream.isLoading}
           renderPreview={renderPreview}
@@ -996,6 +1014,7 @@ function ChatPage() {
         message={message}
         setMessage={setMessage}
         handleSend={handleSend}
+        handleStop={handleStop}
         isLoading={stream.isLoading}
         isStreaming={stream.isLoading}
         renderPreview={renderPreview}
