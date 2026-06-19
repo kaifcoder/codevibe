@@ -134,8 +134,58 @@ export async function emitInitialFileTree(sbx: Sandbox, config: LangGraphRunnabl
   }
 }
 
+// Commands the agent must NEVER run — the dev server is already running
+// inside the sandbox and these either waste 30+ seconds, break the
+// running server, or both. matchBlockedCommand() returns a short reason
+// string when the input matches; null otherwise. Match conservatively
+// — only obvious offenders. False positives are worse than letting a
+// rare legit case through.
+function matchBlockedCommand(raw: string): string | null {
+  // Normalize: strip leading shell wrappers like "bash -c '...'", and
+  // collapse multi-statement chains to inspect each piece.
+  const stripped = raw.replace(/^\s*(?:bash|sh|zsh)\s+-c\s+['"]?(.+?)['"]?\s*$/, '$1');
+  const segments = stripped.split(/&&|;|\|\||\|/).map((s) => s.trim()).filter(Boolean);
+  for (const seg of segments) {
+    // npm run build / next build / tsc — full project recompile that the
+    // dev server already does incrementally on every save.
+    if (/^(?:npm|pnpm|yarn|bun)\s+run\s+build\b/.test(seg)) {
+      return 'never run `npm run build` (or pnpm/yarn/bun equivalent)';
+    }
+    if (/^(?:npx\s+)?next\s+build\b/.test(seg)) {
+      return 'never run `next build`';
+    }
+    if (/^(?:npx\s+)?tsc(?:\s|$)/.test(seg)) {
+      return 'never run `tsc` — the dev server already type-checks via Next.js compiler';
+    }
+    // Starting another dev / start server — the existing one is on port 3000.
+    if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start)\b/.test(seg)) {
+      return 'never run `npm run dev` / `npm run start` — the dev server is already running on port 3000';
+    }
+    if (/^(?:npx\s+)?next\s+(?:dev|start)\b/.test(seg)) {
+      return 'never run `next dev` / `next start` — already running on port 3000';
+    }
+    // npm install / add: sometimes legitimate (user asks for a package
+    // not in the pre-installed list). Don't block — it's the agent's
+    // call. The prompt already discourages it for pre-installed deps.
+    // Leaving this branch out on purpose.
+  }
+  return null;
+}
+
 const runCommand = tool(
   async ({ command }: { command: string }, config: LangGraphRunnableConfig) => {
+    // Hard-block commands that always waste time / break the running dev
+    // server. The dev server (next dev, port 3000) is already running and
+    // hot-reloads on every e2b_write_file; running build / tsc / install
+    // here only burns the recursion budget without surfacing anything new.
+    // See RULE 0 in nextjs-agent-prompt.ts.
+    const blocked = matchBlockedCommand(command);
+    if (blocked) {
+      const errorOutput = `ERROR: ${blocked}. The dev server on port 3000 is already running and hot-reloads automatically. The post-write compile check inside e2b_write_file is the only build signal you need. Skip this command and continue with the next file change.`;
+      config.writer?.({ type: 'tool_result', tool: 'e2b_run_command', args: { command }, result: `BLOCKED: ${blocked}` });
+      return errorOutput;
+    }
+
     config.writer?.({ type: 'tool_progress', tool: 'e2b_run_command', args: { command }, message: `Running: ${command}`, status: 'running' });
     const sbx = await resolveSandbox(config);
     // Per-command timeout: long enough for typical builds (npm install, dev
