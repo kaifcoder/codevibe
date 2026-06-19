@@ -12,6 +12,14 @@ interface BackendWarmingBannerProps {
 // instead of frozen.
 export function BackendWarmingBanner({ warming }: BackendWarmingBannerProps) {
   const [seconds, setSeconds] = useState(0);
+  // Banner state derives from sessionStorage + an async probe in the parent
+  // hook, so its initial value differs between SSR and the client. Gate on
+  // a mount flag so the server always renders nothing — eliminates the
+  // hydration mismatch without changing observable runtime behavior.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!warming) {
@@ -22,7 +30,7 @@ export function BackendWarmingBanner({ warming }: BackendWarmingBannerProps) {
     return () => clearInterval(id);
   }, [warming]);
 
-  if (!warming) return null;
+  if (!mounted || !warming) return null;
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 text-xs border-b bg-amber-500/10 text-amber-700 dark:text-amber-300">

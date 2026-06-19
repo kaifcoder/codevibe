@@ -13,10 +13,12 @@ import {
   Timer,
   CloudSun,
   Sparkles,
+  ChevronDown,
 } from "lucide-react"
 import { useAuth, SignInButton, useClerk } from "@clerk/nextjs"
 import { useAgentReady } from "@/hooks/use-agent-ready"
 import { BackendWarmingBanner } from "@/components/BackendWarmingBanner"
+import LandingSections from "@/components/landing/LandingSections"
 
 
 
@@ -168,53 +170,68 @@ export default function HomePage() {
   ]
 
   return (
-    <div className="flex h-full rounded-b-lg bg-gradient-to-b from-white to-gray-50 dark:from-[#0a0a0a] dark:to-[#0f0f0f] dark:text-white relative overflow-hidden">
+    // The layout's wrapper applies overflow-hidden, so the page itself is
+    // the scroll container. h-full + overflow-y-auto turns the route into
+    // its own vertical scroller — hero is the first viewport, sections
+    // follow below.
+    <div
+      id="cv-scroll-root"
+      className="relative h-full overflow-y-auto overscroll-contain rounded-b-lg bg-white dark:bg-[#070708] dark:text-white"
+    >
+      {/* ─── Global atmosphere — one shared layer for the whole route ──── */}
+      {/* Fine line grid (0.5px) — readable but disappears against content. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 z-0 hidden dark:block"
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, rgba(255,255,255,0.035) 0.5px, transparent 0.5px), linear-gradient(to bottom, rgba(255,255,255,0.035) 0.5px, transparent 0.5px)",
+          backgroundSize: "56px 56px",
+          maskImage:
+            "radial-gradient(ellipse at 50% 30%, black 30%, transparent 80%)",
+          WebkitMaskImage:
+            "radial-gradient(ellipse at 50% 30%, black 30%, transparent 80%)",
+        }}
+      />
+      {/* SVG noise grain — one shared sprite, very low opacity. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 z-0 hidden dark:block opacity-[0.045] mix-blend-overlay"
+        style={{
+          backgroundImage:
+            "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
+          backgroundSize: "160px 160px",
+        }}
+      />
+      {/* Subtle top-of-page color seam so the hero isn't isolated. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-x-0 top-0 h-px z-0 hidden dark:block bg-gradient-to-r from-transparent via-blue-500/40 to-transparent"
+      />
+
       <div className="absolute top-0 inset-x-0 z-50">
         <BackendWarmingBanner warming={agentReady.warming} />
       </div>
-      {/* Animated Background Effects */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {/* Gradient Orbs */}
+
+      {/* ─── HERO (preserved, just wrapped to be exactly one viewport) ─── */}
+      <section className="relative min-h-[calc(100svh-3rem)] flex overflow-hidden">
+        {/* Hero atmosphere — one rim-light orb + particles. The global noise */}
+        {/* + line grid live on the route wrapper (above) and bleed through. */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <motion.div
           animate={{
-            x: [0, 100, 0],
-            y: [0, 50, 0],
-            scale: [1, 1.2, 1],
+            x: [0, 60, 0],
+            y: [0, 30, 0],
+            scale: [1, 1.15, 1],
           }}
           transition={{
-            duration: 20,
+            duration: 24,
             repeat: Infinity,
             ease: "easeInOut",
           }}
-          className="absolute -top-40 -left-40 w-80 h-80 bg-blue-400/20 dark:bg-blue-600/10 rounded-full blur-3xl"
+          className="absolute -top-48 left-1/2 -translate-x-1/2 w-[42rem] h-[42rem] bg-blue-500/15 dark:bg-blue-500/[0.07] rounded-full blur-[120px]"
         />
-        <motion.div
-          animate={{
-            x: [0, -100, 0],
-            y: [0, 100, 0],
-            scale: [1, 1.3, 1],
-          }}
-          transition={{
-            duration: 25,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-          className="absolute -bottom-40 -right-40 w-96 h-96 bg-purple-400/20 dark:bg-purple-600/10 rounded-full blur-3xl"
-        />
-        <motion.div
-          animate={{
-            x: [0, -50, 0],
-            y: [0, -50, 0],
-            scale: [1, 1.1, 1],
-          }}
-          transition={{
-            duration: 18,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-          className="absolute top-1/2 right-1/4 w-72 h-72 bg-cyan-400/20 dark:bg-cyan-600/10 rounded-full blur-3xl"
-        />
-        
+
         {/* Floating Particles */}
         {particles.map((particle) => (
           <motion.div
@@ -236,9 +253,6 @@ export default function HomePage() {
             }}
           />
         ))}
-        
-        {/* Grid Pattern */}
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:14px_24px] dark:bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)]" />
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 relative z-10">
@@ -362,7 +376,31 @@ export default function HomePage() {
             </motion.div>
           </div>
         </motion.div>
-        
+
+        {/* Scroll cue — small affordance that there's more below the fold */}
+        <motion.button
+          type="button"
+          onClick={() => {
+            // Scroll the page (the route's own scroller) to the next viewport.
+            // Falls back to window for browsers without the new scrollIntoView.
+            const next = document.getElementById("landing-sections")
+            if (next) next.scrollIntoView({ behavior: "smooth", block: "start" })
+          }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.2, duration: 0.6 }}
+          className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 text-muted-foreground/70 hover:text-foreground transition-colors"
+          aria-label="Scroll to learn more"
+        >
+          <span className="font-mono text-[10px] uppercase tracking-[0.25em]">scroll</span>
+          <ChevronDown className="w-4 h-4 animate-bounce" />
+        </motion.button>
+      </div>
+      </section>
+
+      {/* ─── SCROLL-REVEAL SECTIONS ───────────────────────────────────── */}
+      <div id="landing-sections">
+        <LandingSections />
       </div>
     </div>
   )

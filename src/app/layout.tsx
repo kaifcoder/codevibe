@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import {
   ClerkProvider,
@@ -98,11 +99,18 @@ export default function RootLayout({
     >
       <TRPCReactProvider>
         <html lang="en" suppressHydrationWarning>
-          <head>
+          <body
+            className={`${geistSans.variable} ${geistMono.variable} antialiased h-screen w-full overflow-hidden`}
+          >
             {/* SoftwareApplication JSON-LD for rich search results.
-                Server-rendered so the URL resolves correctly on Vercel. */}
-            <script
+                Uses next/script so React 19 / Next 16 don't reject the
+                inline <script> child. strategy="afterInteractive" is fine
+                — search crawlers parse the rendered HTML, not the runtime
+                state, and Next still ships the tag in the initial HTML. */}
+            <Script
+              id="ld-software-application"
               type="application/ld+json"
+              strategy="afterInteractive"
               dangerouslySetInnerHTML={{
                 __html: JSON.stringify({
                   "@context": "https://schema.org",
@@ -117,10 +125,6 @@ export default function RootLayout({
                 }),
               }}
             />
-          </head>
-          <body
-            className={`${geistSans.variable} ${geistMono.variable} antialiased h-screen w-full overflow-hidden`}
-          >
             <ThemeProvider
               attribute="class"
               defaultTheme="system"
