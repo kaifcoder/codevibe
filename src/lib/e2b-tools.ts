@@ -164,6 +164,13 @@ function matchBlockedCommand(raw: string): string | null {
     if (/^(?:npx\s+)?next\s+(?:dev|start)\b/.test(seg)) {
       return 'never run `next dev` / `next start` — already running on port 3000';
     }
+    // curl/wget against the running dev server: races hot-reload and
+    // hangs the dev server when many fire in parallel from a single turn.
+    // The user can see the page in the live preview iframe; the agent
+    // doesn't need to poke it.
+    if (/\b(?:curl|wget|http|httpie|fetch)\b[^|;&]*\blocalhost(?::3000)?\b/.test(seg)) {
+      return 'never curl/wget the dev server on localhost:3000 — the user already sees it via the live preview iframe, and concurrent curls hang the dev server';
+    }
     // npm install / add: sometimes legitimate (user asks for a package
     // not in the pre-installed list). Don't block — it's the agent's
     // call. The prompt already discourages it for pre-installed deps.
@@ -290,34 +297,15 @@ const writeFile = tool(
       }
     })();
 
-    const ext = path.substring(path.lastIndexOf('.'));
-    const checkCompile = ['.tsx', '.ts', '.jsx', '.js'].includes(ext);
-    const compilePromise: Promise<string | null> = checkCompile
-      ? (async () => {
-          try {
-            const pageCheck = await sbx.commands.run(
-              `curl -s http://localhost:3000 2>/dev/null | grep -o 'Server Error\\|Unhandled Runtime Error\\|Module not found\\|SyntaxError\\|TypeError\\|Cannot find module' | head -1`,
-              { timeoutMs: 5000 }
-            );
-            if (!pageCheck.stdout || !pageCheck.stdout.trim()) return null;
-            const errorDetail = await sbx.commands.run(
-              `curl -s http://localhost:3000 2>/dev/null | grep -A5 -o 'Error:.*' | head -10`,
-              { timeoutMs: 5000 }
-            );
-            return errorDetail.stdout?.trim() || pageCheck.stdout.trim();
-          } catch {
-            return null;
-          }
-        })()
-      : Promise.resolve(null);
-
-    const [, compileError] = await Promise.all([yjsPromise, compilePromise]);
-
-    if (compileError) {
-      const result = `Wrote ${content.length} chars to ${path}\n\n⚠️ COMPILATION ERROR DETECTED:\n${compileError}\n\nPlease fix this error before continuing.`;
-      config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result: `WROTE but ERROR: ${compileError.slice(0, 100)}` });
-      return result;
-    }
+    // We deliberately do NOT poll the dev server for compile errors here.
+    // The old curl-based check fired 1-2 shell commands per write, and the
+    // new parallel-component workflow (multiple e2b_write_file in one turn)
+    // means 8-16 concurrent curls against the same dev server while it's
+    // hot-reloading — the dev server stalls, every curl times out at the
+    // 5s cap, and the agent gets a noisy false-positive while wall-clock
+    // time burns. RULE 0 says trust the dev server; the user sees real
+    // compile errors via the live-preview iframe overlay anyway.
+    await yjsPromise;
 
     const result = `Wrote ${content.length} chars to ${path}`;
     config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result });
@@ -325,7 +313,7 @@ const writeFile = tool(
   },
   {
     name: 'e2b_write_file',
-    description: 'Create or overwrite a file. Directories are created automatically. To edit a file, read it first, modify the content, then write the full file back. After writing .ts/.tsx files, checks for compilation errors and reports them.',
+    description: 'Create or overwrite a file. Directories are created automatically. To edit a file, read it first, modify the content, then write the full file back.',
     schema: z.object({
       path: z.string().min(1).describe('File path (e.g. "app/page.tsx")'),
       content: z.string().describe('Complete file content')
