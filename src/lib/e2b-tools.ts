@@ -272,19 +272,17 @@ const writeFile = tool(
     const sbx = await resolveSandbox(config);
     config.writer?.({ type: 'tool_progress', tool: 'e2b_write_file', args: { path }, message: `Writing ${path}...`, status: 'running' });
 
-    await sbx.files.write(path, content);
-
-    // Tell the frontend this file exists so the sidebar can show it before any
-    // fileTreeSync rescans. The actual content lives in Yjs (below).
-    config.writer?.({ type: 'fileCreated', filePath: path });
-
-    // Yjs mirror + compile-error check are independent — run them in parallel
-    // so the tool doesn't block the agent for ~3s per file write. Still
-    // awaited (not fire-and-forget) because Monaco loads file content from
-    // Yjs; if a user clicks the file before the mirror lands they see the
-    // empty doc.
+    // The sandbox write and the Yjs mirror are independent — fire both in
+    // parallel. The previous code awaited sbx.files.write THEN started Yjs,
+    // which serialized two ~100-300ms round-trips per write; with the
+    // parallel-component workflow (8+ writes in one turn), that adds up to
+    // a couple of seconds of pure wall-clock the agent waits on. Both still
+    // resolve before the tool returns so:
+    //   - Monaco never races a click against an empty Yjs doc
+    //   - the next tool call sees the file on disk
     const sessionId = config.configurable?.sessionId as string | undefined;
-    const yjsPromise: Promise<void> = (async () => {
+    const sandboxWrite = sbx.files.write(path, content);
+    const yjsMirror: Promise<void> = (async () => {
       if (!sessionId) {
         console.warn('[e2b_write_file] No sessionId in config.configurable — skipping Yjs mirror for', path);
         return;
@@ -297,15 +295,21 @@ const writeFile = tool(
       }
     })();
 
+    // Tell the frontend this file exists so the sidebar can show it before any
+    // fileTreeSync rescans. Emitting before the awaits lands the sidebar entry
+    // a touch sooner; the file content the user sees still comes from Yjs,
+    // which we await below.
+    config.writer?.({ type: 'fileCreated', filePath: path });
+
     // We deliberately do NOT poll the dev server for compile errors here.
     // The old curl-based check fired 1-2 shell commands per write, and the
-    // new parallel-component workflow (multiple e2b_write_file in one turn)
+    // parallel-component workflow (multiple e2b_write_file in one turn)
     // means 8-16 concurrent curls against the same dev server while it's
     // hot-reloading — the dev server stalls, every curl times out at the
     // 5s cap, and the agent gets a noisy false-positive while wall-clock
     // time burns. RULE 0 says trust the dev server; the user sees real
     // compile errors via the live-preview iframe overlay anyway.
-    await yjsPromise;
+    await Promise.all([sandboxWrite, yjsMirror]);
 
     const result = `Wrote ${content.length} chars to ${path}`;
     config.writer?.({ type: 'tool_result', tool: 'e2b_write_file', args: { path }, result });
