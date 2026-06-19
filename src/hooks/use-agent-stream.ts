@@ -458,6 +458,41 @@ export function useAgentStream() {
         description: msg.slice(0, 200),
         duration: 10_000,
       });
+
+      // Fire-and-forget Slack alert for the unknown-error branch only —
+      // recursion/call-limit/rate-limit are expected and already handled
+      // above. Anything that lands here is a real crash: Render SIGTERM
+      // cascade, model API outage, network blip mid-stream. We pass the
+      // thread/session/run ids so an oncall person can grep the agent
+      // logs without the user needing to file a ticket.
+      try {
+        const c = ctxRef.current;
+        const sid = sessionIdRef.current;
+        // Only signed-in flows have a Clerk session; the route's auth()
+        // check would 401 anonymous calls anyway, but skip the request
+        // entirely to keep the network panel clean.
+        const tok = getTokenRef.current?.();
+        Promise.resolve(tok).then((token) => {
+          if (!token) return;
+          authedFetch("/api/ingest/agent-crash", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              threadId: c.threadId ?? undefined,
+              sessionId: sid ?? undefined,
+              runId: c.runId ?? undefined,
+              message: msg.slice(0, 500),
+              context: {
+                name: error instanceof Error ? error.name : undefined,
+                userAgent:
+                  typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+              },
+            }),
+          }).catch(() => {});
+        });
+      } catch {
+        // Reporting must never throw into the host onError.
+      }
     },
   });
 

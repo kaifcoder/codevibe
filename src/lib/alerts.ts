@@ -55,7 +55,8 @@ export type AbuseKind =
   | "auth_failed"
   | "sandbox_spam"
   | "cost_spike"
-  | "token_spike";
+  | "token_spike"
+  | "agent_crash";
 
 interface RecordAbuseInput {
   userId: string;
@@ -134,6 +135,8 @@ function abuseEmoji(kind: AbuseKind): string {
       return "💸";
     case "token_spike":
       return "🧨";
+    case "agent_crash":
+      return "💥";
   }
 }
 

@@ -561,6 +561,16 @@ const listFilesRecursive = tool(
           config.writer?.({ type: 'tool_progress', tool: 'e2b_list_files_recursive', args: { rootPath }, message: `Scanned ${scannedDirs} directories...`, status: 'running' });
         }
 
+        // Yield to the JS event loop every 10 dirs so a deep tree can't
+        // monopolize it long enough to starve the LangGraph Python <-> JS
+        // healthcheck (which has a low read-timeout). Without this yield,
+        // a recursive scan over a fresh shadcn install (hundreds of dirs)
+        // can stall the event loop into a 503 and the host SIGTERMs the
+        // whole server mid-run.
+        if (scannedDirs % 10 === 0) {
+          await new Promise((r) => setImmediate(r));
+        }
+
         for (const file of files) {
           if (excludes.has(file.name)) continue;
 
@@ -604,7 +614,38 @@ const listFilesRecursive = tool(
 
     config.writer?.({ type: 'fileTreeSync', fileTree });
     config.writer?.({ type: 'tool_result', tool: 'e2b_list_files_recursive', args: { rootPath }, result: `Scanned ${scannedDirs} directories` });
-    return JSON.stringify(fileTree, null, 2);
+
+    // The frontend already received the full tree (with file contents) via
+    // the fileTreeSync writer event above. The model only needs a path list
+    // to know what's in the project — returning the full nested JSON used
+    // to produce 1–5MB strings on a fresh shadcn install, which (a) blew
+    // up the model's context window for a single tool call and (b) cost
+    // a synchronous JSON.stringify pass over a megabyte-scale tree on
+    // the JS event loop, contributing to LangGraph healthcheck timeouts.
+    const paths: string[] = [];
+    function collectPaths(nodes: FileInfo[]) {
+      for (const n of nodes) {
+        paths.push(n.type === 'folder' ? `${n.path}/` : n.path);
+        if (n.children) collectPaths(n.children);
+      }
+    }
+    collectPaths(fileTree);
+    paths.sort();
+    const MAX_BYTES = 8000;
+    let acc = '';
+    let truncatedAt = -1;
+    for (let i = 0; i < paths.length; i++) {
+      const next = acc + (acc ? '\n' : '') + paths[i];
+      if (next.length > MAX_BYTES) {
+        truncatedAt = i;
+        break;
+      }
+      acc = next;
+    }
+    if (truncatedAt >= 0) {
+      acc += `\n…and ${paths.length - truncatedAt} more (use e2b_list_files on a sub-path for details)`;
+    }
+    return `${paths.length} entries across ${scannedDirs} directories:\n${acc}`;
   },
   {
     name: 'e2b_list_files_recursive',
