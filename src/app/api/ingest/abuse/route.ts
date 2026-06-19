@@ -13,6 +13,7 @@ const ABUSE_KINDS = [
   "auth_failed",
   "sandbox_spam",
   "cost_spike",
+  "token_spike",
 ] as const satisfies readonly AbuseKind[];
 
 const AbusePayload = z.object({

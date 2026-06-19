@@ -50,7 +50,12 @@ async function postSlack(text: string, blocks?: unknown[]): Promise<void> {
 
 const ALERT_COOLDOWN_SEC = Number(process.env.ABUSE_ALERT_COOLDOWN_SEC ?? "300"); // 5 min
 
-export type AbuseKind = "rate_limit" | "auth_failed" | "sandbox_spam" | "cost_spike";
+export type AbuseKind =
+  | "rate_limit"
+  | "auth_failed"
+  | "sandbox_spam"
+  | "cost_spike"
+  | "token_spike";
 
 interface RecordAbuseInput {
   userId: string;
@@ -127,6 +132,8 @@ function abuseEmoji(kind: AbuseKind): string {
       return "📦";
     case "cost_spike":
       return "💸";
+    case "token_spike":
+      return "🧨";
   }
 }
 
@@ -163,6 +170,61 @@ export async function checkCostSpike(userId: string): Promise<void> {
       totalUsd: Number(totalUsd.toFixed(4)),
       calls,
       sinceIso: since.toISOString(),
+    },
+  });
+}
+
+// ─── Per-thread token-spike anomaly check ─────────────────────────────────
+//
+// Fires when a single chat thread accumulates more than TOKEN_SPIKE_PER_THREAD
+// tokens (input + output, all-time). This catches the "one chat consuming
+// 1M+ tokens" pattern — usually a runaway agent loop or a user iterating on
+// the same thread for far longer than is healthy. Cache reads/writes are
+// excluded because a long but well-cached conversation is fine; what we
+// care about is novel tokens billed on this thread.
+//
+// Cooldown keys on (userId:threadId, kind, window) so a noisy user with N
+// runaway threads gets one Slack ping per thread per cooldown window
+// instead of either flooding (key on thread alone, growing past the line
+// every call) or going silent (key on user alone, second runaway thread
+// suppressed).
+
+const TOKEN_SPIKE_PER_THREAD = Number(
+  process.env.TOKEN_SPIKE_PER_THREAD ?? "1000000",
+);
+
+export async function checkTokenSpike(
+  userId: string,
+  threadId: string,
+): Promise<void> {
+  if (!threadId) return;
+  const agg = await prisma.usage.aggregate({
+    where: { threadId },
+    _sum: { inputTokens: true, outputTokens: true, costUsd: true },
+    _count: { _all: true },
+  });
+  const inputTokens = agg._sum.inputTokens ?? 0;
+  const outputTokens = agg._sum.outputTokens ?? 0;
+  const totalTokens = inputTokens + outputTokens;
+  if (totalTokens < TOKEN_SPIKE_PER_THREAD) return;
+
+  const calls = agg._count._all;
+  const totalUsd = agg._sum.costUsd ?? 0;
+  await recordAbuseEvent({
+    // Per-thread bucket so multiple runaway threads from the same user each
+    // get their own alert window (see comment block above).
+    userId: `${userId}:${threadId}`,
+    kind: "token_spike",
+    message: `Thread ${threadId} consumed ${totalTokens.toLocaleString()} tokens across ${calls} calls (threshold ${TOKEN_SPIKE_PER_THREAD.toLocaleString()}).`,
+    metadata: {
+      userId,
+      threadId,
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      calls,
+      totalUsd: Number(totalUsd.toFixed(4)),
+      threshold: TOKEN_SPIKE_PER_THREAD,
     },
   });
 }

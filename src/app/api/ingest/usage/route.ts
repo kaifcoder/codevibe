@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/server/db";
 import { checkInternalAuth } from "@/lib/internal-auth";
-import { checkCostSpike } from "@/lib/alerts";
+import { checkCostSpike, checkTokenSpike } from "@/lib/alerts";
 
 // Internal-only ingest endpoint. The Render-deployed agent posts one row
 // per LLM call here so we can track per-user spend, build quotas, and
@@ -62,11 +62,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Database error" }, { status: 500 });
   }
 
-  // Fire-and-forget anomaly check — never block the agent on this. If the
-  // user crossed the hourly cost threshold, an AbuseEvent + Slack alert
-  // get recorded inside checkCostSpike (with cooldown).
+  // Fire-and-forget anomaly checks — never block the agent on these. Each
+  // check writes its own AbuseEvent + Slack alert (with cooldown) when it
+  // trips its threshold; failures are swallowed and logged.
   void checkCostSpike(data.userId).catch((e) =>
     console.error("[ingest/usage] cost spike check failed:", e),
+  );
+  void checkTokenSpike(data.userId, data.threadId).catch((e) =>
+    console.error("[ingest/usage] token spike check failed:", e),
   );
 
   return NextResponse.json({ ok: true });
