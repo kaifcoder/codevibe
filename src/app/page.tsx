@@ -206,7 +206,7 @@ export default function HomePage() {
       {/* Subtle top-of-page color seam so the hero isn't isolated. */}
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-x-0 top-0 h-px z-0 hidden dark:block bg-gradient-to-r from-transparent via-blue-500/40 to-transparent"
+        className="pointer-events-none fixed inset-x-0 top-0 h-px z-0 hidden dark:block bg-linear-to-r from-transparent via-blue-500/40 to-transparent"
       />
 
       <div className="absolute top-0 inset-x-0 z-50">
@@ -229,7 +229,7 @@ export default function HomePage() {
             repeat: Infinity,
             ease: "easeInOut",
           }}
-          className="absolute -top-48 left-1/2 -translate-x-1/2 w-[42rem] h-[42rem] bg-blue-500/15 dark:bg-blue-500/[0.07] rounded-full blur-[120px]"
+          className="absolute -top-48 left-1/2 -translate-x-1/2 w-2xl h-[42rem] bg-blue-500/15 dark:bg-blue-500/[0.07] rounded-full blur-[120px]"
         />
 
         {/* Floating Particles */}

@@ -198,7 +198,7 @@ function HowItWorks() {
           <span className="text-blue-400">$</span> codevibe new{" "}
           <span className="bg-blue-500/30 text-white px-1 rounded-sm">
             &quot;a habit tracker with streaks&quot;
-            <span className="ml-0.5 inline-block h-3 w-[2px] bg-blue-300 animate-pulse" />
+            <span className="ml-0.5 inline-block h-3 w-0.5 bg-blue-300 animate-pulse" />
           </span>
         </div>
       ),
@@ -294,7 +294,7 @@ function HowItWorks() {
             <div
               key={s.no}
               data-step
-              className="relative rounded-2xl border border-border/60 bg-white dark:bg-white/[0.025] p-6 lg:p-7 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_30px_60px_-30px_rgba(0,0,0,0.5)] [contain:layout_paint]"
+              className="relative rounded-2xl border border-border/60 bg-white dark:bg-white/2.5 p-6 lg:p-7 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_30px_60px_-30px_rgba(0,0,0,0.5)] contain-[layout_paint]"
             >
               <div className="flex items-center justify-between mb-6">
                 <span className="font-mono text-xs text-muted-foreground">
@@ -392,7 +392,7 @@ function StackBento() {
             copy="Every project ships with the App Router, server actions, streaming SSR, and the same toolchain Vercel runs in production."
             visual={
               <div className="absolute inset-0 flex items-end justify-end p-6 opacity-90">
-                <pre className="font-mono text-[10.5px] leading-[1.5] text-zinc-300/90 max-w-[28ch]">{`export default function Page() {
+                <pre className="font-mono text-[10.5px] leading-normal text-zinc-300/90 max-w-[28ch]">{`export default function Page() {
                 return (
                   <main className="grid">
                     <Hero />
@@ -463,7 +463,7 @@ function BentoCard({
   return (
     <div
       data-bento
-      className={`group relative rounded-2xl border border-border/60 bg-white dark:bg-white/[0.025] p-5 lg:p-6 overflow-hidden transition-colors hover:border-blue-500/40 [contain:layout_paint] ${className}`}
+      className={`group relative rounded-2xl border border-border/60 bg-white dark:bg-white/2.5 p-5 lg:p-6 overflow-hidden transition-colors hover:border-blue-500/40 contain-[layout_paint] ${className}`}
     >
       <div
         className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -680,7 +680,7 @@ function ShowcaseStrip() {
             // contain:layout+paint isolates each card's repaints from the
             // section. transform:translateZ(0) on the track promotes it to
             // its own GPU layer so the x-translate runs on the compositor.
-            className="flex gap-6 lg:gap-8 pl-4 sm:pl-6 lg:pl-12 [transform:translateZ(0)] [contain:layout_paint]"
+            className="flex gap-6 lg:gap-8 pl-4 sm:pl-6 lg:pl-12 transform-[translateZ(0)] contain-[layout_paint]"
           >
             {partners.map((p, i) => (
               <article
@@ -689,13 +689,13 @@ function ShowcaseStrip() {
                 // re-rasterizes the blur over each card every frame). A
                 // solid bg-zinc-950 reads almost identically against the
                 // dark route background and scrolls at 60fps.
-                className="relative shrink-0 w-[78vw] sm:w-[60vw] md:w-[42vw] lg:w-[34vw] xl:w-[28vw] aspect-[4/5] rounded-3xl overflow-hidden border border-white/10 bg-zinc-950 [contain:layout_paint]"
+                className="relative shrink-0 w-[78vw] sm:w-[60vw] md:w-[42vw] lg:w-[34vw] xl:w-[28vw] aspect-4/5 rounded-3xl overflow-hidden border border-white/10 bg-zinc-950 contain-[layout_paint]"
               >
                 {/* Accent gradient cornered to top-right — frames the card */}
                 {/* without burying the type in saturation. blur-2xl (not 3xl) */}
                 {/* halves the kernel cost without losing the glow. */}
                 <div
-                  className={`absolute -top-20 -right-20 h-64 w-64 rounded-full blur-2xl bg-gradient-to-br ${p.accent}`}
+                  className={`absolute -top-20 -right-20 h-64 w-64 rounded-full blur-2xl bg-linear-to-br ${p.accent}`}
                 />
 
                 <div className="relative h-full p-7 lg:p-8 flex flex-col">
@@ -781,7 +781,7 @@ function StatsRow() {
               data-stat
               data-target={stat.v}
               data-suffix={stat.s}
-              className="font-semibold tracking-tight text-5xl lg:text-7xl bg-gradient-to-br from-foreground to-muted-foreground/60 bg-clip-text text-transparent"
+              className="font-semibold tracking-tight text-5xl lg:text-7xl bg-linear-to-br from-foreground to-muted-foreground/60 bg-clip-text text-transparent"
             >
               0{stat.s}
             </div>
@@ -866,7 +866,7 @@ function ClosingCTA({
           <Button
             size="lg"
             onClick={onStart}
-            className="group relative h-14 px-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white text-base font-medium shadow-2xl shadow-blue-500/30 transition-all"
+            className="group relative h-14 px-8 rounded-full bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white text-base font-medium shadow-2xl shadow-blue-500/30 transition-all"
           >
             <span className="relative flex items-center gap-2">
               Start building
