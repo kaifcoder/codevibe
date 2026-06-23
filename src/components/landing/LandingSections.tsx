@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
+import { BentoGrid, BentoGridItem } from "@/components/ui/bento-grid";
+import { cn } from "@/lib/utils";
 
 // Sections register the plugin lazily on the client. SSR-safe — the import
 // is fine on the server but registerPlugin must only run in the browser.
@@ -383,111 +385,246 @@ function StackBento() {
           </p>
         </div>
 
-        <div className="grid grid-cols-12 auto-rows-[140px] gap-3 lg:gap-4">
-          <BentoCard
-            className="col-span-12 md:col-span-7 row-span-2"
-            tag="framework"
-            icon={<Code2 className="h-5 w-5" />}
-            title="Next.js 16 · React 19 · Turbopack"
-            copy="Every project ships with the App Router, server actions, streaming SSR, and the same toolchain Vercel runs in production."
-            visual={
-              <div className="absolute inset-0 flex items-end justify-end p-6 opacity-90">
-                <pre className="font-mono text-[10.5px] leading-normal text-zinc-300/90 max-w-[28ch]">{`export default function Page() {
-                return (
-                  <main className="grid">
-                    <Hero />
-                    <Features />
-                  </main>
-                )
-              }`}</pre>
-              </div>
-            }
-          />
-          <BentoCard
-            className="col-span-6 md:col-span-5"
-            tag="sandbox"
-            icon={<Boxes className="h-5 w-5" />}
-            title="Live E2B sandbox"
-            copy="A real Linux VM running your dev server, dispensable in seconds."
-          />
-          <BentoCard
-            className="col-span-6 md:col-span-5"
-            tag="collab"
-            icon={<Users2 className="h-5 w-5" />}
-            title="Real-time collaboration"
-            copy="Yjs CRDTs sync every keystroke. Share a link, edit together."
-          />
-
-          <BentoCard
-            className="col-span-6 md:col-span-4"
-            tag="model"
-            icon={<Sparkles className="h-5 w-5" />}
-            title="Moonshot K2.5"
-            copy="Plans before it edits. Refactors before it ships."
-          />
-          <BentoCard
-            className="col-span-6 md:col-span-4"
-            tag="speed"
-            icon={<Zap className="h-5 w-5" />}
-            title="Hot reload, real fast"
-            copy="Watcher polling tuned to 200ms inside the sandbox."
-          />
-          <BentoCard
-            className="col-span-12 md:col-span-4"
-            tag="git"
-            icon={<GitBranch className="h-5 w-5" />}
-            title="Git, MCP, deploy"
-            copy="Push to GitHub. Connect Playwright. Ship to Vercel."
-          />
-        </div>
+        <BentoGrid className="md:auto-rows-[22rem] md:grid-cols-3">
+          {bentoItems.map((item, i) => (
+            <BentoGridItem
+              key={item.title}
+              title={item.title}
+              description={item.description}
+              header={item.header}
+              icon={item.icon}
+              className={cn(
+                // Mirror the source pattern: the 4th and 7th cells widen to
+                // create the editorial rhythm. We have six items, so wide is
+                // index 0 and 3 — first row anchor + start of second row.
+                i === 0 || i === 3 ? "md:col-span-2" : "",
+              )}
+            />
+          ))}
+        </BentoGrid>
       </div>
     </section>
   );
 }
 
-function BentoCard({
-  className = "",
-  tag,
-  icon,
-  title,
-  copy,
-  visual,
-}: {
-  className?: string;
-  tag: string;
-  icon: React.ReactNode;
-  title: string;
-  copy: string;
-  visual?: React.ReactNode;
-}) {
+// ─── Bento headers — small, self-contained visuals per card. Each is a
+// stateless component so React reuses them across re-renders; the parent's
+// GSAP tween animates the wrapper, not these. The headers paint subtle
+// motion (pulses, marquees) that runs in CSS — cheap, no JS frame cost.
+
+function FrameworkHeader() {
   return (
-    <div
-      data-bento
-      className={`group relative rounded-2xl border border-border/60 bg-white dark:bg-white/2.5 p-5 lg:p-6 overflow-hidden transition-colors hover:border-blue-500/40 contain-[layout_paint] ${className}`}
-    >
-      <div
-        className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{
-          background:
-            "radial-gradient(400px circle at var(--mx,50%) var(--my,50%), rgba(99,102,241,0.10), transparent 40%)",
-        }}
-      />
-      <div className="relative flex items-center justify-between mb-4">
-        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-          {tag}
-        </span>
-        <span className="text-blue-500/80">{icon}</span>
+    <div className="relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-black">
+      <div className="absolute inset-0 opacity-60" style={{
+        backgroundImage:
+          "linear-gradient(to right, rgba(59,130,246,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(59,130,246,0.08) 1px, transparent 1px)",
+        backgroundSize: "24px 24px",
+      }} />
+      <div className="absolute inset-x-4 bottom-4 top-4 flex items-end">
+        <pre className="font-mono text-[10.5px] leading-normal text-zinc-700 dark:text-zinc-300/90">{`export default function Page() {
+  return (
+    <main className="grid">
+      <Hero />
+      <Features />
+    </main>
+  )
+}`}</pre>
       </div>
-      <h3 className="relative font-medium text-base lg:text-lg leading-snug mb-1.5">
-        {title}
-      </h3>
-      <p className="relative text-sm text-muted-foreground leading-relaxed">
-        {copy}
-      </p>
-      {visual}
+      <div className="absolute top-3 right-3 flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5">
+        <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+        <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-blue-500">live</span>
+      </div>
     </div>
   );
 }
+
+function SandboxHeader() {
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-xl bg-zinc-950">
+      <div className="absolute inset-0" style={{
+        background:
+          "radial-gradient(ellipse at 30% 20%, rgba(168,85,247,0.18), transparent 60%), radial-gradient(ellipse at 80% 90%, rgba(59,130,246,0.16), transparent 55%)",
+      }} />
+      <div className="absolute inset-3 rounded-lg border border-white/10 bg-black/40 backdrop-blur-sm overflow-hidden">
+        <div className="flex items-center gap-1.5 border-b border-white/10 px-2 py-1.5">
+          <span className="h-2 w-2 rounded-full bg-rose-400/70" />
+          <span className="h-2 w-2 rounded-full bg-amber-400/70" />
+          <span className="h-2 w-2 rounded-full bg-emerald-400/70" />
+          <span className="ml-2 font-mono text-[9px] text-white/40">sandbox.e2b.app</span>
+        </div>
+        <div className="p-3 font-mono text-[10px] leading-relaxed text-zinc-300 space-y-0.5">
+          <div><span className="text-emerald-400">$</span> next dev --turbopack</div>
+          <div className="text-zinc-500">  ▲ Next.js 16.0.0</div>
+          <div className="text-zinc-500">  - Local: http://localhost:3000</div>
+          <div className="text-emerald-400">  ✓ Ready in 482ms</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CollabHeader() {
+  // Three "cursors" drifting across a faux document. Pure CSS keyframes
+  // so it doesn't fight the page-level GSAP scrubs.
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br from-emerald-50 to-cyan-50 dark:from-emerald-950/40 dark:to-cyan-950/40">
+      <div className="absolute inset-4 space-y-2">
+        <div className="h-2 w-3/4 rounded bg-zinc-200 dark:bg-white/10" />
+        <div className="h-2 w-1/2 rounded bg-zinc-200 dark:bg-white/10" />
+        <div className="h-2 w-2/3 rounded bg-zinc-200 dark:bg-white/10" />
+        <div className="h-2 w-5/12 rounded bg-zinc-200 dark:bg-white/10" />
+      </div>
+      {[
+        { color: "bg-emerald-500", label: "ayu", left: "20%", top: "30%", delay: "0s" },
+        { color: "bg-fuchsia-500", label: "ken", left: "55%", top: "55%", delay: "1.2s" },
+        { color: "bg-amber-500", label: "rio", left: "35%", top: "70%", delay: "2.4s" },
+      ].map((c) => (
+        <div
+          key={c.label}
+          className="absolute flex items-start gap-0 animate-pulse"
+          style={{ left: c.left, top: c.top, animationDelay: c.delay, animationDuration: "3s" }}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" className={`${c.color.replace("bg-", "text-")} drop-shadow`} fill="currentColor">
+            <path d="M0 0 L0 11 L3 8 L5 13 L7 12 L5 7 L9 7 Z" />
+          </svg>
+          <span className={`ml-0.5 rounded px-1 py-px font-mono text-[8px] text-white ${c.color}`}>{c.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ModelHeader() {
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100 dark:from-indigo-950/60 dark:via-purple-950/60 dark:to-pink-950/60">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="relative">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="absolute inset-0 rounded-full border border-indigo-400/40 dark:border-indigo-300/30 animate-ping"
+              style={{
+                width: `${(i + 1) * 40}px`,
+                height: `${(i + 1) * 40}px`,
+                left: `${-(i + 1) * 20}px`,
+                top: `${-(i + 1) * 20}px`,
+                animationDelay: `${i * 0.6}s`,
+                animationDuration: "3s",
+              }}
+            />
+          ))}
+          <div className="relative h-10 w-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-500/40 flex items-center justify-center">
+            <Sparkles className="h-5 w-5 text-white" />
+          </div>
+        </div>
+      </div>
+      <div className="absolute bottom-3 left-3 right-3 font-mono text-[10px] text-indigo-700 dark:text-indigo-300 flex items-center justify-between">
+        <span>kimi-k2.5</span>
+        <span className="opacity-60">128k ctx</span>
+      </div>
+    </div>
+  );
+}
+
+function SpeedHeader() {
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br from-amber-50 to-orange-100 dark:from-amber-950/50 dark:to-orange-950/50">
+      <div className="absolute inset-0 flex items-end justify-around px-4 pb-6 gap-1.5">
+        {Array.from({ length: 12 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex-1 rounded-t bg-gradient-to-t from-amber-500 to-orange-400 dark:from-amber-400 dark:to-orange-300 animate-pulse"
+            style={{
+              height: `${20 + ((i * 13) % 70)}%`,
+              animationDelay: `${i * 0.08}s`,
+              animationDuration: "1.6s",
+            }}
+          />
+        ))}
+      </div>
+      <div className="absolute top-3 left-3 font-mono text-[10px] uppercase tracking-[0.2em] text-amber-700 dark:text-amber-200">
+        200ms · hmr
+      </div>
+    </div>
+  );
+}
+
+function GitHeader() {
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-xl bg-zinc-950">
+      <div className="absolute inset-0" style={{
+        background:
+          "radial-gradient(circle at 50% 50%, rgba(99,102,241,0.18), transparent 60%)",
+      }} />
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 200 120" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="git-line" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="rgb(99,102,241)" stopOpacity="0" />
+            <stop offset="50%" stopColor="rgb(99,102,241)" stopOpacity="1" />
+            <stop offset="100%" stopColor="rgb(99,102,241)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d="M 10 90 Q 60 90 80 60 Q 100 30 140 30 L 190 30" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" fill="none" />
+        <path d="M 10 90 Q 60 90 80 60 Q 100 30 140 30 L 190 30" stroke="url(#git-line)" strokeWidth="2" fill="none" strokeDasharray="100 200" className="origin-center">
+          <animate attributeName="stroke-dashoffset" from="0" to="-300" dur="3s" repeatCount="indefinite" />
+        </path>
+        {[
+          { cx: 10, cy: 90, c: "rgb(96,165,250)" },
+          { cx: 80, cy: 60, c: "rgb(168,85,247)" },
+          { cx: 140, cy: 30, c: "rgb(52,211,153)" },
+          { cx: 190, cy: 30, c: "rgb(244,114,182)" },
+        ].map((p, i) => (
+          <circle key={i} cx={p.cx} cy={p.cy} r={4} fill={p.c} />
+        ))}
+      </svg>
+      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between font-mono text-[10px]">
+        <span className="text-zinc-400">main</span>
+        <span className="text-emerald-400">pushed ✓</span>
+      </div>
+    </div>
+  );
+}
+
+// Items used by the BentoGrid above. Order matters — see col-span comment.
+const bentoItems = [
+  {
+    title: "Next.js 16 · React 19 · Turbopack",
+    description:
+      "Every project ships with the App Router, server actions, streaming SSR, and the same toolchain Vercel runs in production.",
+    header: <FrameworkHeader />,
+    icon: <Code2 className="h-4 w-4 text-blue-500" />,
+  },
+  {
+    title: "Live E2B sandbox",
+    description: "A real Linux VM running your dev server, dispensable in seconds.",
+    header: <SandboxHeader />,
+    icon: <Boxes className="h-4 w-4 text-purple-500" />,
+  },
+  {
+    title: "Real-time collaboration",
+    description: "Yjs CRDTs sync every keystroke. Share a link, edit together.",
+    header: <CollabHeader />,
+    icon: <Users2 className="h-4 w-4 text-emerald-500" />,
+  },
+  {
+    title: "Moonshot Kimi K2.5",
+    description: "Plans before it edits. Refactors before it ships. 128k context window.",
+    header: <ModelHeader />,
+    icon: <Sparkles className="h-4 w-4 text-indigo-500" />,
+  },
+  {
+    title: "Hot reload, real fast",
+    description: "Watcher polling tuned to 200ms inside the sandbox.",
+    header: <SpeedHeader />,
+    icon: <Zap className="h-4 w-4 text-amber-500" />,
+  },
+  {
+    title: "Git, MCP, deploy",
+    description: "Push to GitHub. Connect Playwright. Ship to Vercel — all from one chat.",
+    header: <GitHeader />,
+    icon: <GitBranch className="h-4 w-4 text-fuchsia-500" />,
+  },
+];
 
 // ─── 3. THANKS — pinned horizontal credits strip ───────────────────────────
 //
