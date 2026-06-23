@@ -84,6 +84,7 @@ export const viewport: Viewport = {
   ],
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -100,7 +101,7 @@ export default function RootLayout({
       <TRPCReactProvider>
         <html lang="en" suppressHydrationWarning>
           <body
-            className={`${geistSans.variable} ${geistMono.variable} antialiased h-screen w-full overflow-hidden`}
+            className={`${geistSans.variable} ${geistMono.variable} antialiased h-[100dvh] w-full overflow-hidden`}
           >
             {/* SoftwareApplication JSON-LD for rich search results.
                 Uses next/script so React 19 / Next 16 don't reject the
@@ -139,7 +140,7 @@ export default function RootLayout({
                     "--header-height": "calc(var(--spacing) * 12)",
                   } as React.CSSProperties
                 }
-                className="h-screen"
+                className="h-[100dvh]"
               >
                 <SettingsProvider>
                   <SignedIn>

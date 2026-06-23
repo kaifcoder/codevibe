@@ -478,7 +478,7 @@ export function ChatPanel({
   return (
     <div className="flex flex-col h-full w-full bg-background">
       {/* Chat history */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 sm:py-6 space-y-4 sm:space-y-5">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
             <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
@@ -508,11 +508,17 @@ export function ChatPanel({
       </div>
       {/* Input bar */}
       {!readOnly && (
-        <div className="px-4 pb-4 pt-2">
+        <div
+          className="px-3 sm:px-4 pt-2 pb-3 sm:pb-4"
+          // Reserve iOS home-indicator inset so the input never hugs the
+          // gesture bar. min() keeps the normal pb-3/pb-4 floor on devices
+          // without an inset.
+          style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 0.75rem)" }}
+        >
           {interruptSlot && <div className="mb-3">{interruptSlot}</div>}
           {queue && queue.size > 0 && <QueueList queue={queue} />}
           <form
-            className="flex items-center gap-2 bg-muted/40 rounded-3xl border border-border/60 px-4 py-2 focus-within:border-border focus-within:ring-1 focus-within:ring-primary/30 transition-all"
+            className="flex items-end gap-2 bg-muted/40 rounded-2xl sm:rounded-3xl border border-border/60 px-3 sm:px-4 py-2 focus-within:border-border focus-within:ring-1 focus-within:ring-primary/30 transition-all"
             onSubmit={e => {
               e.preventDefault();
               if (message.trim()) onSend();
@@ -528,13 +534,10 @@ export function ChatPanel({
                   if (message.trim()) onSend();
                 }
               }}
-              className="flex-1 min-h-[36px] max-h-[200px] resize-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent dark:bg-transparent px-0 py-2 leading-5"
+              className="flex-1 min-h-10 max-h-[40vh] sm:max-h-[200px] resize-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent dark:bg-transparent px-0 py-2 text-base sm:text-sm leading-5"
               rows={1}
             />
             {isStreaming && onStop ? (
-              // Streaming: send button becomes a stop button. type="button" so it
-              // doesn't trigger the form's onSubmit; aria-label stays consistent
-              // for assistive tech.
               <Button
                 type="button"
                 size="icon"
@@ -542,7 +545,7 @@ export function ChatPanel({
                 aria-label="Stop run"
                 title="Stop run"
                 variant="destructive"
-                className="h-10 w-10 sm:h-8 sm:w-8 rounded-full shrink-0 transition-all"
+                className="h-10 w-10 sm:h-9 sm:w-9 rounded-full shrink-0 transition-all"
               >
                 <Square className="w-3.5 h-3.5 fill-current" />
               </Button>
@@ -553,7 +556,7 @@ export function ChatPanel({
                 disabled={!message.trim()}
                 aria-label="Send message"
                 className={cn(
-                  "h-10 w-10 sm:h-8 sm:w-8 rounded-full shrink-0 transition-all",
+                  "h-10 w-10 sm:h-9 sm:w-9 rounded-full shrink-0 transition-all",
                   !message.trim() && "opacity-50"
                 )}
               >
@@ -562,7 +565,7 @@ export function ChatPanel({
             )}
           </form>
           <p className="text-[11px] text-muted-foreground mt-2 text-center">
-            {isStreaming ? "Click stop to cancel · Type to queue a follow-up" : "Enter to send · Shift+Enter for new line"}
+            {isStreaming ? "Tap stop to cancel · Type to queue a follow-up" : "Enter to send · Shift+Enter for new line"}
           </p>
         </div>
       )}

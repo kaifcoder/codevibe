@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "http://192.168.1.103:3000",
     "http://192.168.1.108:3000",
+    '192.168.1.110',
     "http://192.168.*.*:3000",
   ],
 };

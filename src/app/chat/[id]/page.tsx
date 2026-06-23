@@ -1,13 +1,9 @@
 "use client";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useSettings } from "@/contexts/settings-context";
 import { toast } from "sonner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel, ChatMessage, ChatMessageStep } from "@/components/ChatPanel";
 import { ShareButton } from "@/components/ShareButton";
 import { DownloadButton } from "@/components/DownloadButton";
@@ -16,7 +12,6 @@ import { GithubButton } from "@/components/GithubButton";
 import { TemplateApprovalCard } from "@/components/TemplateApprovalCard";
 import { SandboxExpiredPanel } from "@/components/SandboxExpiredPanel";
 import { BackendWarmingBanner } from "@/components/BackendWarmingBanner";
-import { Users } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAgentStream } from "@/hooks/use-agent-stream";
 import { useAgentReady } from "@/hooks/use-agent-ready";
@@ -25,6 +20,7 @@ import { DesktopChatLayout } from "@/components/DesktopChatLayout";
 import { PreviewShimmer } from "@/components/ui/shimmer";
 import { ChatProvider, useChat } from "@/contexts/chat-context";
 import { NamePromptDialog } from "@/components/NamePromptDialog";
+import { ChatTopBar } from "@/components/ChatTopBar";
 import { useTRPC } from "@/trpc/client";
 import { useMutation } from "@tanstack/react-query";
 
@@ -865,80 +861,11 @@ function ChatPage() {
     }
 
     if (ctx.sandboxUrl && !ctx.isSandboxExpired) {
+      // The URL chip + refresh/copy/open buttons that used to live here have
+      // been hoisted into ChatTopBar so the top of the page is the single
+      // source of every control. The iframe itself fills the panel.
       return (
         <div className="relative w-full h-full flex flex-col bg-background">
-          <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 shrink-0">
-            <div className="flex items-center gap-1 mr-2">
-              <button
-                type="button"
-                className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  ctx.setIframeLoading(true);
-                  const iframe = document.querySelector('iframe[title="Sandbox Preview"]') as HTMLIFrameElement;
-                  if (iframe) {
-                    const s = iframe.src;
-                    iframe.src = "";
-                    setTimeout(() => {
-                      iframe.src = s;
-                    }, 0);
-                  }
-                }}
-                title="Refresh"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 flex items-center gap-2 px-3 py-1.5 bg-background rounded-md border text-sm">
-              <svg className="w-3.5 h-3.5 text-green-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fillRule="evenodd"
-                  d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <span className="text-muted-foreground truncate font-mono text-xs">{ctx.sandboxUrl}</span>
-              <button
-                type="button"
-                className="ml-auto p-0.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                onClick={() => {
-                  navigator.clipboard.writeText(ctx.sandboxUrl!);
-                  toast.success("URL copied");
-                }}
-                title="Copy URL"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-              </button>
-            </div>
-            <button
-              type="button"
-              className="p-1.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-              onClick={() => globalThis.open(ctx.sandboxUrl!, "_blank")}
-              title="Open in new tab"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                />
-              </svg>
-            </button>
-          </div>
           <div className="relative flex-1 min-h-0">
             {ctx.iframeLoading && (
               <div className="absolute inset-0 z-10">
@@ -1027,70 +954,30 @@ function ChatPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <NamePromptDialog />
-      {/* Status Bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-        <div className="flex items-center gap-3">
-         
-          {isSharedAccess && (
-            <Badge variant="secondary" className="text-xs">
-              <Users className="h-3 w-3 mr-1" />
-              Shared Session
-            </Badge>
-          )}
-  
-          {ctx.sandboxUrl && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> Sandbox Active
-            </span>
-          )}
-        </div>
 
-        <div className="flex items-center gap-2">
-          {ctx.showSecondPanel && ctx.templateType !== "n8n" && (
-            <Tabs value={ctx.activeTab} onValueChange={ctx.setActiveTab}>
-              <TabsList className="h-7 bg-muted/50">
-                <TabsTrigger value="live preview" className="text-xs h-6 px-3">
-                  Preview
-                </TabsTrigger>
-                <TabsTrigger value="code" className="text-xs h-6 px-3">
-                  Code
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
-
-          {ctx.connectedUsers.length > 0 && (
-            <TooltipProvider>
-              <div className="flex items-center gap-1">
-                {ctx.connectedUsers.map((user) => (
-                  <Tooltip key={user.id}>
-                    <TooltipTrigger asChild>
-                      <Avatar
-                        className="h-7 w-7 border-2 -ml-2 first:ml-0"
-                        style={{ borderColor: user.color }}
-                      >
-                        <AvatarFallback style={{ backgroundColor: user.color + "20", color: user.color }}>
-                          {user.name.substring(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">{user.name}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                ))}
-              </div>
-            </TooltipProvider>
-          )}
-
-          {isMounted && sessionId && <DownloadButton sessionId={sessionId} />}
-          {isMounted && sessionId && ctx.templateType !== "n8n" && !isSharedAccess && (
-            <GithubButton sessionId={sessionId} />
-          )}
-          {isMounted && sessionId && ctx.templateType !== "n8n" && <DeployButton sessionId={sessionId} />}
-          {isMounted && sessionId && !isSharedAccess && <ShareButton sessionId={sessionId} />}
-        </div>
-      </div>
+      <ChatTopBar
+        sessionId={sessionId}
+        isSharedAccess={isSharedAccess}
+        isMounted={isMounted}
+        // Share is the most-used primary action — keep it visible on mobile.
+        primaryActions={
+          isMounted && sessionId && !isSharedAccess ? (
+            <ShareButton sessionId={sessionId} />
+          ) : null
+        }
+        // The rest are secondary on mobile (overflow menu) and inline on desktop.
+        overflowActions={
+          <>
+            {isMounted && sessionId && <DownloadButton sessionId={sessionId} />}
+            {isMounted && sessionId && ctx.templateType !== "n8n" && !isSharedAccess && (
+              <GithubButton sessionId={sessionId} />
+            )}
+            {isMounted && sessionId && ctx.templateType !== "n8n" && (
+              <DeployButton sessionId={sessionId} />
+            )}
+          </>
+        }
+      />
 
       <BackendWarmingBanner warming={agentReady.warming} />
       <div className="flex-1 min-h-0 overflow-hidden">{renderMainContent()}</div>
