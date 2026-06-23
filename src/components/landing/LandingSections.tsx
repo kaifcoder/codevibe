@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth, useClerk } from "@clerk/nextjs";
+import { useAuth, useClerk, SignInButton } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowRight,
   Sparkles,
@@ -894,11 +895,26 @@ function formatStat(n: number): string {
 function ClosingCTA({
   onStart,
 }: {
-  onStart: () => void;
+  onStart: (prompt: string) => void;
 }) {
   const ref = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const [prompt, setPrompt] = useState("");
+  const { isSignedIn, isLoaded } = useAuth();
   useSplitHeadingReveal(headingRef, { stagger: 0.08, start: "top 78%" });
+
+  // Match the hero's stash-across-auth flow so a closing-CTA prompt
+  // survives the Clerk sign-in modal too. Keys match app/page.tsx —
+  // the home page picks up the stashed prompt on next load.
+  const PENDING_PROMPT_KEY = "codevibe.pendingPrompt";
+  const PENDING_FLAG_KEY = "codevibe.pendingSignIn";
+  const stash = (text: string) => {
+    if (!text.trim()) return;
+    try {
+      sessionStorage.setItem(PENDING_PROMPT_KEY, text);
+      sessionStorage.setItem(PENDING_FLAG_KEY, "1");
+    } catch {}
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -912,16 +928,35 @@ function ClosingCTA({
         ease: "expo.out",
         scrollTrigger: { trigger: el, start: "top 70%", once: true },
       });
-      gsap.from(el.querySelector("[data-cta-button]"), {
-        scale: 0.9,
-        opacity: 0,
-        duration: 0.7,
-        ease: "back.out(1.6)",
-        scrollTrigger: { trigger: el, start: "top 70%", once: true },
-      });
+      gsap.fromTo(
+        el.querySelector("[data-cta-input]"),
+        { scale: 0.94, opacity: 0, y: 16 },
+        {
+          scale: 1,
+          opacity: 1,
+          y: 0,
+          duration: 0.9,
+          ease: "expo.out",
+          immediateRender: false,
+          scrollTrigger: { trigger: el, start: "top 70%", once: true },
+        },
+      );
     }, el);
     return () => ctx.revert();
   }, []);
+
+  const submit = () => {
+    if (!prompt.trim()) return;
+    if (!isSignedIn) return;
+    onStart(prompt.trim());
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+  };
 
   return (
     <section
@@ -947,24 +982,71 @@ function ClosingCTA({
           data-cta-line
           className="mt-8 max-w-xl mx-auto text-base sm:text-lg text-muted-foreground leading-relaxed"
         >
-          Type one sentence at the top of this page. Watch the agent build the
-          rest. Edit anything. Ship when it&rsquo;s ready.
+          One sentence is enough. Drop your idea in the box — the agent will
+          pick it up from here.
         </p>
-        <div className="mt-12 flex items-center justify-center gap-4" data-cta-button>
-          <Button
-            size="lg"
-            onClick={onStart}
-            className="group relative h-14 px-8 rounded-full bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white text-base font-medium shadow-2xl shadow-blue-500/30 transition-all"
-          >
-            <span className="relative flex items-center gap-2">
-              Start building
-              <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
+
+        {/* Closing-CTA prompt box. Same animated outline + rounded geometry
+            as the hero, but with copy that matches the "send-off" tone of
+            the bottom of the page. */}
+        <div className="mt-14 mx-auto w-full max-w-2xl text-left" data-cta-input>
+          <div className="relative group">
+            <div className="pointer-events-none absolute -inset-3 rounded-3xl bg-linear-to-r from-blue-500/30 via-purple-500/30 to-cyan-500/30 opacity-40 blur-3xl group-focus-within:opacity-70 transition-opacity duration-500" />
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!isSignedIn) {
+                  stash(prompt);
+                  return;
+                }
+                submit();
+              }}
+              className="cv-animated-border relative flex items-center gap-3 bg-background/90 dark:bg-[#0f0f12]/95 backdrop-blur-xl rounded-2xl border border-border/60 px-5 py-3 shadow-2xl shadow-blue-500/10 dark:shadow-blue-500/20 transition-all"
+            >
+              <Sparkles className="w-6 h-6 text-blue-500/80 shrink-0" />
+              <Textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="Ship it. Type the first sentence of your next project…"
+                className="flex-1 min-h-14 max-h-72 resize-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent dark:bg-transparent px-0 py-3 text-lg sm:text-xl leading-7 placeholder:text-muted-foreground/70"
+                rows={1}
+              />
+              {isLoaded && !isSignedIn ? (
+                <SignInButton mode="modal">
+                  <Button
+                    type="button"
+                    size="icon"
+                    onClick={() => stash(prompt)}
+                    className="h-11 w-11 rounded-xl shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 transition-all"
+                  >
+                    <ArrowRight className="w-5 h-5" />
+                  </Button>
+                </SignInButton>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={!prompt.trim()}
+                  className="h-11 w-11 rounded-xl shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:shadow-none transition-all"
+                >
+                  <ArrowRight className="w-5 h-5" />
+                </Button>
+              )}
+            </form>
+          </div>
+
+          <div className="mt-5 flex items-center justify-center gap-4 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5 font-mono">
+              <Layers className="h-3.5 w-3.5" />
+              takes one sentence
             </span>
-          </Button>
-          <span className="hidden sm:inline-flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <Layers className="h-3.5 w-3.5" />
-            takes one sentence
-          </span>
+            <span className="h-3 w-px bg-border" />
+            <span className="font-mono">
+              <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> to send
+            </span>
+          </div>
         </div>
       </div>
     </section>
@@ -978,13 +1060,19 @@ export default function LandingSections() {
   const { isSignedIn } = useAuth();
   const { openSignIn } = useClerk();
 
-  const handleStart = () => {
+  const handleStart = (prompt: string) => {
     if (!isSignedIn) {
       openSignIn();
       return;
     }
     const id = crypto.randomUUID();
-    router.push(`/chat/${id}`);
+    // Forward the prompt via search-param — the chat route already auto-sends
+    // any incoming `?prompt=` value on mount (same handoff the hero uses).
+    const trimmed = prompt.trim();
+    const href = trimmed
+      ? `/chat/${id}?prompt=${encodeURIComponent(trimmed)}`
+      : `/chat/${id}`;
+    router.push(href);
   };
 
   // Bind every ScrollTrigger on this page to the route's own scroll

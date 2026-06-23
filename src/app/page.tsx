@@ -295,9 +295,9 @@ export default function HomePage() {
               className="mb-4 lg:mb-6"
             >
               <div className="relative group">
-                {/* Soft animated glow */}
-                <div className="pointer-events-none absolute -inset-1 rounded-4xl bg-linear-to-r from-blue-500 via-purple-500 to-blue-500 opacity-40 blur-2xl group-focus-within:opacity-70 transition-opacity duration-500" />
-                <div className="pointer-events-none absolute -inset-px rounded-4xl bg-linear-to-r from-blue-500/40 via-purple-500/40 to-blue-500/40 opacity-0 group-focus-within:opacity-100 transition-opacity duration-500" />
+                {/* Soft ambient halo — kept subtle, no rounded-4xl. The actual */}
+                {/* animated outline is the cv-animated-border on the form below. */}
+                <div className="pointer-events-none absolute -inset-3 rounded-3xl bg-linear-to-r from-blue-500/30 via-purple-500/30 to-cyan-500/30 opacity-40 blur-3xl group-focus-within:opacity-70 transition-opacity duration-500" />
 
                 <form
                   onSubmit={(e) => {
@@ -309,7 +309,7 @@ export default function HomePage() {
                     }
                     handleStartChat()
                   }}
-                  className="relative flex items-center gap-3 bg-background/80 dark:bg-[#0f0f12]/90 backdrop-blur-xl rounded-4xl border border-border/80 px-6 py-4 shadow-2xl shadow-blue-500/10 dark:shadow-blue-500/20 focus-within:border-blue-500/60 transition-all"
+                  className="cv-animated-border relative flex items-center gap-3 bg-background/90 dark:bg-[#0f0f12]/95 backdrop-blur-xl rounded-2xl border border-border/60 px-5 py-3 shadow-2xl shadow-blue-500/10 dark:shadow-blue-500/20 transition-all"
                 >
                   <Sparkles className="w-6 h-6 text-blue-500/80 shrink-0" />
                   <Textarea
@@ -326,7 +326,7 @@ export default function HomePage() {
                         type="button"
                         size="icon"
                         onClick={() => stashPendingPrompt(prompt)}
-                        className="h-12 w-12 rounded-full shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 transition-all"
+                        className="h-11 w-11 rounded-xl shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 transition-all"
                       >
                         <ArrowRight className="w-5 h-5" />
                       </Button>
@@ -336,7 +336,7 @@ export default function HomePage() {
                       type="submit"
                       size="icon"
                       disabled={!prompt.trim()}
-                      className="h-12 w-12 rounded-full shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:shadow-none transition-all"
+                      className="h-11 w-11 rounded-xl shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:shadow-none transition-all"
                     >
                       <ArrowRight className="w-5 h-5" />
                     </Button>

@@ -283,6 +283,56 @@
   animation: marquee-vertical var(--duration) linear infinite;
 }
 
+/* Animated conic-gradient border — used on the landing prompt box. The
+   `--angle` custom property is animated via @property so the conic
+   gradient can rotate without re-laying-out the element. The "border"
+   itself is drawn by masking the gradient to a ring shape. */
+@property --cv-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes cv-border-spin {
+  to { --cv-angle: 360deg; }
+}
+.cv-animated-border {
+  position: relative;
+  isolation: isolate;
+}
+.cv-animated-border::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--cv-angle),
+    rgba(59, 130, 246, 0) 0deg,
+    rgba(59, 130, 246, 0.95) 70deg,
+    rgba(168, 85, 247, 0.95) 140deg,
+    rgba(34, 211, 238, 0.95) 210deg,
+    rgba(59, 130, 246, 0) 320deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: cv-border-spin 5s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+.cv-animated-border:focus-within::before {
+  inset: -2px;
+  padding: 2px;
+  animation-duration: 2.5s;
+}
+.cv-animated-border > * {
+  position: relative;
+  z-index: 1;
+}
+
 /* Sleek minimal scrollbars */
 * {
   scrollbar-width: thin;
