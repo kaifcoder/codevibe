@@ -264,6 +264,25 @@
   100% { opacity: 0; }
 }
 
+/* Magic-UI marquee — horizontal and vertical infinite loops. The track
+   renders N copies of its children, so a full pass equals one child-width
+   (or child-height) translated by 100% + the configured gap. Speed is
+   controlled by --duration set on the parent (default 40s in marquee.tsx). */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-100% - var(--gap))); }
+}
+@keyframes marquee-vertical {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(-100% - var(--gap))); }
+}
+.animate-marquee {
+  animation: marquee var(--duration) linear infinite;
+}
+.animate-marquee-vertical {
+  animation: marquee-vertical var(--duration) linear infinite;
+}
+
 /* Sleek minimal scrollbars */
 * {
   scrollbar-width: thin;

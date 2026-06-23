@@ -20,6 +20,7 @@ import {
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { BentoGrid, BentoGridItem } from "@/components/ui/bento-grid";
+import { Marquee } from "@/components/ui/marquee";
 import { cn } from "@/lib/utils";
 
 // Sections register the plugin lazily on the client. SSR-safe — the import
@@ -335,22 +336,27 @@ function StackBento() {
     const el = sectionRef.current;
     if (!el) return;
     const ctx = gsap.context(() => {
-      // once:true — the bento entry tween should play exactly once per
-      // mount. With toggleActions:"play none none reverse" and a fast
-      // trackpad flick the section enters/leaves several times in a few
-      // frames; GSAP keeps re-starting the tween mid-flight and the cards
-      // visibly jitter. Once it has played, we don't need to fight scroll
-      // anymore — the cards are static.
-      // Also dropped rotateX: 8 — promoting six cards into 3D space adds
-      // a layer per card and rasterizes the rotated text on every frame.
-      gsap.from(el.querySelectorAll("[data-bento]"), {
-        y: 70,
-        opacity: 0,
-        duration: 0.9,
-        ease: "expo.out",
-        stagger: { each: 0.08, from: "start" },
-        scrollTrigger: { trigger: el, start: "top 75%", once: true },
-      });
+      // Gentle entry on the bento items themselves. fromTo with
+      // immediateRender:false is critical — gsap.from() sets the target
+      // to opacity:0 at mount time, and if the ScrollTrigger never fires
+      // (mismatched scroller, layout not yet settled) the cards remain
+      // invisible. fromTo + immediateRender:false leaves the cards at
+      // their natural state until the trigger fires.
+      const items = el.querySelectorAll<HTMLElement>("[data-bento-grid] > *");
+      if (items.length === 0) return;
+      gsap.fromTo(
+        items,
+        { y: 40, opacity: 0 },
+        {
+          y: 0,
+          opacity: 1,
+          duration: 0.8,
+          ease: "expo.out",
+          stagger: { each: 0.08, from: "start" },
+          immediateRender: false,
+          scrollTrigger: { trigger: el, start: "top 85%", once: true },
+        },
+      );
     }, el);
     return () => ctx.revert();
   }, []);
@@ -626,149 +632,129 @@ const bentoItems = [
   },
 ];
 
-// ─── 3. THANKS — pinned horizontal credits strip ───────────────────────────
+// ─── 3. THANKS — single-row wordmark marquee ───────────────────────────────
 //
-// Was originally a "what people are building" showcase. Re-purposed into a
-// thank-you to the platforms that actually run codevibe in production.
-// The pin + horizontal-scroll mechanic stays — it's the section's signature
-// — only the cards change. Order roughly mirrors the request path: model →
-// orchestration → runtime → app framework → host → auth → data → UI.
+// One horizontal marquee row of large partner wordmarks. Every other
+// wordmark is "outlined" (transparent fill + 1px text-stroke) so the row
+// reads as a rhythm of filled→outlined→filled. Side fades melt the strip
+// into the page background. Pure CSS animation, no GSAP, no images.
+
+const partners = [
+  {
+    role: "model",
+    wordmark: "Kimi K2.5",
+    thanks: "for the model that plans before it edits.",
+    accent: "from-indigo-400/40 to-blue-500/30",
+    ink: "text-indigo-200",
+  },
+  {
+    role: "inference",
+    wordmark: "Bedrock",
+    thanks: "for serving the model with the latency we needed.",
+    accent: "from-amber-400/40 to-orange-500/30",
+    ink: "text-amber-200",
+  },
+  {
+    role: "orchestration",
+    wordmark: "LangGraph",
+    thanks: "for the durable agent runtime that survives a reload.",
+    accent: "from-emerald-400/40 to-teal-500/30",
+    ink: "text-emerald-200",
+  },
+  {
+    role: "sandbox",
+    wordmark: "E2B",
+    thanks: "for the live Linux microVM that boots in a second.",
+    accent: "from-violet-400/40 to-fuchsia-500/30",
+    ink: "text-violet-200",
+  },
+  {
+    role: "framework",
+    wordmark: "Next.js",
+    thanks: "for the framework every generated project ships on.",
+    accent: "from-zinc-200/40 to-zinc-500/30",
+    ink: "text-zinc-100",
+  },
+  {
+    role: "host",
+    wordmark: "▲ Vercel",
+    thanks: "for the deploys that go live before we finish typing.",
+    accent: "from-zinc-200/40 to-blue-500/30",
+    ink: "text-zinc-100",
+  },
+  {
+    role: "auth",
+    wordmark: "Clerk",
+    thanks: "for the sign-in flow we never had to design.",
+    accent: "from-purple-400/40 to-indigo-500/30",
+    ink: "text-purple-200",
+  },
+  {
+    role: "data",
+    wordmark: "Prisma",
+    thanks: "for the schema that survives every refactor.",
+    accent: "from-cyan-300/40 to-sky-500/30",
+    ink: "text-cyan-100",
+  },
+  {
+    role: "ui",
+    wordmark: "shadcn",
+    thanks: "for the components we copy-paste with pride.",
+    accent: "from-rose-400/40 to-pink-500/30",
+    ink: "text-rose-200",
+  },
+  {
+    role: "collab",
+    wordmark: "Yjs",
+    thanks: "for the CRDTs that let many cursors share one file.",
+    accent: "from-lime-300/40 to-emerald-500/30",
+    ink: "text-lime-100",
+  },
+  {
+    role: "ide",
+    wordmark: "Monaco",
+    thanks: "for the editor that makes the code feel alive.",
+    accent: "from-sky-400/40 to-indigo-500/30",
+    ink: "text-sky-200",
+  },
+  {
+    role: "mcp",
+    wordmark: "Playwright",
+    thanks: "for the headless browser the agent drives like a pro.",
+    accent: "from-orange-400/40 to-rose-500/30",
+    ink: "text-orange-200",
+  },
+];
+
+type Partner = (typeof partners)[number];
+
+function PartnerWordmark({ p, outlined }: { p: Partner; outlined: boolean }) {
+  // Two visual treatments alternating across the marquee:
+  // - filled: solid gradient text
+  // - outlined: transparent fill + 1px text-stroke
+  // The marquee reads as a wall of names, breathing because every other
+  // item is empty inside its own letters.
+  return (
+    <span
+      className={cn(
+        "shrink-0 select-none whitespace-nowrap font-semibold tracking-[-0.03em] leading-none",
+        "text-[clamp(2.5rem,7vw,5.5rem)]",
+        outlined
+          ? "text-transparent [-webkit-text-stroke:1px_currentColor] text-foreground/70 dark:text-white/55"
+          : "bg-gradient-to-br bg-clip-text text-transparent " + p.accent,
+      )}
+    >
+      {p.wordmark}
+    </span>
+  );
+}
 
 function ShowcaseStrip() {
-  const sectionRef = useRef<HTMLElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   useSplitHeadingReveal(headingRef);
 
-  useEffect(() => {
-    const section = sectionRef.current;
-    const track = trackRef.current;
-    if (!section || !track) return;
-    // Hint the compositor: promote the track to its own GPU layer so the
-    // pinned-x animation never repaints the section. Without this, GSAP's
-    // x: -<n> falls back to a normal main-thread paint on each frame.
-    track.style.willChange = "transform";
-    const ctx = gsap.context(() => {
-      // Pin the section and translate the track horizontally as the user
-      // scrolls vertically. Distance is set off how far the track exceeds
-      // the viewport width.
-      const getDistance = () => track.scrollWidth - window.innerWidth + 64;
-      gsap.to(track, {
-        x: () => -getDistance(),
-        ease: "none",
-        // scrub:true (no smoothing lag) instead of scrub:0.6 — the prior
-        // tween-toward-target behaviour layered easing on top of the user's
-        // own scroll, which felt laggy on slower trackpads. Direct sync is
-        // both cheaper and feels tighter.
-        scrollTrigger: {
-          trigger: section,
-          start: "top top",
-          end: () => `+=${getDistance()}`,
-          pin: true,
-          scrub: true,
-          invalidateOnRefresh: true,
-          anticipatePin: 1,
-        },
-      });
-    }, section);
-    return () => ctx.revert();
-  }, []);
-
-  // Tags use a different role per card so the eye finds variety. The
-  // accent gradient is held to a corner — the cards aren't billboards.
-  const partners = [
-    {
-      role: "model",
-      name: "Moonshot AI",
-      wordmark: "Kimi K2.5",
-      thanks: "for the model that plans before it edits.",
-      accent: "from-indigo-400/40 to-blue-500/30",
-      ink: "text-indigo-200",
-    },
-    {
-      role: "inference",
-      name: "AWS Bedrock",
-      wordmark: "Bedrock",
-      thanks: "for serving the model with the latency we needed.",
-      accent: "from-amber-400/40 to-orange-500/30",
-      ink: "text-amber-200",
-    },
-    {
-      role: "orchestration",
-      name: "LangChain",
-      wordmark: "LangGraph",
-      thanks: "for the durable agent runtime that survives a reload.",
-      accent: "from-emerald-400/40 to-teal-500/30",
-      ink: "text-emerald-200",
-    },
-    {
-      role: "sandbox",
-      name: "E2B",
-      wordmark: "E2B",
-      thanks: "for the live Linux microVM that boots in a second.",
-      accent: "from-violet-400/40 to-fuchsia-500/30",
-      ink: "text-violet-200",
-    },
-    {
-      role: "framework",
-      name: "Next.js",
-      wordmark: "Next.js",
-      thanks: "for the framework every generated project ships on.",
-      accent: "from-zinc-200/40 to-zinc-500/30",
-      ink: "text-zinc-100",
-    },
-    {
-      role: "host",
-      name: "Vercel",
-      wordmark: "▲ Vercel",
-      thanks: "for the deploys that go live before we finish typing.",
-      accent: "from-zinc-200/40 to-blue-500/30",
-      ink: "text-zinc-100",
-    },
-    {
-      role: "auth",
-      name: "Clerk",
-      wordmark: "Clerk",
-      thanks: "for the sign-in flow we never had to design.",
-      accent: "from-purple-400/40 to-indigo-500/30",
-      ink: "text-purple-200",
-    },
-    {
-      role: "data",
-      name: "Prisma",
-      wordmark: "Prisma",
-      thanks: "for the schema that survives every refactor.",
-      accent: "from-cyan-300/40 to-sky-500/30",
-      ink: "text-cyan-100",
-    },
-    {
-      role: "ui",
-      name: "shadcn/ui",
-      wordmark: "shadcn",
-      thanks: "for the components we copy-paste with pride.",
-      accent: "from-rose-400/40 to-pink-500/30",
-      ink: "text-rose-200",
-    },
-    {
-      role: "collab",
-      name: "Yjs",
-      wordmark: "Yjs",
-      thanks: "for the CRDTs that let many cursors share one file.",
-      accent: "from-lime-300/40 to-emerald-500/30",
-      ink: "text-lime-100",
-    },
-  ];
-
   return (
-    <section
-      ref={sectionRef}
-      className="relative h-screen overflow-hidden border-t border-black/5 dark:border-white/5 text-white"
-    >
-      {/* This section is pinned for a long scroll distance — every paint */}
-      {/* under it costs CPU/GPU each frame. Skip the section-wide rim-light */}
-      {/* orb (it would repaint the full viewport on every scroll tick) and */}
-      {/* use a static gradient + the global noise/grid that already bleed */}
-      {/* through. Just the hairline divider stays for the panel-edge cue. */}
+    <section className="relative overflow-hidden border-t border-black/5 dark:border-white/5 px-4 sm:px-6 lg:px-12 py-28 lg:py-40">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-x-0 -top-px h-px hidden dark:block"
@@ -785,8 +771,9 @@ function ShowcaseStrip() {
             "radial-gradient(ellipse 70% 40% at 50% 0%, rgba(34,211,238,0.08), transparent 70%)",
         }}
       />
-      <div className="relative h-full flex flex-col">
-        <div className="flex items-center justify-between px-4 sm:px-6 lg:px-12 pt-16 lg:pt-24 pb-6 lg:pb-10">
+
+      <div className="relative max-w-6xl mx-auto">
+        <div className="flex items-end justify-between flex-wrap gap-6 mb-16 lg:mb-20">
           <div>
             <div className="flex items-center gap-3 mb-5">
               <span className="font-mono text-[11px] tracking-[0.2em] uppercase text-cyan-400">
@@ -804,66 +791,30 @@ function ShowcaseStrip() {
               </SplitWords>
             </h2>
           </div>
-          <div className="hidden md:flex items-center gap-3 font-mono text-xs text-white/60">
-            <span>scroll</span>
-            <span className="inline-block h-px w-12 bg-white/30" />
-            <span>→</span>
-          </div>
+          <p className="font-mono text-xs text-muted-foreground max-w-xs leading-relaxed">
+            <span aria-hidden>{"// "}</span>the platforms, models, and open-source
+            projects that codevibe leans on every single request.
+          </p>
         </div>
 
-        <div className="flex-1 overflow-hidden flex items-center">
-          <div
-            ref={trackRef}
-            // contain:layout+paint isolates each card's repaints from the
-            // section. transform:translateZ(0) on the track promotes it to
-            // its own GPU layer so the x-translate runs on the compositor.
-            className="flex gap-6 lg:gap-8 pl-4 sm:pl-6 lg:pl-12 transform-[translateZ(0)] contain-[layout_paint]"
-          >
+        {/* Single-row marquee — large wordmarks alternating between filled
+            (gradient text) and outlined (1px stroke, transparent fill). Side
+            fades melt the strip into the page background. */}
+        <div className="relative overflow-hidden">
+          <Marquee pauseOnHover className="[--duration:60s] [--gap:3rem] py-4">
             {partners.map((p, i) => (
-              <article
-                key={p.name}
-                // No backdrop-blur — its scroll cost is enormous (the GPU
-                // re-rasterizes the blur over each card every frame). A
-                // solid bg-zinc-950 reads almost identically against the
-                // dark route background and scrolls at 60fps.
-                className="relative shrink-0 w-[78vw] sm:w-[60vw] md:w-[42vw] lg:w-[34vw] xl:w-[28vw] aspect-4/5 rounded-3xl overflow-hidden border border-white/10 bg-zinc-950 contain-[layout_paint]"
-              >
-                {/* Accent gradient cornered to top-right — frames the card */}
-                {/* without burying the type in saturation. blur-2xl (not 3xl) */}
-                {/* halves the kernel cost without losing the glow. */}
-                <div
-                  className={`absolute -top-20 -right-20 h-64 w-64 rounded-full blur-2xl bg-linear-to-br ${p.accent}`}
-                />
-
-                <div className="relative h-full p-7 lg:p-8 flex flex-col">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-white/55">
-                      {p.role}
-                    </span>
-                    <span className="font-mono text-[10px] text-white/45">
-                      /{String(i + 1).padStart(2, "0")}
-                    </span>
-                  </div>
-
-                  {/* Big wordmark anchors the card. Hairline above gives */}
-                  {/* it editorial weight without needing a logo asset. */}
-                  <div className="mt-auto">
-                    <span className="block h-px w-10 bg-white/30 mb-5" />
-                    <div
-                      className={`font-semibold tracking-[-0.02em] text-4xl lg:text-5xl xl:text-6xl leading-none mb-5 ${p.ink}`}
-                    >
-                      {p.wordmark}
-                    </div>
-                    <p className="text-sm text-white/70 leading-relaxed max-w-[24ch]">
-                      {p.thanks}
-                    </p>
-                  </div>
-                </div>
-              </article>
+              <div key={p.wordmark} className="flex items-center gap-12">
+                <PartnerWordmark p={p} outlined={i % 2 === 1} />
+                {/* small diamond separator — pure type, no images */}
+                <span aria-hidden className="text-muted-foreground/40 text-2xl">
+                  ◆
+                </span>
+              </div>
             ))}
-            {/* spacer so last card has breathing room before the pin releases */}
-            <div className="shrink-0 w-12" />
-          </div>
+          </Marquee>
+
+          <div className="pointer-events-none absolute inset-y-0 left-0 w-1/4 bg-gradient-to-r from-white dark:from-[#070708] to-transparent" />
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-1/4 bg-gradient-to-l from-white dark:from-[#070708] to-transparent" />
         </div>
       </div>
     </section>
