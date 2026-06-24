@@ -372,6 +372,26 @@ const deleteFile = tool(
     const sbx = await resolveSandbox(config);
     await sbx.files.remove(path);
     config.writer?.({ type: 'tool_result', tool: 'e2b_delete_file', args: { path }, result: `Deleted ${path}` });
+
+    // Turbopack's HMR holds stale references to modules it has already
+    // resolved. When the agent deletes a file that's still in the dev
+    // server's module graph, the next recompile of "/" can hang forever —
+    // it can't fail (the import succeeded on the previous build) and it
+    // can't finish (the module is gone). The fix is to flush the graph by
+    // restarting `next dev`. We only do this for nextjs sandboxes and for
+    // extensions the bundler actually graphs; anything else (logs, build
+    // artifacts, sandbox-internal scratch) is safe to drop in place.
+    const threadId = config.configurable?.thread_id as string | undefined;
+    const templateType = threadId ? getThreadSandbox(threadId)?.templateType : undefined;
+    if (templateType === 'nextjs' && isNextjsModuleGraphPath(path)) {
+      // Fire-and-forget — the agent's next tool call shouldn't pay for the
+      // ~3-5s respawn, and the iframe will surface its own "Restarting…"
+      // state via the brief 502 → 200 transition.
+      void restartNextDevServer(sbx, config, path).catch((err) => {
+        console.warn('[e2b_delete_file] dev server restart failed:', (err as Error).message);
+      });
+    }
+
     return `Deleted ${path}`;
   },
   {
@@ -382,6 +402,62 @@ const deleteFile = tool(
     }),
   }
 );
+
+// File extensions Turbopack / webpack actually load into the dev server's
+// module graph. Lockfiles, READMEs, public assets, etc. can vanish without
+// poisoning HMR — only the bundled sources trigger the stale-import hang.
+const MODULE_GRAPH_EXTS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.css', '.scss', '.sass',
+  '.json', '.mdx',
+]);
+
+function isNextjsModuleGraphPath(p: string): boolean {
+  const lower = p.toLowerCase();
+  // Heuristic: any file the bundler could have imported. We err on the side
+  // of restarting — the dev server respawn is cheap (~3s) vs. a stuck "/" .
+  const dot = lower.lastIndexOf('.');
+  if (dot === -1) {
+    // No extension — probably a directory delete (e.g. components/x/).
+    // A directory delete almost always touches the module graph.
+    return true;
+  }
+  return MODULE_GRAPH_EXTS.has(lower.slice(dot));
+}
+
+// Single restart at a time per sandbox. Multiple deletes in one agent turn
+// (a common case — the agent rewriting an entire component folder) shouldn't
+// stack up N kill/respawn cycles racing each other; the first one in flight
+// is enough.
+const restartingSandboxes = new WeakSet<Sandbox>();
+
+async function restartNextDevServer(sbx: Sandbox, config: LangGraphRunnableConfig, triggerPath: string) {
+  if (restartingSandboxes.has(sbx)) return;
+  restartingSandboxes.add(sbx);
+  try {
+    config.writer?.({
+      type: 'tool_progress',
+      tool: 'e2b_delete_file',
+      args: { path: triggerPath },
+      message: 'Flushing Turbopack module graph (dev server restart)...',
+      status: 'running',
+    });
+    // Kill the running next dev, drop the .next cache so Turbopack can't
+    // reload the stale resolved-modules snapshot, then respawn detached so
+    // the command returns immediately. nohup + & + redirected stdio is the
+    // standard pattern for surviving the parent shell exiting.
+    const script = [
+      'pkill -f "next dev" || true',
+      'rm -rf /home/user/.next',
+      'cd /home/user',
+      'nohup node ./node_modules/.bin/next dev --turbopack -p 3000 > /tmp/nextdev.log 2>&1 &',
+      'disown || true',
+    ].join(' && ');
+    await sbx.commands.run(`bash -c '${script}'`, { timeoutMs: 10_000 });
+  } finally {
+    restartingSandboxes.delete(sbx);
+  }
+}
 
 // ─── e2b_patch_file ────────────────────────────────────────────────────────
 //
