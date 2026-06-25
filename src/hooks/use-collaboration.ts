@@ -66,6 +66,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
     let cancelled = false;
     let e2bTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSavedContent: string | null = null;
+    const unregisterFnRef: { current: (() => void) | null } = { current: null };
 
     const connect = async () => {
       const { initCollaboration } = await import("@/lib/collaboration");
@@ -81,6 +82,20 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       setYText(session.yText);
       setProvider(session.provider);
       setConnectionStatus("connecting");
+
+      // Register this room as "active" so the agent stream handler can apply
+      // codePatch events directly into the bound Y.Text when the server-side
+      // Yjs mirror failed silently. Imported lazily to keep the SSR path free
+      // of yjs internals.
+      const { registerActiveRoom, unregisterActiveRoom } = await import(
+        "@/lib/collaboration/active-rooms"
+      );
+      if (cancelled) {
+        session.disconnect();
+        return;
+      }
+      registerActiveRoom(roomId, session.yText);
+      const registeredYText = session.yText;
 
       const updateStatus = (event: { status: string }) => {
         if (cancelled) return;
@@ -180,6 +195,9 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       //     from their own session).
       //   - seed transactions (origin "local-seed") come from CodeEditor
       //     re-applying initialContent that itself came from the agent.
+      //   - codePatch transactions (origin "agent-codepatch") come from the
+      //     agent stream handler applying a direct codePatch event — the
+      //     content already exists on the sandbox, so don't echo it back.
       // Bouncing those back through /api/write-to-sandbox is at best wasted,
       // at worst stomps on a newer agent write that hasn't reached us yet.
       const observer = (
@@ -192,6 +210,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
 
         if (!transaction.local) return;
         if (transaction.origin === "local-seed") return;
+        if (transaction.origin === "agent-codepatch") return;
 
         const sbx = sandboxIdRef.current;
         if (!sbx) return;
@@ -221,6 +240,10 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
         }, E2B_SYNC_DEBOUNCE_MS);
       };
       session.yText.observe(observer);
+
+      // Stash the unregister so the cleanup below can call it without
+      // re-importing the module.
+      unregisterFnRef.current = () => unregisterActiveRoom(roomId, registeredYText);
     };
 
     connect();
@@ -228,6 +251,10 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
     return () => {
       cancelled = true;
       if (e2bTimer) clearTimeout(e2bTimer);
+      if (unregisterFnRef.current) {
+        unregisterFnRef.current();
+        unregisterFnRef.current = null;
+      }
       if (sessionRef.current) {
         sessionRef.current.disconnect();
         sessionRef.current = null;

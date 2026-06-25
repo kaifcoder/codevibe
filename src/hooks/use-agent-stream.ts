@@ -33,6 +33,13 @@ interface SandboxExpiredEvent {
   sandboxId: string;
 }
 
+interface CodePatchEvent {
+  type: "codePatch";
+  filePath: string;
+  content?: string;
+  action?: string;
+}
+
 interface ToolProgressEvent {
   type: "tool_progress";
   tool: string;
@@ -81,6 +88,7 @@ type CustomEvent =
   | FileCreatedEvent
   | SandboxCreatedEvent
   | SandboxExpiredEvent
+  | CodePatchEvent
   | ToolProgressEvent
   | ToolResultEvent
   | TemplateDecidedEvent
@@ -149,6 +157,19 @@ function findFirstFile(nodes: FileNode[]): string | null {
     }
   }
   return null;
+}
+
+// Replace the content of an existing file node anywhere in the tree.
+function updateFileInTree(nodes: FileNode[], path: string, content: string): FileNode[] {
+  return nodes.map((n) => {
+    if (n.type === "file" && n.path === path) {
+      return { ...n, content };
+    }
+    if (n.type === "folder" && n.children) {
+      return { ...n, children: updateFileInTree(n.children, path, content) };
+    }
+    return n;
+  });
 }
 
 export function useAgentStream() {
@@ -269,6 +290,36 @@ export function useAgentStream() {
           c.setSelectedFile(filePath);
           c.setOpenFiles((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
         }
+        break;
+      }
+
+      case "codePatch": {
+        // Fallback path for sandbox→editor sync that doesn't depend on the
+        // Yjs WS mirror (writeToYjsRoom in e2b-tools.ts). The agent emits this
+        // alongside the WS mirror; if the mirror succeeded the editor already
+        // has this content and applyCodePatchToActiveRoom is a no-op (content
+        // equality check). If the mirror failed silently (misconfigured
+        // YJS_WS_URL, transient WS hiccup), this keeps the editor in sync.
+        const { filePath, content } = event;
+        if (!filePath || typeof content !== "string") break;
+        const sid = sessionIdRef.current;
+        // Keep the in-memory file tree fresh either way — the file panel reads
+        // from here on click, and the seed path in CodeEditor uses it.
+        c.setFileTree((prev) =>
+          findFileInTree(prev, filePath)
+            ? updateFileInTree(prev, filePath, content)
+            : addFileToTree(prev, filePath, content),
+        );
+        if (!sid) break;
+        const roomId = `${sid}-${filePath}`;
+        // Fire-and-forget — dynamic import keeps the yjs dependency out of
+        // the initial hook bundle. Errors are non-fatal: the WS mirror is
+        // the primary path; this is just a safety net.
+        import("@/lib/collaboration/active-rooms")
+          .then((m) => m.applyCodePatchToActiveRoom(roomId, content))
+          .catch((err) => {
+            console.warn("[useAgentStream] codePatch apply failed:", err);
+          });
         break;
       }
 

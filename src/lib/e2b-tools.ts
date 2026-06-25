@@ -301,6 +301,14 @@ const writeFile = tool(
     // which we await below.
     config.writer?.({ type: 'fileCreated', filePath: path });
 
+    // Direct codePatch fallback: ships the new content to the frontend over the
+    // streaming channel so the editor updates even when the Yjs WS mirror leg
+    // failed (misconfigured YJS_WS_URL in prod, transient WS hiccup, etc.).
+    // The frontend handler updates its in-memory file-tree cache and, if the
+    // file is currently open in Monaco, writes directly into the bound Y.Text
+    // with a known transaction origin so the E2B-sync observer ignores it.
+    config.writer?.({ type: 'codePatch', filePath: path, content, action: 'write' });
+
     // We deliberately do NOT poll the dev server for compile errors here.
     // The old curl-based check fired 1-2 shell commands per write, and the
     // parallel-component workflow (multiple e2b_write_file in one turn)
@@ -548,6 +556,8 @@ const patchFile = tool(
 
     await sbx.files.write(path, outcome.result);
     config.writer?.({ type: 'fileCreated', filePath: path });
+    // Direct codePatch fallback — see the matching comment in e2b_write_file.
+    config.writer?.({ type: 'codePatch', filePath: path, content: outcome.result, action: 'write' });
 
     // Mirror the new content into Yjs so collaborators / Monaco see the
     // result without waiting for a rescan. Same pattern as e2b_write_file.
