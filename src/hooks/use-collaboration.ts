@@ -26,6 +26,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
     updateFileContent,
     displayName,
     shareToken,
+    getFileContent,
   } = useChat();
 
   // Stable refs for the E2B-sync side effect — we don't want to rebind the
@@ -38,6 +39,8 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
   updateFileContentRef.current = updateFileContent;
   const shareTokenRef = useRef(shareToken);
   shareTokenRef.current = shareToken;
+  const getFileContentRef = useRef(getFileContent);
+  getFileContentRef.current = getFileContent;
 
   useEffect(() => {
     if (!sessionId || !selectedFile || !displayName) {
@@ -109,6 +112,65 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
         };
         awareness.on("change", updateUsers);
         updateUsers();
+      }
+
+      // Once Hocuspocus reports the room as synced, decide whether we still
+      // need to fetch content from the sandbox. Three cases:
+      //   1. yText already has bytes → another client / agent already wrote
+      //      them; do nothing.
+      //   2. yText is empty AND the in-memory tree has cached content for
+      //      this path → CodeEditor will seed from initialContent below.
+      //   3. yText is empty AND no cached content → fetch from the live
+      //      sandbox so the editor doesn't render an empty buffer for files
+      //      that exist in the agent's filesystem but haven't been touched
+      //      in this browser yet.
+      const ensureContent = async () => {
+        if (cancelled) return;
+        if (session.yText.length > 0) return;
+        const cached = getFileContentRef.current(selectedFile);
+        if (cached && cached.length > 0) return;
+        const sbx = sandboxIdRef.current;
+        if (!sbx) return;
+        try {
+          const res = await fetch("/api/read-from-sandbox", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sandboxId: sbx,
+              filePath: selectedFile,
+              sessionId,
+              shareToken: shareTokenRef.current ?? undefined,
+            }),
+          });
+          if (!res.ok) return;
+          const data = (await res.json()) as { content?: string };
+          if (cancelled) return;
+          // Re-check yText: another client may have populated the room
+          // while the HTTP round-trip was in flight.
+          if (session.yText.length > 0) {
+            // Just remember the latest content for downstream consumers.
+            updateFileContentRef.current(selectedFile, session.yText.toString());
+            return;
+          }
+          const content = data.content ?? "";
+          if (!content) return;
+          session.yText.doc!.transact(() => {
+            session.yText.insert(0, content);
+          }, "local-seed");
+          updateFileContentRef.current(selectedFile, content);
+        } catch (err) {
+          console.warn("[useCollaboration] read-from-sandbox failed:", err);
+        }
+      };
+
+      if (session.provider.synced) {
+        void ensureContent();
+      } else {
+        const onSync = () => {
+          session.provider.off("synced", onSync);
+          void ensureContent();
+        };
+        session.provider.on("synced", onSync);
       }
 
       // Mirror Yjs edits → file tree (for sidebar/etc) and → E2B sandbox.
