@@ -62,7 +62,7 @@ export function ShareButton({ sessionId }: Readonly<ShareButtonProps>) {
           className="gap-1.5 text-xs"
         >
           <Share2 className="h-3.5 w-3.5" />
-          Share
+          Collaborate
         </Button>
       </DialogTrigger>
       <DialogContent>
