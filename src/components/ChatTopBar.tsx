@@ -346,9 +346,6 @@ export function ChatTopBar({
         </div>
       </div>
 
-      {/* ── Desktop URL sub-row (preview pane only) ──────────────────── */}
-      {!isMobile && ctx.sandboxUrl && ctx.activeTab !== "code" && <DesktopUrlBar />}
-
       {/* The page should also render <ChatBottomTabBar /> below the layout
           so mobile users get a thumb-reachable Chat/Preview/Code switcher. */}
       {isMounted ? null : null}
@@ -570,69 +567,5 @@ function SheetAction({
       <Icon className="h-4 w-4 text-muted-foreground" />
       {label}
     </button>
-  );
-}
-
-// ─── Desktop URL chip (preview pane only) ───────────────────────────────
-
-function DesktopUrlBar() {
-  const ctx = useChat();
-  if (!ctx.sandboxUrl) return null;
-
-  const refresh = () => {
-    ctx.setIframeLoading(true);
-    const iframe = document.querySelector(
-      'iframe[title="Sandbox Preview"]',
-    ) as HTMLIFrameElement | null;
-    if (iframe) {
-      const s = iframe.src;
-      iframe.src = "";
-      setTimeout(() => {
-        iframe.src = s;
-      }, 0);
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-1.5 px-4 pb-2 pt-0">
-      <button
-        type="button"
-        onClick={refresh}
-        className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-        title="Refresh preview"
-        aria-label="Refresh preview"
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-      </button>
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border/60 bg-background/70 text-sm">
-        <span className="relative flex h-1.5 w-1.5 shrink-0">
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-        </span>
-        <span className="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground">
-          {ctx.sandboxUrl}
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            navigator.clipboard.writeText(ctx.sandboxUrl!);
-            toast.success("URL copied");
-          }}
-          className="p-0.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-          title="Copy URL"
-          aria-label="Copy URL"
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      <button
-        type="button"
-        onClick={() => globalThis.open(ctx.sandboxUrl!, "_blank")}
-        className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-        title="Open in new tab"
-        aria-label="Open in new tab"
-      >
-        <ExternalLink className="h-3.5 w-3.5" />
-      </button>
-    </div>
   );
 }

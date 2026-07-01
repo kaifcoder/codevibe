@@ -16,7 +16,7 @@ const markdownComponents: Components = {
   pre: ({ children, ...props }) => (
     <pre
       {...props}
-      className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-w-full"
+      className="whitespace-pre-wrap break-words max-w-full"
     >
       {children}
     </pre>
@@ -25,7 +25,7 @@ const markdownComponents: Components = {
     <code
       {...props}
       className={cn(
-        "break-words [overflow-wrap:anywhere] [word-break:break-word]",
+        "break-words [word-break:break-word]",
         className,
       )}
     >
@@ -33,7 +33,7 @@ const markdownComponents: Components = {
     </code>
   ),
   a: ({ children, ...props }) => (
-    <a {...props} className="break-all [overflow-wrap:anywhere]">
+    <a {...props} className="break-all">
       {children}
     </a>
   ),

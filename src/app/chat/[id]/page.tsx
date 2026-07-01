@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useSettings } from "@/contexts/settings-context";
 import { toast } from "sonner";
+import { RefreshCw, Copy, ExternalLink } from "lucide-react";
 import { ChatPanel, ChatMessage, ChatMessageStep } from "@/components/ChatPanel";
 import { ShareButton } from "@/components/ShareButton";
 import { DownloadButton } from "@/components/DownloadButton";
@@ -733,10 +734,6 @@ function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.sandboxId, ctx.isSandboxExpired, sessionId, ctx.shareToken]);
 
-  // Sandbox expiry no longer kicks the user off the preview tab — the
-  // SandboxExpiredPanel is rendered there and provides the one-click restore
-  // affordance, so we want it to be visible.
-
   // n8n sessions have no code panel — pin the preview tab so the iframe stays
   // visible even if some other effect tried to flip to "code".
   useEffect(() => {
@@ -861,11 +858,66 @@ function ChatPage() {
     }
 
     if (ctx.sandboxUrl && !ctx.isSandboxExpired) {
-      // The URL chip + refresh/copy/open buttons that used to live here have
-      // been hoisted into ChatTopBar so the top of the page is the single
-      // source of every control. The iframe itself fills the panel.
+      // The URL bar lives inside the preview panel itself (desktop only). On
+      // mobile the sandbox URL is surfaced via the "Live" pill in ChatTopBar.
+      const refreshPreview = () => {
+        ctx.setIframeLoading(true);
+        const iframe = document.querySelector(
+          'iframe[title="Sandbox Preview"]',
+        ) as HTMLIFrameElement | null;
+        if (iframe) {
+          const src = iframe.src;
+          iframe.src = "";
+          setTimeout(() => {
+            iframe.src = src;
+          }, 0);
+        }
+      };
+
       return (
         <div className="relative w-full h-full flex flex-col bg-background">
+          {!isMobile && (
+            <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border/40 shrink-0">
+              <button
+                type="button"
+                onClick={refreshPreview}
+                className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+                title="Refresh preview"
+                aria-label="Refresh preview"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+              <div className="flex-1 min-w-0 flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border/60 bg-background/70 text-sm">
+                <span className="relative flex h-1.5 w-1.5 shrink-0">
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                </span>
+                <span className="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  {ctx.sandboxUrl}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(ctx.sandboxUrl!);
+                    toast.success("URL copied");
+                  }}
+                  className="p-0.5 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+                  title="Copy URL"
+                  aria-label="Copy URL"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => globalThis.open(ctx.sandboxUrl!, "_blank")}
+                className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+                title="Open in new tab"
+                aria-label="Open in new tab"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <div className="relative flex-1 min-h-0">
             {ctx.iframeLoading && (
               <div className="absolute inset-0 z-10">
