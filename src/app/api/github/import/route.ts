@@ -58,26 +58,48 @@ async function detectDefaultBranch(repo: string, token: string): Promise<string 
 // Fire-and-forget install + dev-server boot. We don't block the HTTP response
 // on this — the frontend already shows a preview shimmer and the iframe
 // polls the sandbox URL until Next answers. Blocking here just makes the
-// import dialog sit spinning for ~90s of dead time. Runs in the background
-// inside the sandbox via nohup + disown, so its lifetime is bound to the
-// sandbox itself, not this request.
+// import dialog sit spinning for ~90s of dead time.
+//
+// We use a two-stage daemon fork:
+//   1. Write the real work to /tmp/import-boot.sh (avoids nested-quote hell).
+//   2. Fork it via `setsid ... &` and immediately `exit 0`.
+// The setsid detaches the child from the controlling terminal and puts it in
+// its own session/process group, so E2B's `commands.run` sees the parent
+// shell finish cleanly — otherwise the child inherits the parent's stdio and
+// E2B waits for its FDs to close, which never happens for a long-running dev
+// server, so the outer call hits `timeoutMs` and throws.
 async function startDevServerInBackground(sandbox: Sandbox): Promise<void> {
   const script = `
 set -u
 cd ${REPO_PATH}
 pkill -f "next dev" >/dev/null 2>&1 || true
-# Reuse the template-warmed node_modules when the cloned repo has no
-# lockfile-affecting differences: the sandbox snapshot already contains a
-# full Next.js install. --prefer-offline restores from ~/.npm without
-# hitting the registry when a package version is already cached.
-nohup bash -c 'npm install --prefer-offline --no-audit --no-fund --loglevel=error > /tmp/import-install.log 2>&1 && exec node ./node_modules/.bin/next dev --turbopack -p 3000 > /tmp/next.log 2>&1' </dev/null >/dev/null 2>&1 &
-disown || true
+
+# Stage 1: write the actual work script. Reusing the template-warmed
+# node_modules when possible via --prefer-offline keeps this fast.
+cat > /tmp/import-boot.sh <<'BOOT_EOF'
+#!/usr/bin/env bash
+cd ${REPO_PATH}
+{
+  echo "[import-boot] starting at $(date -u +%FT%TZ)"
+  npm install --prefer-offline --no-audit --no-fund --loglevel=error
+  echo "[import-boot] install done, launching next dev"
+  exec node ./node_modules/.bin/next dev --turbopack -p 3000
+} > /tmp/import-boot.log 2>&1
+BOOT_EOF
+chmod +x /tmp/import-boot.sh
+
+# Stage 2: double-fork with setsid so the child has no controlling tty and
+# no inherited FDs. E2B stops waiting the moment this outer shell exits.
+setsid bash /tmp/import-boot.sh </dev/null >/dev/null 2>&1 &
 echo STARTED
+exit 0
 `.trim();
   try {
-    // Return as soon as the shell has forked the background job. This
-    // typically resolves in <500ms — the install + boot proceeds on its own.
-    await runSandboxScript(sandbox, script, { timeoutMs: 15_000 });
+    // Timeout is a safety net — the script should return within ~200ms of
+    // spawning the daemon. If it takes longer than 5s something is very
+    // wrong (e.g. sandbox is under load) but we don't want to hang the
+    // import response on it.
+    await runSandboxScript(sandbox, script, { timeoutMs: 5_000 });
   } catch (err) {
     console.warn('[github/import] startDevServerInBackground threw:', (err as Error).message);
   }
