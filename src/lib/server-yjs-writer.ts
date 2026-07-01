@@ -24,8 +24,15 @@ const ACK_TIMEOUT_MS = 3000;
 const roomQueues = new Map<string, Promise<void>>();
 
 export async function writeToYjsRoom(roomId: string, content: string): Promise<void> {
+  // Normalize CRLF → LF at every ingress into Yjs. Monaco silently rewrites
+  // `\r\n` to `\n` when it renders the model, but Y.Text stores whatever
+  // bytes we insert. That size drift is what makes remote y-monaco cursors
+  // render one line below actual (every `\r` before the caret shifts the
+  // Y offset by 1). Killing `\r` here + at the CodeEditor seed path keeps
+  // Y.Text and Monaco in exact byte-for-byte agreement.
+  const normalized = content.includes('\r') ? content.replace(/\r\n/g, '\n').replace(/\r/g, '\n') : content;
   const previous = roomQueues.get(roomId) ?? Promise.resolve();
-  const next = previous.catch(() => {}).then(() => doWrite(roomId, content));
+  const next = previous.catch(() => {}).then(() => doWrite(roomId, normalized));
   roomQueues.set(roomId, next);
   try {
     await next;

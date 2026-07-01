@@ -25,8 +25,15 @@ export function CodeEditor({
 }: Readonly<CodeEditorProps>) {
   const [editor, setEditor] = useState<MonacoTypes.editor.IStandaloneCodeEditor | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
-  const initialContentRef = useRef(initialContent ?? "");
-  initialContentRef.current = initialContent ?? "";
+  // Normalize CRLF → LF at every entry point. Files cloned from Windows-touched
+  // repos ship `\r\n` line endings; Monaco silently rewrites them to `\n` when
+  // it renders the model, but Y.Text still holds the `\r`s. That size mismatch
+  // is what breaks remote-cursor rendering — every `\r` before the caret adds
+  // one to the Y offset, so peers see the remote caret one line below actual
+  // (and pressing right at EOL jumps two lines because it crosses a `\r\n`).
+  const normalizedInitial = (initialContent ?? "").replace(/\r\n/g, "\n");
+  const initialContentRef = useRef(normalizedInitial);
+  initialContentRef.current = normalizedInitial;
   const { resolvedTheme } = useTheme();
 
   useEffect(() => {
@@ -59,11 +66,28 @@ export function CodeEditor({
       // the seed content originated from the agent's E2B write, so bouncing
       // it back through /api/write-to-sandbox would either be redundant or
       // (if the agent wrote a newer version meanwhile) overwrite real code.
+      //
+      // `seed` was already CRLF-normalized when we captured it into the
+      // ref — see the note at the top of this component for why that
+      // matters for remote-cursor rendering.
       const seed = initialContentRef.current;
       if (yText.length === 0 && seed.length > 0) {
         yText.doc!.transact(() => {
           yText.insert(0, seed);
         }, "local-seed");
+      } else if (yText.length > 0 && yText.toString().includes("\r")) {
+        // Legacy repair: an earlier session (before we normalized at ingress)
+        // may have populated this room with CRLF content. Rewrite it in place
+        // with LF-only so remote cursors line up. Uses the same "local-seed"
+        // origin so the E2B observer treats it as inert.
+        const current = yText.toString();
+        const cleaned = current.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        if (cleaned !== current) {
+          yText.doc!.transact(() => {
+            yText.delete(0, yText.length);
+            yText.insert(0, cleaned);
+          }, "local-seed");
+        }
       }
 
       const binding = await bindMonaco({ editor, yText, awareness: provider.awareness ?? null });
@@ -87,6 +111,17 @@ export function CodeEditor({
 
   const handleEditorDidMount = useCallback(
     (mountedEditor: MonacoTypes.editor.IStandaloneCodeEditor) => {
+      // Lock the model to LF line endings. Yjs stores raw bytes and Monaco's
+      // renderer collapses `\r\n` to `\n` silently — that size drift is what
+      // makes remote y-monaco cursors render one line below actual. Setting
+      // EOL explicitly + normalizing every source at ingress keeps Y.Text
+      // and Monaco in exact byte-for-byte agreement.
+      const model = mountedEditor.getModel();
+      if (model) {
+        // 0 = EndOfLineSequence.LF (using the numeric enum value avoids
+        // pulling the monaco namespace into this file just for one constant).
+        model.setEOL(0);
+      }
       setEditor(mountedEditor);
     },
     [],
