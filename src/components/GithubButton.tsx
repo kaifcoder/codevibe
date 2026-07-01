@@ -211,15 +211,33 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
     }
   }
 
-  function handleDisconnect() {
-    // Local-only: clear the link in the UI. The session row keeps the link
-    // until the next push (which will overwrite it). We don't expose a
-    // server-side delete because reconnecting just means linking again, and
-    // a stray "Disconnect" click would otherwise lose the repo association.
+  async function handleDisconnect() {
+    // Persist the disconnect to the session row — a UI-only clear reverts
+    // on refresh because the page rehydrates githubRepo/githubBranch from
+    // the DB. Optimistically clear the UI first so the dialog closes
+    // instantly; if the PATCH fails we surface the error and restore.
+    const prevRepo = ctx.githubRepo;
+    const prevBranch = ctx.githubBranch;
     ctx.setGithubRepo(null);
     ctx.setGithubBranch(null);
     setOpen(false);
-    toast.message("Disconnected from GitHub for this view");
+    try {
+      const res = await fetch(`/api/session/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ githubRepo: null, githubBranch: null }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || `Disconnect failed (${res.status})`);
+      }
+      toast.message("Disconnected from GitHub");
+    } catch (err) {
+      // Roll back so the user isn't stranded with a lie in the UI.
+      ctx.setGithubRepo(prevRepo);
+      ctx.setGithubBranch(prevBranch);
+      toast.error(err instanceof Error ? err.message : "Disconnect failed");
+    }
   }
 
   const activePhase = pushPhase >= 0 ? PUSH_PHASES[pushPhase] : null;
