@@ -60,46 +60,54 @@ async function detectDefaultBranch(repo: string, token: string): Promise<string 
 // polls the sandbox URL until Next answers. Blocking here just makes the
 // import dialog sit spinning for ~90s of dead time.
 //
-// We use a two-stage daemon fork:
-//   1. Write the real work to /tmp/import-boot.sh (avoids nested-quote hell).
-//   2. Fork it via `setsid ... &` and immediately `exit 0`.
-// The setsid detaches the child from the controlling terminal and puts it in
-// its own session/process group, so E2B's `commands.run` sees the parent
-// shell finish cleanly — otherwise the child inherits the parent's stdio and
-// E2B waits for its FDs to close, which never happens for a long-running dev
-// server, so the outer call hits `timeoutMs` and throws.
+// Daemonization is via `nohup setsid --fork`:
+//   - `nohup` ignores SIGHUP so a login-shell exit doesn't kill the child.
+//   - `setsid --fork` forces a fork into a new session even when the caller
+//     is a session leader (which E2B's `bash -l` shell often is — bare
+//     `setsid` errors out with "cannot set process group" in that case).
+//   - All FDs are redirected to files so envd doesn't wait on inherited
+//     pipes, which is what caused the earlier `deadline_exceeded`.
 async function startDevServerInBackground(sandbox: Sandbox): Promise<void> {
   const script = `
 set -u
 cd ${REPO_PATH}
 pkill -f "next dev" >/dev/null 2>&1 || true
 
-# Stage 1: write the actual work script. Reusing the template-warmed
-# node_modules when possible via --prefer-offline keeps this fast.
+# Write the actual work script — dodges nested-quote hell and gives us a
+# clean file to \`tail -f\` for debugging.
 cat > /tmp/import-boot.sh <<'BOOT_EOF'
 #!/usr/bin/env bash
 cd ${REPO_PATH}
 {
   echo "[import-boot] starting at $(date -u +%FT%TZ)"
   npm install --prefer-offline --no-audit --no-fund --loglevel=error
-  echo "[import-boot] install done, launching next dev"
+  echo "[import-boot] install exit=$? at $(date -u +%FT%TZ), launching next dev"
   exec node ./node_modules/.bin/next dev --turbopack -p 3000
 } > /tmp/import-boot.log 2>&1
 BOOT_EOF
 chmod +x /tmp/import-boot.sh
 
-# Stage 2: double-fork with setsid so the child has no controlling tty and
-# no inherited FDs. E2B stops waiting the moment this outer shell exits.
-setsid bash /tmp/import-boot.sh </dev/null >/dev/null 2>&1 &
+# Detach: nohup + setsid --fork, with every FD redirected to a real file so
+# envd stops waiting on the child. The trailing \`exit 0\` guarantees this
+# outer shell finishes even if the fork returns a status the runner might
+# interpret as failure.
+nohup setsid --fork bash /tmp/import-boot.sh </dev/null >>/tmp/import-boot.log 2>&1
 echo STARTED
 exit 0
 `.trim();
   try {
     // Timeout is a safety net — the script should return within ~200ms of
-    // spawning the daemon. If it takes longer than 5s something is very
+    // spawning the daemon. If it takes longer than 10s something is very
     // wrong (e.g. sandbox is under load) but we don't want to hang the
     // import response on it.
-    await runSandboxScript(sandbox, script, { timeoutMs: 5_000 });
+    const res = await runSandboxScript(sandbox, script, { timeoutMs: 10_000 });
+    if (!res.stdout.includes('STARTED')) {
+      console.warn('[github/import] daemon spawn returned without STARTED:', {
+        stdout: res.stdout,
+        stderr: res.stderr,
+        exitCode: res.exitCode,
+      });
+    }
   } catch (err) {
     console.warn('[github/import] startDevServerInBackground threw:', (err as Error).message);
   }
@@ -163,12 +171,18 @@ export async function POST(request: NextRequest) {
       // the token doesn't linger in .git/config.
       const preserveList = PRESERVED_DOTS.map((n) => JSON.stringify(n)).join(' ');
       const cloneScript = `
-set -e
+set -eo pipefail
+# Never prompt for credentials — a wrong token / private repo without access
+# would otherwise hang forever waiting on tty input.
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/true
+export GIT_LFS_SKIP_SMUDGE=1
+
 pkill -f "next dev" >/dev/null 2>&1 || true
 
 # Fresh scratch dir for the clone; guaranteed empty so git won't refuse.
 SCRATCH="$(mktemp -d /tmp/repo.XXXXXX)"
-git clone --depth 1 --single-branch --branch ${JSON.stringify(branch)} ${JSON.stringify(cloneUrl)} "$SCRATCH"
+git clone --depth 1 --single-branch --branch ${JSON.stringify(branch)} ${JSON.stringify(cloneUrl)} "$SCRATCH" 2>&1
 
 # Swap: wipe /home/user contents EXCEPT preserved cache dirs, then move the
 # cloned tree in. We copy hidden files too so .env, .gitignore, etc. survive.
@@ -195,9 +209,27 @@ echo CLONE_OK
       const cloneRes = await runSandboxScript(sandbox, cloneScript, {
         timeoutMs: 60_000,
       });
-      if (!(cloneRes.stdout ?? '').includes('CLONE_OK')) {
+      if (cloneRes.exitCode !== 0 || !(cloneRes.stdout ?? '').includes('CLONE_OK')) {
+        console.error('[github/import] clone script failed:', {
+          exitCode: cloneRes.exitCode,
+          stdout: cloneRes.stdout,
+          stderr: cloneRes.stderr,
+          repo,
+          branch,
+        });
+        // Surface a friendly error but include enough server-side detail
+        // that we can diagnose from the Vercel logs.
+        const stderr = (cloneRes.stderr || '').toLowerCase();
+        let hint = 'Clone failed.';
+        if (stderr.includes('repository not found') || stderr.includes('not found')) {
+          hint = `Repository ${repo} not found. Confirm the name and that your GitHub connection has access.`;
+        } else if (stderr.includes('couldn\'t find remote ref') || stderr.includes('remote branch')) {
+          hint = `Branch "${branch}" does not exist on ${repo}.`;
+        } else if (stderr.includes('authentication failed') || stderr.includes('403')) {
+          hint = 'GitHub authentication failed. Reconnect GitHub with the "repo" scope.';
+        }
         throw new Error(
-          `git clone failed: ${cloneRes.stderr || cloneRes.stdout || 'unknown error'}`,
+          `${hint} (${cloneRes.stderr || cloneRes.stdout || `exit ${cloneRes.exitCode}`})`,
         );
       }
 
