@@ -38,8 +38,8 @@ export function attachRemoteCursorRenderer(
   binding: MonacoBinding,
   awareness: Awareness,
 ): () => void {
-  const model = editor.getModel();
-  if (!model) return () => {};
+  const initialModel = editor.getModel();
+  if (!initialModel) return () => {};
 
   const doc = binding.doc;
   const ytext = binding.ytext;
@@ -74,6 +74,12 @@ export function attachRemoteCursorRenderer(
   }
 
   function render() {
+    // Re-read the model on every render — Monaco can swap or dispose the
+    // model out from under us on file switch. Also gives TS a fresh
+    // non-null narrowing for the block below.
+    const model = editor.getModel();
+    if (!model) return;
+
     const states = awareness.getStates();
     const seen = new Set<number>();
 
@@ -177,7 +183,7 @@ export function attachRemoteCursorRenderer(
   awareness.on('update', scheduleRender);
   // Also render on model content change — after a Yjs update lands, the
   // stored `RelativePosition` may resolve to a new absolute index.
-  const modelListener = model.onDidChangeContent(scheduleRender);
+  const modelListener = initialModel.onDidChangeContent(scheduleRender);
   render();
 
   return () => {
