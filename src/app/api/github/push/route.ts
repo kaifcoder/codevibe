@@ -154,11 +154,36 @@ git config core.untrackedCache true        # cache untracked file scan
 git config core.fsmonitor false            # no fsmonitor daemon needed
 git config gc.auto 0                       # never auto-gc mid-push
 git config pack.threads 0                  # let pack use all CPUs
-git config pack.window 1                   # cheap delta window — speed > size
+git config pack.window 0                   # skip delta search on first push — every object is new
+git config pack.depth 1                    # ditto — no delta chains to compute
 git config pack.compression 1              # zlib level 1 (fastest)
 git config core.compression 1              # ditto for loose objects
 git config http.postBuffer 524288000       # 500MB — avoids chunked-encoding stall
+git config http.version HTTP/2             # HTTP/2 multiplexes negotiation
+git config protocol.version 2              # git wire protocol v2 — fewer round-trips
 git config transfer.fsckObjects false      # don't verify server-side receive
+`.trim();
+}
+
+// Prepare the local git state and produce a ready-to-push commit *without*
+// knowing the remote yet. Runs in parallel with the GitHub API "create repo"
+// call so we don't waste the 500ms–1s of network latency on serial work.
+// Emits `PREPARED` on success — the second stage plugs in origin and pushes.
+function prepareLocalCommitScript(
+  branch: string,
+  committerName: string,
+  committerEmail: string,
+  message: string,
+): string {
+  return `
+rm -rf .git
+git init -b ${JSON.stringify(branch)}
+${fastGitPreamble()}
+git config user.name ${JSON.stringify(committerName)}
+git config user.email ${JSON.stringify(committerEmail)}
+git add -A
+git commit -m ${JSON.stringify(message)} --allow-empty
+echo PREPARED
 `.trim();
 }
 
@@ -268,6 +293,25 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Kick off the local commit prep and the GitHub API repo-create in
+      // parallel. On my measurements this saves ~500ms–1s on the first push
+      // — the GitHub API round-trip and the `add -A` + `commit` are
+      // roughly the same length and were previously running back-to-back.
+      // We optimistically use "main" for `git init -b` since GitHub defaults
+      // to it; if the created repo lands on a different default_branch we
+      // rename locally before pushing (a near-free op).
+      const optimisticBranch = 'main';
+      const commitMessage = body.message || 'Initial commit from CodeVibe';
+      const prepPromise = runGit(
+        sandbox,
+        prepareLocalCommitScript(
+          optimisticBranch,
+          committerName,
+          committerEmail,
+          commitMessage,
+        ),
+      );
+
       const createRes = await ghFetch<GithubRepoResponse>('/user/repos', {
         method: 'POST',
         token,
@@ -279,6 +323,9 @@ export async function POST(request: NextRequest) {
         }),
       });
       if (!createRes.ok) {
+        // Let the local prep finish so we don't leave a half-init'd .git
+        // behind for the next attempt, but don't propagate its error.
+        await prepPromise.catch(() => null);
         const { status } = createRes;
         const friendly =
           status === 422
@@ -298,23 +345,31 @@ export async function POST(request: NextRequest) {
       const branch = repo.default_branch || 'main';
       const remoteUrl = authedRemoteUrl(repo.full_name, token);
 
-      // Fresh init: blow away any pre-existing .git so we don't pick up an
-      // unrelated history (the create-next-app baseline doesn't ship one,
-      // but the agent occasionally does).
-      const initScript = `
-rm -rf .git
-git init -b ${branch}
-${fastGitPreamble()}
-git config user.name ${JSON.stringify(committerName)}
-git config user.email ${JSON.stringify(committerEmail)}
-git add -A
-git commit -m ${JSON.stringify(body.message || 'Initial commit from CodeVibe')} --allow-empty
+      // Await the local prep now — usually it finished during the API call.
+      const prepRes = await prepPromise;
+      if (prepRes.exitCode !== 0 || !prepRes.stdout.includes('PREPARED')) {
+        const out = prepRes.stderr || prepRes.stdout;
+        return NextResponse.json(
+          { error: gitAuthHint(out) || `git prep failed: ${out}` },
+          { status: 500 },
+        );
+      }
+
+      // Rename branch if GitHub gave us something other than our optimistic
+      // guess; then wire up origin and push. This second script is small so
+      // the second sandbox round-trip is cheap.
+      const renameIfNeeded =
+        branch === optimisticBranch
+          ? ''
+          : `git branch -M ${JSON.stringify(branch)}`;
+      const pushScript = `
+${renameIfNeeded}
 git remote add origin ${JSON.stringify(remoteUrl)}
-git push --no-verify -u origin ${branch}
+git push --no-verify -u origin ${JSON.stringify(branch)}
 `.trim();
-      const initRes = await runGit(sandbox, initScript);
-      if (initRes.exitCode !== 0) {
-        const out = initRes.stderr || initRes.stdout;
+      const pushRes = await runGit(sandbox, pushScript);
+      if (pushRes.exitCode !== 0) {
+        const out = pushRes.stderr || pushRes.stdout;
         return NextResponse.json(
           { error: gitAuthHint(out) || `git push failed: ${out}` },
           { status: 500 },

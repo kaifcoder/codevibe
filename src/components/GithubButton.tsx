@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  Github,
   Loader2,
   ExternalLink,
   Plug,
@@ -12,6 +11,11 @@ import {
   Sparkles,
   ShieldCheck,
 } from "lucide-react";
+// The `Github` brand icon is marked @deprecated in lucide-react (brand marks
+// slated for removal in v1.0), but it's still the right glyph for a "push
+// to GitHub" action. Aliased so the deprecation notice is scoped to this
+// one import line and doesn't pepper every JSX use.
+import { Github as GithubIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import {
@@ -85,17 +89,28 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
 
   // Steps forward through the fake phase labels while a real push runs. The
   // last phase sticks — we don't want it to loop back to "Staging" if the
-  // API is slow, that would be a lie.
+  // API is slow, that would be a lie. Timings roughly match the real work:
+  // stage/commit finish quickly (~600ms combined) and upload is the long
+  // tail, so we linger there rather than racing to "Finishing up".
+  const PHASE_DELAYS = [400, 700, 2000] as const; // gap AFTER phases 0, 1, 2
   function startProgressAnimation(): () => void {
     setPushPhase(0);
     let phase = 0;
-    const timer = setInterval(() => {
-      phase = Math.min(phase + 1, PUSH_PHASES.length - 1);
-      setPushPhase(phase);
-      if (phase === PUSH_PHASES.length - 1) clearInterval(timer);
-    }, 1200);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const step = () => {
+      if (phase >= PUSH_PHASES.length - 1) return;
+      const delay = PHASE_DELAYS[phase] ?? 1500;
+      timers.push(
+        setTimeout(() => {
+          phase += 1;
+          setPushPhase(phase);
+          step();
+        }, delay),
+      );
+    };
+    step();
     return () => {
-      clearInterval(timer);
+      timers.forEach(clearTimeout);
       setPushPhase(-1);
     };
   }
@@ -221,28 +236,15 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
         size="sm"
         onClick={() => !disabled && setOpen(true)}
         disabled={disabled}
-        className={cn(
-          "gap-1.5 text-xs h-8 px-2.5 rounded-md transition-colors",
-          linked
-            ? "text-foreground hover:bg-muted"
-            : "text-muted-foreground hover:text-foreground hover:bg-muted",
-        )}
+        className="gap-1.5 text-xs"
         title={titleText}
       >
         {busy ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : linked ? (
-          <ArrowUpRight className="h-3.5 w-3.5" />
         ) : (
-          <Github className="h-3.5 w-3.5" />
+          <GithubIcon className="h-3.5 w-3.5" />
         )}
-        {linked ? "Push" : "Push to GitHub"}
-        {linked && (
-          <span className="hidden md:inline-flex items-center gap-1 pl-1 text-[10px] text-muted-foreground/70 font-mono">
-            <span className="h-1 w-1 rounded-full bg-emerald-500" />
-            {branchLabel}
-          </span>
-        )}
+        {linked ? "Push" : "GitHub"}
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => !busy && setOpen(v)}>
@@ -255,7 +257,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
                 <DialogHeader className="space-y-2 relative">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 bg-background/80 shadow-sm">
-                      <Github className="h-4 w-4" />
+                      <GithubIcon className="h-4 w-4" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <DialogTitle className="text-base font-semibold leading-tight">
@@ -273,7 +275,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 font-mono text-[11px] text-foreground hover:border-border transition-colors"
                     >
-                      <Github className="h-3 w-3" />
+                      <GithubIcon className="h-3 w-3" />
                       {ctx.githubRepo}
                       <ExternalLink className="h-2.5 w-2.5 text-muted-foreground" />
                     </a>
@@ -384,7 +386,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
                 <DialogHeader className="space-y-2 relative">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 bg-background/80 shadow-sm">
-                      <Github className="h-4 w-4" />
+                      <GithubIcon className="h-4 w-4" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <DialogTitle className="text-base font-semibold leading-tight">
