@@ -26,5 +26,43 @@ export async function bindMonaco(config: BindMonacoConfig): Promise<MonacoBindin
 
   const { MonacoBinding: MonacoBindingClass } = await import('y-monaco');
 
-  return new MonacoBindingClass(yText, model, new Set([editor]), awareness);
+  const binding = new MonacoBindingClass(yText, model, new Set([editor]), awareness);
+
+  // y-monaco's internal `_rerenderDecorations` uses `editor.deltaDecorations`
+  // which, in newer Monaco, is deprecated and can silently no-op when
+  // called outside a Monaco microtask. That produced the "remote caret is
+  // on the correct line but doesn't follow peer's movement" symptom —
+  // publishing worked, but the receiving side never re-drew.
+  //
+  // Force a repaint on every awareness change by nudging the editor: any
+  // no-op layout call is enough to flush pending decoration deltas. We
+  // debounce with rAF so a burst of awareness updates (from a fast-moving
+  // caret) collapses into one paint per frame.
+  if (awareness) {
+    let rafId: number | null = null;
+    const kick = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        // A null-effect layout — Monaco recomputes decoration positions
+        // on layout, so this is the cheapest way to force a re-render
+        // without touching the model.
+        editor.layout();
+      });
+    };
+    awareness.on('change', kick);
+    // Clean up when the binding is disposed. y-monaco doesn't expose a
+    // cleanup callback on the binding object, so we monkey-patch destroy.
+    const origDestroy = binding.destroy.bind(binding);
+    binding.destroy = () => {
+      awareness.off('change', kick);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      origDestroy();
+    };
+  }
+
+  return binding;
 }
