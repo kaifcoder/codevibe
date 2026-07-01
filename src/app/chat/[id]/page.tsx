@@ -763,10 +763,12 @@ function ChatPage() {
           .catch(() => {});
 
         toast.success(
-          data.devReady === "ready"
-            ? `Imported ${data.repo}`
-            : `Imported ${data.repo} — dev server slow to boot`,
-          { id: t, duration: 8_000 },
+          data.devReady === "booting"
+            ? `Imported ${data.repo} — dev server booting`
+            : data.devReady === "ready"
+              ? `Imported ${data.repo}`
+              : `Imported ${data.repo} — dev server slow to boot`,
+          { id: t, duration: 6_000 },
         );
       } catch (err) {
         if (!cancelled) {
@@ -954,7 +956,7 @@ function ChatPage() {
     if (importingRepoName && !ctx.sandboxUrl) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">
-          <div className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-16 w-16" />
+          <div className="animate-spin rounded-full border-4 border-muted border-t-primary h-16 w-16" />
           <div className="space-y-1.5 max-w-sm">
             <p className="text-sm font-medium">
               Importing <span className="font-mono">{importingRepoName}</span>…
@@ -971,7 +973,7 @@ function ChatPage() {
     if (isCheckingExpiration) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">
-          <div className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-16 w-16" />
+          <div className="animate-spin rounded-full border-4 border-muted border-t-primary h-16 w-16" />
           <p className="text-sm text-muted-foreground">Checking sandbox status...</p>
         </div>
       );

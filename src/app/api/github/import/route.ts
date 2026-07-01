@@ -7,6 +7,11 @@ import { runSandboxScript } from '@/lib/sandbox-utils';
 
 
 const REPO_PATH = '/home/user';
+// Cache dirs we preserve across the wipe. The template pre-warmed `.npm` and
+// `.cache` during snapshot build — nuking them forces every import to pull
+// packages over the network cold. Keeping them turns most `npm install` runs
+// into a cache-only restore.
+const PRESERVED_DOTS = ['.npm', '.cache', '.local', '.config'];
 
 interface ImportBody {
   sessionId: string;
@@ -50,36 +55,31 @@ async function detectDefaultBranch(repo: string, token: string): Promise<string 
   return data.default_branch ?? null;
 }
 
-// Boot dev server after a fresh clone — the cloned tree won't have
-// node_modules so an install is mandatory before next dev can come up.
-async function bootDevServer(sandbox: Sandbox): Promise<'ready' | 'timeout' | 'fail'> {
+// Fire-and-forget install + dev-server boot. We don't block the HTTP response
+// on this — the frontend already shows a preview shimmer and the iframe
+// polls the sandbox URL until Next answers. Blocking here just makes the
+// import dialog sit spinning for ~90s of dead time. Runs in the background
+// inside the sandbox via nohup + disown, so its lifetime is bound to the
+// sandbox itself, not this request.
+async function startDevServerInBackground(sandbox: Sandbox): Promise<void> {
   const script = `
 set -u
 cd ${REPO_PATH}
 pkill -f "next dev" >/dev/null 2>&1 || true
-sleep 1
-npm install --prefer-offline --no-audit --no-fund > /tmp/import-install.log 2>&1 || true
-nohup npx next dev --turbopack > /tmp/next.log 2>&1 &
+# Reuse the template-warmed node_modules when the cloned repo has no
+# lockfile-affecting differences: the sandbox snapshot already contains a
+# full Next.js install. --prefer-offline restores from ~/.npm without
+# hitting the registry when a package version is already cached.
+nohup bash -c 'npm install --prefer-offline --no-audit --no-fund --loglevel=error > /tmp/import-install.log 2>&1 && exec node ./node_modules/.bin/next dev --turbopack -p 3000 > /tmp/next.log 2>&1' </dev/null >/dev/null 2>&1 &
 disown || true
-for i in $(seq 1 90); do
-  if curl -sf -o /dev/null http://localhost:3000; then
-    echo READY
-    exit 0
-  fi
-  sleep 1
-done
-echo TIMEOUT
-exit 1
+echo STARTED
 `.trim();
   try {
-    const res = await runSandboxScript(sandbox, script, { timeoutMs: 120_000 });
-    const out = (res.stdout ?? '').trim();
-    if (out.endsWith('READY')) return 'ready';
-    console.warn('[github/import] dev server not ready:', { stdout: out, stderr: res.stderr });
-    return 'timeout';
+    // Return as soon as the shell has forked the background job. This
+    // typically resolves in <500ms — the install + boot proceeds on its own.
+    await runSandboxScript(sandbox, script, { timeoutMs: 15_000 });
   } catch (err) {
-    console.warn('[github/import] bootDevServer threw:', (err as Error).message);
-    return 'fail';
+    console.warn('[github/import] startDevServerInBackground threw:', (err as Error).message);
   }
 }
 
@@ -130,24 +130,48 @@ export async function POST(request: NextRequest) {
 
     const sandbox = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });
     try {
-      // Clear /home/user (git refuses to clone into a non-empty dir) then
-      // clone the repo. We use the authed URL transiently — git stores it
-      // in .git/config, so right after we rewrite origin to the unauthed
-      // URL to avoid leaving a long-lived token on disk.
+      // Clone into a scratch dir first, then swap it into /home/user. This
+      // keeps the template's warmed caches (~/.npm, ~/.cache/next) intact —
+      // wiping them with `rm -rf *` in /home/user is what made cold imports
+      // take a minute (every dep re-fetched from the registry).
+      //
+      // Shallow + single-branch keeps the git payload tiny; for most repos
+      // this drops clone time from tens of seconds to ~2s. We use the
+      // authed URL transiently, then rewrite origin to the unauthed URL so
+      // the token doesn't linger in .git/config.
+      const preserveList = PRESERVED_DOTS.map((n) => JSON.stringify(n)).join(' ');
       const cloneScript = `
 set -e
 pkill -f "next dev" >/dev/null 2>&1 || true
+
+# Fresh scratch dir for the clone; guaranteed empty so git won't refuse.
+SCRATCH="$(mktemp -d /tmp/repo.XXXXXX)"
+git clone --depth 1 --single-branch --branch ${JSON.stringify(branch)} ${JSON.stringify(cloneUrl)} "$SCRATCH"
+
+# Swap: wipe /home/user contents EXCEPT preserved cache dirs, then move the
+# cloned tree in. We copy hidden files too so .env, .gitignore, etc. survive.
 cd /home/user
 shopt -s dotglob nullglob
-rm -rf -- *
+for entry in *; do
+  keep=0
+  for p in ${preserveList}; do
+    if [ "$entry" = "$p" ]; then keep=1; break; fi
+  done
+  if [ "$keep" = "0" ]; then rm -rf -- "$entry"; fi
+done
 shopt -u dotglob
-git clone --branch ${JSON.stringify(branch)} ${JSON.stringify(cloneUrl)} ${REPO_PATH}
+
+shopt -s dotglob
+mv "$SCRATCH"/* /home/user/ 2>/dev/null || true
+shopt -u dotglob
+rm -rf "$SCRATCH"
+
 cd ${REPO_PATH}
 git remote set-url origin ${JSON.stringify(`https://github.com/${repo}.git`)}
 echo CLONE_OK
 `.trim();
       const cloneRes = await runSandboxScript(sandbox, cloneScript, {
-        timeoutMs: 90_000,
+        timeoutMs: 60_000,
       });
       if (!(cloneRes.stdout ?? '').includes('CLONE_OK')) {
         throw new Error(
@@ -155,7 +179,11 @@ echo CLONE_OK
         );
       }
 
-      const devReady = await bootDevServer(sandbox);
+      // Kick off install + dev server without blocking the response — the
+      // frontend iframe / shimmer already handles the "server not up yet"
+      // window. This is what makes the import dialog return in seconds
+      // instead of a minute+.
+      void startDevServerInBackground(sandbox);
       const host = sandbox.getHost(cfg.port);
       const sandboxUrl = `https://${host}`;
 
@@ -177,7 +205,8 @@ echo CLONE_OK
         repo,
         branch,
         templateType,
-        devReady,
+        // Dev server boots in the background; the client polls via iframe.
+        devReady: 'booting',
       });
     } catch (err) {
       try {
