@@ -67,7 +67,7 @@ export function ShareButton({ sessionId }: Readonly<ShareButtonProps>) {
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Share Session</DialogTitle>
+          <DialogTitle>Invite others to collaborate</DialogTitle>
           <DialogDescription>
             Anyone with this link can view and collaborate on this session in
             real-time.
