@@ -1,7 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Github, Loader2, ExternalLink, Plug, GitBranch } from "lucide-react";
+import {
+  Github,
+  Loader2,
+  ExternalLink,
+  Plug,
+  GitBranch,
+  CheckCircle2,
+  ArrowUpRight,
+  Sparkles,
+  ShieldCheck,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import {
@@ -14,8 +24,8 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { useChat } from "@/contexts/chat-context";
+import { cn } from "@/lib/utils";
 
 interface GithubButtonProps {
   sessionId: string;
@@ -31,16 +41,15 @@ interface PushResponse {
   error?: string;
 }
 
-interface ImportResponse {
-  ok: boolean;
-  sandboxId: string;
-  sandboxUrl: string;
-  repo: string;
-  branch: string;
-  templateType: "nextjs" | "n8n" | "chat";
-  devReady: "ready" | "timeout" | "fail";
-  error?: string;
-}
+// Optimistic-progress phases for the push flow. The API is one call, so we
+// approximate progress with a rolling label — the user gets motion instead of
+// staring at a static spinner while `git add -A` walks the tree.
+const PUSH_PHASES = [
+  "Staging changes",
+  "Compressing objects",
+  "Uploading to GitHub",
+  "Finishing up",
+] as const;
 
 export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
   const ctx = useChat();
@@ -48,14 +57,17 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 0-indexed into PUSH_PHASES; -1 = idle. Bumps forward on a timer while a
+  // push is in flight so the dialog feels alive.
+  const [pushPhase, setPushPhase] = useState<number>(-1);
 
   // Linked-mode state.
   const [commitMessage, setCommitMessage] = useState("");
 
-  // Unlinked-mode state.
-  const [tab, setTab] = useState<"create" | "import">("create");
+  // Unlinked-mode state — just a repo name. "Import existing" was removed
+  // because this button lives inside an active chat where a project is
+  // already open in the sandbox; importing would silently replace it.
   const [repoName, setRepoName] = useState("");
-  const [importInput, setImportInput] = useState("");
 
   const disabled =
     !ctx.isClerkAuthed
@@ -66,8 +78,27 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
     if (!ctx.isClerkAuthed) return "Sign in to push to GitHub";
     if (ctx.isSandboxExpired) return "Restore the sandbox before using GitHub";
     if (linked) return `Push to ${ctx.githubRepo}`;
-    return "Connect a GitHub repository";
+    return "Push this project to a new GitHub repository";
   })();
+
+  const branchLabel = ctx.githubBranch || "main";
+
+  // Steps forward through the fake phase labels while a real push runs. The
+  // last phase sticks — we don't want it to loop back to "Staging" if the
+  // API is slow, that would be a lie.
+  function startProgressAnimation(): () => void {
+    setPushPhase(0);
+    let phase = 0;
+    const timer = setInterval(() => {
+      phase = Math.min(phase + 1, PUSH_PHASES.length - 1);
+      setPushPhase(phase);
+      if (phase === PUSH_PHASES.length - 1) clearInterval(timer);
+    }, 1200);
+    return () => {
+      clearInterval(timer);
+      setPushPhase(-1);
+    };
+  }
 
   async function handleCommit() {
     if (!commitMessage.trim()) {
@@ -75,6 +106,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
       return;
     }
     setBusy(true);
+    const stopProgress = startProgressAnimation();
     const t = toast.loading(`Pushing to ${ctx.githubRepo}…`);
     try {
       const res = await fetch("/api/github/push", {
@@ -108,6 +140,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Push failed", { id: t });
     } finally {
+      stopProgress();
       setBusy(false);
     }
   }
@@ -122,6 +155,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
       return;
     }
     setBusy(true);
+    const stopProgress = startProgressAnimation();
     const t = toast.loading("Creating repo & pushing…");
     try {
       const res = await fetch("/api/github/push", {
@@ -157,56 +191,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Create failed", { id: t });
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleImport() {
-    if (!importInput.trim()) {
-      toast.error("Paste owner/name or a GitHub URL");
-      return;
-    }
-    setBusy(true);
-    const t = toast.loading("Importing repo into a fresh sandbox…");
-    try {
-      const res = await fetch("/api/github/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          repo: importInput.trim(),
-        }),
-      });
-      const data = (await res.json()) as ImportResponse;
-      if (!res.ok || !data.ok) throw new Error(data.error || `Import failed (${res.status})`);
-
-      // Adopt the new sandbox the same way SandboxExpiredPanel does — the
-      // next agent run will forward this id via configurable.sandboxId so
-      // resolveSandbox picks it up instead of spinning a duplicate.
-      ctx.setSandboxId(data.sandboxId);
-      ctx.setSandboxUrl(data.sandboxUrl);
-      ctx.setSandboxCreatedAt(Date.now());
-      ctx.setIsSandboxExpired(false);
-      ctx.setIframeLoading(true);
-      ctx.setShowSecondPanel(true);
-      ctx.setActiveTab("live preview");
-      ctx.setGithubRepo(data.repo);
-      ctx.setGithubBranch(data.branch);
-
-      toast.success(
-        <span className="flex items-center gap-1.5">
-          Imported {data.repo}
-          {data.devReady !== "ready" && (
-            <span className="text-amber-500">— dev server slow to boot</span>
-          )}
-        </span>,
-        { id: t, duration: 8_000 },
-      );
-      setImportInput("");
-      setOpen(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Import failed", { id: t });
-    } finally {
+      stopProgress();
       setBusy(false);
     }
   }
@@ -222,6 +207,13 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
     toast.message("Disconnected from GitHub for this view");
   }
 
+  const activePhase = pushPhase >= 0 ? PUSH_PHASES[pushPhase] : null;
+
+  // We don't have the GitHub username in ctx — display a neutral placeholder
+  // in the create preview. The server route uses the OAuth token to resolve
+  // the actual owner, so this is purely cosmetic.
+  const clerkUsername = "your-account";
+
   return (
     <>
       <Button
@@ -229,78 +221,152 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
         size="sm"
         onClick={() => !disabled && setOpen(true)}
         disabled={disabled}
-        className="gap-1.5 text-xs"
+        className={cn(
+          "gap-1.5 text-xs h-8 px-2.5 rounded-md transition-colors",
+          linked
+            ? "text-foreground hover:bg-muted"
+            : "text-muted-foreground hover:text-foreground hover:bg-muted",
+        )}
         title={titleText}
       >
         {busy ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : linked ? (
+          <ArrowUpRight className="h-3.5 w-3.5" />
         ) : (
           <Github className="h-3.5 w-3.5" />
         )}
-        {linked ? "Push" : "GitHub"}
+        {linked ? "Push" : "Push to GitHub"}
+        {linked && (
+          <span className="hidden md:inline-flex items-center gap-1 pl-1 text-[10px] text-muted-foreground/70 font-mono">
+            <span className="h-1 w-1 rounded-full bg-emerald-500" />
+            {branchLabel}
+          </span>
+        )}
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => !busy && setOpen(v)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg p-0 gap-0 overflow-hidden">
           {linked ? (
             <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <Github className="h-4 w-4" /> Push to GitHub
-                </DialogTitle>
-                <DialogDescription className="flex items-center gap-1.5">
-                  <span>Linked to</span>
-                  <a
-                    href={`https://github.com/${ctx.githubRepo}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 font-mono text-xs underline underline-offset-2"
-                  >
-                    {ctx.githubRepo}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <span className="inline-flex items-center gap-1 ml-1 text-xs">
-                    <GitBranch className="h-3 w-3" />
-                    {ctx.githubBranch || "main"}
-                  </span>
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-2 py-2">
-                <Label htmlFor="commit-message" className="text-xs">
-                  Commit message
-                </Label>
-                <Input
-                  id="commit-message"
-                  placeholder="Update from CodeVibe"
-                  value={commitMessage}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !busy) handleCommit();
-                  }}
-                  disabled={busy}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Stages everything in the sandbox, commits, and pushes to{" "}
-                  <span className="font-mono">{ctx.githubBranch || "main"}</span>.
-                </p>
+              {/* Linked header — the repo link is the star of the show. */}
+              <div className="relative overflow-hidden border-b border-border/60 bg-linear-to-br from-muted/40 via-background to-background px-6 pt-6 pb-5">
+                <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-emerald-500/10 blur-3xl" />
+                <DialogHeader className="space-y-2 relative">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 bg-background/80 shadow-sm">
+                      <Github className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <DialogTitle className="text-base font-semibold leading-tight">
+                        Push to GitHub
+                      </DialogTitle>
+                      <DialogDescription className="text-xs text-muted-foreground leading-snug">
+                        Stages the sandbox tree, commits, and pushes to the linked repo.
+                      </DialogDescription>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <a
+                      href={`https://github.com/${ctx.githubRepo}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 font-mono text-[11px] text-foreground hover:border-border transition-colors"
+                    >
+                      <Github className="h-3 w-3" />
+                      {ctx.githubRepo}
+                      <ExternalLink className="h-2.5 w-2.5 text-muted-foreground" />
+                    </a>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[11px] font-mono text-muted-foreground">
+                      <GitBranch className="h-3 w-3" />
+                      {branchLabel}
+                    </span>
+                  </div>
+                </DialogHeader>
               </div>
-              <DialogFooter className="flex justify-between">
+
+              <div className="px-6 py-4 space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="commit-message" className="text-xs font-medium">
+                    Commit message
+                  </Label>
+                  <Input
+                    id="commit-message"
+                    placeholder="Update from CodeVibe"
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !busy) handleCommit();
+                    }}
+                    disabled={busy}
+                    className="h-9 bg-muted/30 border-border/60 focus-visible:ring-1 focus-visible:ring-emerald-500/40 focus-visible:border-emerald-500/40"
+                    autoFocus
+                  />
+                  <p className="text-[11px] text-muted-foreground leading-snug pt-0.5">
+                    Cache dirs like <span className="font-mono">node_modules</span>,{" "}
+                    <span className="font-mono">.next</span>, and{" "}
+                    <span className="font-mono">.cache</span> are skipped automatically
+                    for a fast push.
+                  </p>
+                </div>
+
+                {/* Progress bar / phase label — only visible while a push is
+                    running. Gives the user a real sense of forward motion. */}
+                {busy && activePhase && (
+                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
+                    <div className="flex items-center gap-2 text-[12px] font-medium">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500" />
+                      <span>{activePhase}…</span>
+                    </div>
+                    <div className="flex gap-1">
+                      {PUSH_PHASES.map((_, i) => (
+                        <div
+                          key={i}
+                          className={cn(
+                            "h-1 flex-1 rounded-full transition-colors",
+                            i <= pushPhase
+                              ? "bg-emerald-500/80"
+                              : "bg-emerald-500/15",
+                          )}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter className="px-6 py-3 border-t border-border/60 bg-muted/20 flex items-center gap-2 sm:justify-between">
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleDisconnect}
                   disabled={busy}
-                  className="gap-1.5"
+                  className="gap-1.5 h-8 text-xs text-muted-foreground hover:text-foreground"
                 >
                   <Plug className="h-3.5 w-3.5" />
                   Disconnect
                 </Button>
-                <div className="flex gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={busy}>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setOpen(false)}
+                    disabled={busy}
+                    className="h-8 text-xs"
+                  >
                     Cancel
                   </Button>
-                  <Button size="sm" onClick={handleCommit} disabled={busy}>
-                    {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+                  <Button
+                    size="sm"
+                    onClick={handleCommit}
+                    disabled={busy || !commitMessage.trim()}
+                    className="h-8 text-xs gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+                  >
+                    {busy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ArrowUpRight className="h-3.5 w-3.5" />
+                    )}
                     Push
                   </Button>
                 </div>
@@ -308,82 +374,121 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
             </>
           ) : (
             <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <Github className="h-4 w-4" /> Connect GitHub
-                </DialogTitle>
-                <DialogDescription>
-                  Push this project to a new repository, or replace the sandbox
-                  with an import of an existing one.
-                </DialogDescription>
-              </DialogHeader>
-
-              <Tabs value={tab} onValueChange={(v) => setTab(v as "create" | "import")} className="pt-1">
-                <TabsList className="grid grid-cols-2 w-full">
-                  <TabsTrigger value="create">Create new</TabsTrigger>
-                  <TabsTrigger value="import">Import existing</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="create" className="space-y-3 pt-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="repo-name" className="text-xs">
-                      Repository name
-                    </Label>
-                    <Input
-                      id="repo-name"
-                      placeholder="my-codevibe-project"
-                      value={repoName}
-                      onChange={(e) => setRepoName(e.target.value)}
-                      disabled={busy}
-                    />
+              {/* Unlinked — this button is opened from an active chat where
+                  a project already exists in the sandbox. The only action
+                  that makes sense here is "publish it to a new GitHub repo",
+                  so we skip the tabs entirely and land straight on the
+                  create-and-push flow. */}
+              <div className="relative overflow-hidden border-b border-border/60 bg-linear-to-br from-muted/40 via-background to-background px-6 pt-6 pb-5">
+                <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-blue-500/10 blur-3xl" />
+                <DialogHeader className="space-y-2 relative">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 bg-background/80 shadow-sm">
+                      <Github className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <DialogTitle className="text-base font-semibold leading-tight">
+                        Publish to GitHub
+                      </DialogTitle>
+                      <DialogDescription className="text-xs text-muted-foreground leading-snug">
+                        Create a new repository and push this project as its first commit.
+                      </DialogDescription>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Creates the repo under your account, initializes git in the
-                    sandbox, and pushes the current state as the first commit.
-                  </p>
-                  <DialogFooter>
-                    <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={busy}>
-                      Cancel
-                    </Button>
-                    <Button size="sm" onClick={handleCreate} disabled={busy}>
-                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
-                      Create &amp; push
-                    </Button>
-                  </DialogFooter>
-                </TabsContent>
+                </DialogHeader>
+              </div>
 
-                <TabsContent value="import" className="space-y-3 pt-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="repo-import" className="text-xs">
-                      Repository (owner/name or URL)
-                    </Label>
-                    <Input
-                      id="repo-import"
-                      placeholder="kaifcoder/my-app"
-                      value={importInput}
-                      onChange={(e) => setImportInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !busy) handleImport();
-                      }}
-                      disabled={busy}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Provisions a fresh sandbox, clones the repo into it, runs
-                    <span className="font-mono"> npm install</span>, and starts
-                    the dev server. Replaces the current sandbox.
+              <div className="px-6 py-4 space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="repo-name" className="text-xs font-medium">
+                    Repository name
+                  </Label>
+                  <Input
+                    id="repo-name"
+                    placeholder="my-codevibe-project"
+                    value={repoName}
+                    onChange={(e) => setRepoName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !busy) handleCreate();
+                    }}
+                    disabled={busy}
+                    className="h-9 bg-muted/30 border-border/60 font-mono text-xs focus-visible:ring-1 focus-visible:ring-blue-500/40 focus-visible:border-blue-500/40"
+                    autoFocus
+                  />
+                  <p className="text-[11px] text-muted-foreground/80 pl-0.5">
+                    Will be created at{" "}
+                    <span className="font-mono text-muted-foreground">
+                      github.com/{clerkUsername}/{repoName.trim() || "…"}
+                    </span>
                   </p>
-                  <DialogFooter>
-                    <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={busy}>
-                      Cancel
-                    </Button>
-                    <Button size="sm" onClick={handleImport} disabled={busy}>
-                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
-                      Import
-                    </Button>
-                  </DialogFooter>
-                </TabsContent>
-              </Tabs>
+                </div>
+
+                {/* Bulleted plan — makes the two-step nature explicit so
+                    the user isn't surprised when the button "creates &
+                    pushes" in a single click. */}
+                <ul className="space-y-1.5 rounded-lg border border-border/50 bg-muted/20 p-3 text-[11px] text-muted-foreground">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />
+                    <span>Creates a public repo under your account</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />
+                    <span>Initializes git in the sandbox and pushes the current state</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-blue-500" />
+                    <span>
+                      Token is scoped to this push — never written to{" "}
+                      <span className="font-mono">.git/config</span>
+                    </span>
+                  </li>
+                </ul>
+
+                {busy && activePhase && (
+                  <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 space-y-2">
+                    <div className="flex items-center gap-2 text-[12px] font-medium">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                      <span>{activePhase}…</span>
+                    </div>
+                    <div className="flex gap-1">
+                      {PUSH_PHASES.map((_, i) => (
+                        <div
+                          key={i}
+                          className={cn(
+                            "h-1 flex-1 rounded-full transition-colors",
+                            i <= pushPhase ? "bg-blue-500/80" : "bg-blue-500/15",
+                          )}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter className="px-6 py-3 border-t border-border/60 bg-muted/20 flex items-center gap-2 sm:justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setOpen(false)}
+                  disabled={busy}
+                  className="h-8 text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleCreate}
+                  disabled={busy || !repoName.trim()}
+                  className="h-8 text-xs gap-1.5"
+                >
+                  {busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Create &amp; push
+                </Button>
+              </DialogFooter>
             </>
           )}
         </DialogContent>

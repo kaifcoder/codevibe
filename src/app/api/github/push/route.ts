@@ -107,6 +107,61 @@ function authedRemoteUrl(repoFullName: string, token: string): string {
   return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repoFullName}.git`;
 }
 
+// The sandbox `/home/user` root contains template-warmed caches (`.npm`,
+// `.cache`, `.local`, `.config`) alongside the app tree. create-next-app's
+// `.gitignore` doesn't cover those, so a naive `git add -A` from /home/user
+// walks *gigabytes* of package cache — that's the "push is slow" symptom.
+// We append this ignore block to `.gitignore` (idempotently) before every
+// add so the working set stays small and objects pack fast.
+const SANDBOX_IGNORE_BLOCK = [
+  '# --- codevibe:sandbox-ignore (auto-added by push route) ---',
+  'node_modules/',
+  '.next/',
+  '.turbo/',
+  'dist/',
+  'build/',
+  'out/',
+  '.cache/',
+  '.npm/',
+  '.local/',
+  '.config/',
+  '.env',
+  '.env.local',
+  '.env.*.local',
+  '*.log',
+  'npm-debug.log*',
+  '/tmp/',
+  '# --- /codevibe:sandbox-ignore ---',
+].join('\n');
+
+// Shell snippet: install our ignore block once (grep on the sentinel line),
+// then enable git's fast-index / many-files feature so `git add -A` is
+// parallel and skips redundant stat calls. Delta compression is also
+// dialed down — for the first push we want speed, not the tightest pack.
+function fastGitPreamble(): string {
+  return `
+# Idempotently seed a comprehensive .gitignore so add -A doesn't walk the
+# sandbox's warmed npm/cache dirs (the slow-push culprit).
+touch .gitignore
+if ! grep -q "codevibe:sandbox-ignore" .gitignore 2>/dev/null; then
+  printf '\\n%s\\n' ${JSON.stringify(SANDBOX_IGNORE_BLOCK)} >> .gitignore
+fi
+
+# Fast-path config — safe repo-local settings, no user prompts, no gc.
+git config feature.manyFiles true          # parallel index writes (git >=2.24)
+git config index.threads true              # parallel index scan
+git config core.untrackedCache true        # cache untracked file scan
+git config core.fsmonitor false            # no fsmonitor daemon needed
+git config gc.auto 0                       # never auto-gc mid-push
+git config pack.threads 0                  # let pack use all CPUs
+git config pack.window 1                   # cheap delta window — speed > size
+git config pack.compression 1              # zlib level 1 (fastest)
+git config core.compression 1              # ditto for loose objects
+git config http.postBuffer 524288000       # 500MB — avoids chunked-encoding stall
+git config transfer.fsckObjects false      # don't verify server-side receive
+`.trim();
+}
+
 // A missing `repo` OAuth scope makes GitHub answer repo create/push with a
 // bare "Not Found" (404) or 403 instead of a helpful permission error — which
 // this route was surfacing as a confusing 502. Turn those into an actionable
@@ -249,12 +304,13 @@ export async function POST(request: NextRequest) {
       const initScript = `
 rm -rf .git
 git init -b ${branch}
+${fastGitPreamble()}
 git config user.name ${JSON.stringify(committerName)}
 git config user.email ${JSON.stringify(committerEmail)}
 git add -A
 git commit -m ${JSON.stringify(body.message || 'Initial commit from CodeVibe')} --allow-empty
 git remote add origin ${JSON.stringify(remoteUrl)}
-git push -u origin ${branch}
+git push --no-verify -u origin ${branch}
 `.trim();
       const initRes = await runGit(sandbox, initScript);
       if (initRes.exitCode !== 0) {
@@ -297,11 +353,12 @@ git push -u origin ${branch}
     // with a stale origin. Initialize if missing, replace origin every time
     // so we don't leak a previous user's token.
     const commitScript = `
-git config user.name ${JSON.stringify(committerName)}
-git config user.email ${JSON.stringify(committerEmail)}
 if [ ! -d .git ]; then
   git init -b ${branch}
 fi
+${fastGitPreamble()}
+git config user.name ${JSON.stringify(committerName)}
+git config user.email ${JSON.stringify(committerEmail)}
 git remote remove origin >/dev/null 2>&1 || true
 git remote add origin ${JSON.stringify(remoteUrl)}
 git add -A
@@ -310,7 +367,7 @@ if git diff --cached --quiet; then
   exit 7
 fi
 git commit -m ${JSON.stringify(body.message.trim())}
-git push -u origin ${branch}
+git push --no-verify -u origin ${branch}
 `.trim();
     const pushRes = await runGit(sandbox, commitScript);
     if (pushRes.exitCode === 7 || /NO_CHANGES/.test(pushRes.stdout)) {
