@@ -27,26 +27,54 @@ export interface CollaborationSession {
 }
 
 /**
- * Get the WebSocket URL based on current hostname
+ * Get the WebSocket URL based on current hostname.
+ *
+ * Resolution order:
+ *   1. `NEXT_PUBLIC_WS_URL` env — the correct production knob. Set this to
+ *      the public Yjs endpoint (e.g. `wss://yjs.example.com` or a same-origin
+ *      `wss://app.example.com/yjs` when the server is proxied behind the
+ *      main domain).
+ *   2. Local dev on `localhost`/`127.0.0.1` — hit `ws://localhost:1234`
+ *      directly (`npm run yjs`).
+ *   3. Same-origin fallback with NO port. In production, Yjs is expected to
+ *      be reachable on the same host/port as the app (typically via reverse
+ *      proxy on `/yjs` or `/collab`). Appending `:1234` on a production
+ *      hostname always failed because that port isn't publicly exposed —
+ *      that was the "WebSocket closed before connection established" bug.
  */
 function getWebSocketUrl(): string {
+  // SSR — never used to actually connect, but keeps typing happy.
   if (globalThis.window === undefined) {
-    return 'ws://localhost:1234';
+    return process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:1234';
   }
-  
-  const hostname = globalThis.window.location.hostname;
-  const protocol = globalThis.window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  
-  // Use localhost for local access, otherwise use current hostname
-  let finalHostname = hostname;
+
+  // 1. Explicit override always wins.
+  const explicit = process.env.NEXT_PUBLIC_WS_URL;
+  if (explicit && explicit.trim().length > 0) {
+    console.log('[Collaboration] Using NEXT_PUBLIC_WS_URL:', explicit);
+    return explicit;
+  }
+
+  const { hostname, protocol } = globalThis.window.location;
+  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+
+  // 2. Local dev: hit the standalone `npm run yjs` server on :1234.
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    finalHostname = 'localhost';
+    const url = `${wsProtocol}//${hostname}:1234`;
+    console.log('[Collaboration] Local dev WS URL:', url);
+    return url;
   }
-  
-  const wsUrl = `${protocol}//${finalHostname}:1234`;
-  console.log('[Collaboration] Resolved WebSocket URL:', wsUrl);
-  
-  return wsUrl;
+
+  // 3. Production fallback — same origin, no port. Assumes a reverse proxy
+  // routes the WebSocket handshake to the Yjs process (Hocuspocus responds
+  // to any path, so `/` is fine). If your prod topology needs a different
+  // host/port, set NEXT_PUBLIC_WS_URL and it'll take precedence above.
+  const url = `${wsProtocol}//${globalThis.window.location.host}`;
+  console.warn(
+    '[Collaboration] NEXT_PUBLIC_WS_URL is unset in production. ' +
+      'Falling back to same-origin:', url,
+  );
+  return url;
 }
 
 /**

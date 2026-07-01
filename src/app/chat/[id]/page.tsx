@@ -505,6 +505,7 @@ function ChatPage() {
   const createDbSession = useMutation(
     trpc.session.createSession.mutationOptions({
       onSuccess: (data) => {
+        console.info("[DB] createSession OK", data?.id);
         sessionExistsRef.current = true;
         globalThis.dispatchEvent(new CustomEvent("chatUpdated"));
         if (ctx.threadId) {
@@ -539,11 +540,26 @@ function ChatPage() {
 
     const initSession = async () => {
       try {
+        console.info("[DB] init: GET session", sessionId);
         const response = await fetch(
           `/api/session/${sessionId}${shareToken ? `?token=${encodeURIComponent(shareToken)}` : ""}`,
         );
+        console.info("[DB] init: GET status", response.status);
         if (response.status === 404) {
-          createDbSessionRef.current.mutate({ id: sessionId, title: `Chat ${new Date().toLocaleString()}` });
+          console.info("[DB] init: no row, calling createSession mutation");
+          const mutation = createDbSessionRef.current;
+          if (!mutation || typeof mutation.mutate !== "function") {
+            console.error("[DB] init: mutation ref is not ready — falling back to REST create");
+            // Fallback: hit a REST endpoint or just retry after React commits.
+            // In practice we just wait for the tRPC hook to be assigned.
+            await new Promise((r) => setTimeout(r, 100));
+            createDbSessionRef.current?.mutate?.({
+              id: sessionId,
+              title: `Chat ${new Date().toLocaleString()}`,
+            });
+          } else {
+            mutation.mutate({ id: sessionId, title: `Chat ${new Date().toLocaleString()}` });
+          }
         } else if (response.ok) {
           sessionExistsRef.current = true;
         }
@@ -689,6 +705,23 @@ function ChatPage() {
   // --- Import a GitHub repo handed off from the home screen (?importRepo=) ---
   // Mirrors GithubButton's "Import existing" flow: provision a fresh sandbox,
   // clone the repo, npm install, boot the dev server, then adopt the sandbox.
+  //
+  // NOTE: this effect must survive StrictMode's mount → unmount → mount cycle
+  // in dev. `didImportRepoRef` is the one-shot guard so the second mount
+  // doesn't re-fire the API call. We deliberately do NOT `cancelled = true`
+  // in cleanup for the async work itself — cancelling it would abort the
+  // first mount's runImport() the moment StrictMode unmounts, and since the
+  // ref already blocks the second mount from starting a new one, the whole
+  // flow would silently die. Instead we let `runImport` complete and only
+  // skip setState calls after unmount via `mountedRef`.
+  const importMountedRef = useRef(true);
+  useEffect(() => {
+    importMountedRef.current = true;
+    return () => {
+      importMountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (didImportRepoRef.current) return;
     if (!importRepoParam) return;
@@ -697,8 +730,7 @@ function ChatPage() {
     didImportRepoRef.current = true;
 
     const repo = importRepoParam;
-    // Strip the param immediately so a refresh doesn't re-clone the repo.
-    router.replace(`/chat/${sessionId}`, { scroll: false });
+    console.info("[import] starting flow for", repo, "session=", sessionId);
 
     // Reveal the preview panel so the "Importing…" state is visible right away.
     setImportingRepoName(repo);
@@ -707,31 +739,45 @@ function ChatPage() {
     ctx.setMobileActivePanel("preview");
     ctx.setIframeLoading(true);
 
-    let cancelled = false;
     const runImport = async () => {
       // The import API is owner-gated and 404s without the session row (created
       // by the init effect above). Wait for it to land before cloning.
       const deadline = Date.now() + 20_000;
-      while (!sessionExistsRef.current && Date.now() < deadline && !cancelled) {
+      while (!sessionExistsRef.current && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 200));
       }
-      if (cancelled) return;
+      if (!sessionExistsRef.current) {
+        console.error("[import] session row never appeared for", sessionId);
+        toast.error("Session setup timed out. Refresh and try again.");
+        if (importMountedRef.current) setImportingRepoName(null);
+        return;
+      }
+      console.info("[import] session ready, proceeding to API call");
+
+      // Strip the param NOW that we know we're proceeding — earlier we did
+      // this synchronously in the effect body, which caused a re-render that
+      // could interact badly with StrictMode's double-invoke.
+      router.replace(`/chat/${sessionId}`, { scroll: false });
 
       const t = toast.loading(`Importing ${repo} into a fresh sandbox…`);
       try {
+        console.info("[import] POST /api/github/import");
         const res = await fetch("/api/github/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionId, repo }),
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        console.info("[import] response", res.status, data);
         if (!res.ok || !data.ok) {
-          throw new Error(data?.error || `Import failed (${res.status})`);
+          throw new Error(data?.error || data?.details || `Import failed (${res.status})`);
         }
-        if (cancelled) return;
 
         // Adopt the new sandbox — the next agent run forwards this id via
         // configurable.sandboxId so resolveSandbox reuses it.
+        // These setters are safe to call even if the component is unmounted;
+        // React just warns in dev. In practice `importMountedRef.current`
+        // stays true for the whole flow because navigation stays on this page.
         ctx.setSandboxId(data.sandboxId);
         ctx.setSandboxUrl(data.sandboxUrl);
         ctx.setSandboxCreatedAt(Date.now());
@@ -758,7 +804,7 @@ function ChatPage() {
         })
           .then((r) => (r.ok ? r.json() : null))
           .then((d) => {
-            if (d?.fileTree && !cancelled) ctx.setFileTree(d.fileTree);
+            if (d?.fileTree) ctx.setFileTree(d.fileTree);
           })
           .catch(() => {});
 
@@ -771,17 +817,14 @@ function ChatPage() {
           { id: t, duration: 6_000 },
         );
       } catch (err) {
-        if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : "Import failed", { id: t });
-        }
+        console.error("[import] failed:", err);
+        toast.error(err instanceof Error ? err.message : "Import failed", { id: t });
       } finally {
-        if (!cancelled) setImportingRepoName(null);
+        if (importMountedRef.current) setImportingRepoName(null);
       }
     };
     void runImport();
-    return () => {
-      cancelled = true;
-    };
+    // No cleanup — see NOTE above. The one-shot ref prevents duplicate runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRepoParam]);
 
