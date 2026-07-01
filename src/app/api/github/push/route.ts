@@ -139,12 +139,38 @@ const SANDBOX_IGNORE_BLOCK = [
 // parallel and skips redundant stat calls. Delta compression is also
 // dialed down — for the first push we want speed, not the tightest pack.
 function fastGitPreamble(): string {
+  // We use a heredoc for the ignore block so the multi-line content lands
+  // in .gitignore as real newlines. An earlier version used
+  // `printf '\\n%s\\n' ${JSON.stringify(BLOCK)}` — but JSON.stringify
+  // escapes each real newline into a two-char `\n` sequence, and bash's
+  // double-quoted `printf` argument doesn't interpret those escapes, so the
+  // file ended up with one giant single-line entry that matched nothing.
+  // Result: .npm / .config / node_modules all got pushed. The heredoc form
+  // preserves literal newlines end-to-end (the whole script is base64'd
+  // before being run in the sandbox, so multi-line content is safe).
   return `
 # Idempotently seed a comprehensive .gitignore so add -A doesn't walk the
 # sandbox's warmed npm/cache dirs (the slow-push culprit).
 touch .gitignore
 if ! grep -q "codevibe:sandbox-ignore" .gitignore 2>/dev/null; then
-  printf '\\n%s\\n' ${JSON.stringify(SANDBOX_IGNORE_BLOCK)} >> .gitignore
+  # Ensure a trailing newline before appending so we don't merge into the
+  # last existing line (create-next-app's .gitignore doesn't always end
+  # with one).
+  [ -s .gitignore ] && [ "$(tail -c1 .gitignore)" != "" ] && printf '\\n' >> .gitignore
+  cat >> .gitignore <<'CODEVIBE_IGNORE_EOF'
+${SANDBOX_IGNORE_BLOCK}
+CODEVIBE_IGNORE_EOF
+fi
+
+# If a previous (broken) push already tracked the cache dirs, untrack them
+# now — .gitignore doesn't retroactively untrack, so a working-tree-only
+# fix leaves the objects lingering forever. --cached keeps the files on
+# disk; -q suppresses "did not match any files" for a fresh repo.
+if [ -d .git ]; then
+  git rm -r --cached -q --ignore-unmatch \\
+    node_modules .next .turbo dist build out \\
+    .cache .npm .local .config \\
+    .env .env.local >/dev/null 2>&1 || true
 fi
 
 # Fast-path config — safe repo-local settings, no user prompts, no gc.
