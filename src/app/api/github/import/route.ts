@@ -55,6 +55,51 @@ async function detectDefaultBranch(repo: string, token: string): Promise<string 
   return data.default_branch ?? null;
 }
 
+// Poll `curl http://localhost:<port>` inside the sandbox until the dev
+// server answers (any HTTP status is fine — 200 / 404 / 500 all mean
+// "something is listening"). Returns:
+//   'ready'   — port answered within `timeoutMs`
+//   'booting' — timed out; the daemon is still installing / compiling.
+//                Frontend keeps its shimmer up and retries.
+async function waitForPortListening(
+  sandbox: Sandbox,
+  port: number,
+  timeoutMs: number,
+): Promise<'ready' | 'booting'> {
+  // We bake the whole loop into one shell script rather than making N
+  // round-trips from Next → E2B, which would waste ~100ms per attempt on
+  // RPC overhead alone. The script exits as soon as curl reports a
+  // response, capped by the deadline.
+  const deadlineSecs = Math.ceil(timeoutMs / 1000);
+  const script = `
+set -u
+DEADLINE=$(( $(date +%s) + ${deadlineSecs} ))
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  # -o /dev/null: discard body. -w '%{http_code}': print status only.
+  # --max-time 1: give up on this attempt after 1s so we can retry.
+  code=$(curl -sS -o /dev/null --max-time 1 -w '%{http_code}' "http://127.0.0.1:${port}" || echo 000)
+  if [ "$code" != "000" ] && [ "$code" != "" ]; then
+    echo "PORT_READY $code"
+    exit 0
+  fi
+  sleep 0.5
+done
+echo "PORT_TIMEOUT"
+exit 1
+`.trim();
+  try {
+    const res = await runSandboxScript(sandbox, script, {
+      // Give the sandbox side a little more time than our deadline so we
+      // don't kill it mid-check.
+      timeoutMs: timeoutMs + 5_000,
+    });
+    return res.stdout.includes('PORT_READY') ? 'ready' : 'booting';
+  } catch (err) {
+    console.warn('[github/import] waitForPortListening threw:', (err as Error).message);
+    return 'booting';
+  }
+}
+
 // Detect what kind of JS project we cloned so we can run the right dev
 // command on the right port. The sandbox's public URL always points at the
 // template's exposed port (cfg.port — 3000 for the Next template), so we
@@ -349,6 +394,16 @@ echo CLONE_OK
       const host = sandbox.getHost(cfg.port);
       const sandboxUrl = `https://${host}`;
 
+      // Give the dev server a short window to actually bind the port
+      // *before* we hand the URL to the frontend. Without this, the iframe
+      // races the install and the user sees E2B's "Connection refused"
+      // interstitial for the first refresh. If it doesn't come up in this
+      // window (large repos, cold npm cache), we still return — the
+      // client-side poller will keep watching and swap in the iframe when
+      // the port answers.
+      const devReady = await waitForPortListening(sandbox, cfg.port, 25_000);
+      console.info('[github/import] dev-server readiness after clone:', devReady);
+
       await prisma.session.update({
         where: { id: body.sessionId },
         data: {
@@ -357,6 +412,13 @@ echo CLONE_OK
           sandboxCreatedAt: new Date(),
           githubRepo: repo,
           githubBranch: branch,
+          // Skip the agent's template-picker HITL. Importing a repo IS the
+          // template decision — the sandbox is already provisioned for
+          // `templateType` above, and asking the user "nextjs / n8n / chat?"
+          // on their first prompt is confusing and destructive (a different
+          // choice would blow the just-cloned tree away).
+          templateType,
+          templateDecided: true,
         } as never,
       });
 
@@ -367,8 +429,7 @@ echo CLONE_OK
         repo,
         branch,
         templateType,
-        // Dev server boots in the background; the client polls via iframe.
-        devReady: 'booting',
+        devReady,
       });
     } catch (err) {
       try {

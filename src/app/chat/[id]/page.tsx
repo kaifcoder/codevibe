@@ -775,16 +775,62 @@ function ChatPage() {
 
         // Adopt the new sandbox — the next agent run forwards this id via
         // configurable.sandboxId so resolveSandbox reuses it.
-        // These setters are safe to call even if the component is unmounted;
-        // React just warns in dev. In practice `importMountedRef.current`
-        // stays true for the whole flow because navigation stays on this page.
+        //
+        // Withhold the sandbox URL until the dev server actually answers,
+        // otherwise the iframe races the install and shows E2B's
+        // "Connection refused" interstitial. If devReady === 'ready' the
+        // server-side poll already confirmed the port is up — swap the URL
+        // in immediately. Otherwise keep the shimmer and poll from here.
         ctx.setSandboxId(data.sandboxId);
-        ctx.setSandboxUrl(data.sandboxUrl);
         ctx.setSandboxCreatedAt(Date.now());
         ctx.setIsSandboxExpired(false);
         ctx.setIframeLoading(true);
         ctx.setGithubRepo(data.repo);
         ctx.setGithubBranch(data.branch);
+        // Skip the agent's HITL template-picker on the first prompt —
+        // importing a repo is itself the template decision. The API also
+        // persists this to the session row so a refresh keeps it decided.
+        ctx.setTemplateType(data.templateType);
+        ctx.setTemplateDecided(true);
+
+        if (data.devReady === "ready") {
+          ctx.setSandboxUrl(data.sandboxUrl);
+          setImportingRepoName(null);
+        } else {
+          // Keep the "Importing…" shimmer visible until we can actually
+          // reach the sandbox. Poll from the browser (no CORS issue —
+          // opaque no-cors fetch is enough to prove the socket answered).
+          const pollUrl = data.sandboxUrl as string;
+          const startedAt = Date.now();
+          const MAX_MS = 120_000;
+          const tick = async () => {
+            if (!importMountedRef.current) return;
+            try {
+              // `no-cors` returns opaque even on 404, but a "connection
+              // refused" TCP failure rejects the promise — which is what
+              // we're actually checking for.
+              await fetch(pollUrl, { mode: "no-cors", cache: "no-store" });
+              // Success (any HTTP response counts): hand it to the iframe.
+              ctx.setSandboxUrl(pollUrl);
+              setImportingRepoName(null);
+              return;
+            } catch {
+              if (Date.now() - startedAt > MAX_MS) {
+                // Give up gracefully — user can refresh the preview panel.
+                console.warn("[import] dev server never answered on", pollUrl);
+                ctx.setSandboxUrl(pollUrl);
+                setImportingRepoName(null);
+                toast.error(
+                  `${data.repo} imported, but the dev server didn't answer. Try refreshing the preview.`,
+                  { duration: 8_000 },
+                );
+                return;
+              }
+              setTimeout(tick, 1500);
+            }
+          };
+          void tick();
+        }
 
         // Name the session after the repo so the sidebar isn't a bare "Chat …".
         titleSetRef.current = true;
@@ -819,7 +865,10 @@ function ChatPage() {
       } catch (err) {
         console.error("[import] failed:", err);
         toast.error(err instanceof Error ? err.message : "Import failed", { id: t });
-      } finally {
+        // Only clear the shimmer on error. In the success path, the "ready"
+        // branch clears it inline and the "booting" branch clears it after
+        // the poller resolves — clearing here would flash the iframe with
+        // "Connection refused" before the dev server is up.
         if (importMountedRef.current) setImportingRepoName(null);
       }
     };
