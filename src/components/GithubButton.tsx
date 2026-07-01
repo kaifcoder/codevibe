@@ -262,7 +262,7 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
         ) : (
           <GithubIcon className="h-3.5 w-3.5" />
         )}
-        {linked ? "Push" : "GitHub"}
+        {linked ? "Push" : "Connect to GitHub"}
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => !busy && setOpen(v)}>
