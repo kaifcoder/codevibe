@@ -129,46 +129,67 @@
   background-color: rgba(250, 129, 0, 0.3) !important;
   margin-right: -1px;
   pointer-events: none;
-  position: absolute;
-  z-index: 10;
 }
 
-/* The cursor line indicator - VERTICAL LINE */
+/* The caret line for a remote user's cursor.
+ *
+ * y-monaco attaches this class to either an `::after` (LTR selection head)
+ * or `::before` (RTL selection head) pseudo-element on the character AT the
+ * caret position. Monaco renders those pseudo-elements INSIDE the line's
+ * `.view-line` container, so we style them as inline-height siblings of the
+ * text they're anchored to — NOT as `position: absolute` boxes floating in
+ * their own coordinate system.
+ *
+ * The old rules used `position: absolute; height: 100%; border-top/bottom`
+ * which:
+ *   1. Detached the caret from the line's own flow, so it landed at the
+ *      parent container's origin — one visual line below the actual caret
+ *      position (the symptom: caret always renders one line lower than the
+ *      other peer's real cursor).
+ *   2. Made it a rectangular box instead of a thin vertical line.
+ *
+ * Correct approach: inline-block, absolute width 0, borrow the line's own
+ * line-height, and let Monaco's decoration flow put it exactly at the
+ * caret's character position. The `content: ''` is required for
+ * pseudo-element rendering; the border draws the vertical line.
+ */
 .yRemoteSelectionHead {
   position: absolute;
   border-left: 2px solid !important;
-  border-top: 2px solid !important;
-  border-bottom: 2px solid !important;
   border-color: inherit !important;
   height: 100%;
-  width: 0;
   box-sizing: border-box;
   pointer-events: none;
-  z-index: 20;
+  /* Kill the previous top/bottom borders that made the caret a box. */
+  border-top: none !important;
+  border-bottom: none !important;
+  border-right: none !important;
+  width: 0;
+  /* No top offset — the pseudo-element already flows at the correct line. */
+  top: 0;
   opacity: 1 !important;
+  z-index: 10;
 }
 
-/* The cursor dot/handle at the top */
+/* Little dot/handle at the top of the caret so it's easier to spot. */
 .yRemoteSelectionHead::after {
+  content: '';
   position: absolute;
-  content: " ";
-  border: 3px solid !important;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
   border-color: inherit !important;
-  border-radius: 4px;
-  left: -4px;
-  top: -5px;
   pointer-events: none;
-  background-color: inherit;
   opacity: 1 !important;
 }
 
-/* Fallback for when color isn't set properly */
+/* Fallback color when the per-clientID color class isn't matched. */
 .yRemoteSelectionHead:not([style*="border-color"]) {
   border-color: #FF6B6B !important;
-}
-
-.yRemoteSelectionHead:not([style*="border-color"])::after {
-  border-color: #FF6B6B !important;
+  color: #FF6B6B !important;
 }
 
 /* Custom cursor label styles (used by CodeEditor component) */
