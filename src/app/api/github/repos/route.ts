@@ -6,6 +6,25 @@ import { auth, clerkClient } from '@clerk/nextjs/server';
 // Uses the GitHub OAuth token Clerk stores for the user — the same source the
 // push/import routes read from.
 
+// The import flow creates a Next.js sandbox and runs `npm install && next dev`
+// on the cloned tree — so a Python or Go repo would just crash on boot. Filter
+// server-side to languages that plausibly ship a package.json-based web app,
+// and let the client surface an explicit toggle if the user wants to see
+// everything anyway.
+const SUPPORTED_LANGUAGES = new Set<string>([
+  'TypeScript',
+  'JavaScript',
+  'TSX',
+  'JSX',
+  'Vue',
+  'Svelte',
+  'Astro',
+  'HTML',
+  'CSS',
+  'SCSS',
+  'MDX',
+]);
+
 interface GithubRepo {
   full_name: string;
   name: string;
@@ -31,6 +50,7 @@ export interface RepoSummary {
   private: boolean;
   htmlUrl: string;
   stars: number;
+  supported: boolean;
 }
 
 async function getGithubToken(userId: string): Promise<string | null> {
@@ -108,6 +128,10 @@ export async function GET() {
         private: r.private,
         htmlUrl: r.html_url,
         stars: r.stargazers_count,
+        // Repos with no detected language usually mean docs / config / empty
+        // — cheap to try, so we keep them supported. Otherwise gate on the
+        // Node/web-app allowlist.
+        supported: r.language == null || SUPPORTED_LANGUAGES.has(r.language),
       }));
 
     return NextResponse.json({ ok: true, repos });

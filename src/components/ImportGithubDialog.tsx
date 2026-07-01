@@ -14,6 +14,7 @@ import {
   RefreshCw,
   ArrowRight,
   Sparkles,
+  Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +39,10 @@ interface RepoSummary {
   private: boolean;
   htmlUrl: string;
   stars: number;
+  // Server-tagged: `false` means the language isn't in the Node/web-app
+  // allowlist, so importing will almost certainly fail on dev-server boot.
+  // We hide these by default and expose a "Show unsupported" toggle.
+  supported: boolean;
 }
 
 interface ImportGithubDialogProps {
@@ -94,6 +99,9 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
   const [repos, setRepos] = useState<RepoSummary[]>([]);
   const [search, setSearch] = useState("");
   const [importing, setImporting] = useState<string | null>(null);
+  // Off by default — unsupported repos would fail on `npm install && next
+  // dev`, so we surface them only when the user opts in.
+  const [showUnsupported, setShowUnsupported] = useState(false);
 
   const loadRepos = useCallback(async () => {
     setLoading(true);
@@ -123,14 +131,20 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return repos;
-    return repos.filter(
+    const base = showUnsupported ? repos : repos.filter((r) => r.supported);
+    if (!q) return base;
+    return base.filter(
       (r) =>
         r.name.toLowerCase().includes(q) ||
         r.fullName.toLowerCase().includes(q) ||
         (r.description?.toLowerCase().includes(q) ?? false),
     );
-  }, [repos, search]);
+  }, [repos, search, showUnsupported]);
+
+  const hiddenCount = useMemo(
+    () => repos.filter((r) => !r.supported).length,
+    [repos],
+  );
 
   const handleTriggerClick = () => {
     if (!isSignedIn) {
@@ -142,6 +156,7 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
 
   const handleSelect = (repo: RepoSummary) => {
     if (importing) return;
+    if (!repo.supported) return;
     setImporting(repo.fullName);
     // Hand the repo off to a fresh chat session via URL param — the chat page
     // creates the session, clones the repo into a sandbox, and boots the dev
@@ -169,7 +184,7 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
         <DialogContent className="sm:max-w-xl p-0 gap-0 overflow-hidden">
           {/* Header — subtle gradient wash + iconography set the tone before
               the list even loads. */}
-          <div className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-muted/40 via-background to-background px-6 pt-6 pb-5">
+          <div className="relative overflow-hidden border-b border-border/60 bg-linear-to-br from-muted/40 via-background to-background px-6 pt-6 pb-5">
             <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-blue-500/10 blur-3xl" />
             <div className="pointer-events-none absolute -bottom-20 -left-10 h-40 w-40 rounded-full bg-emerald-500/5 blur-3xl" />
             <DialogHeader className="space-y-2 relative">
@@ -214,7 +229,51 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
               )}
             </div>
 
-            <ScrollArea className="h-[22rem] -mx-2 px-2">
+            {/* Compatibility banner — appears only when we're actually
+                hiding something, so it doesn't add noise for JS/TS-only
+                accounts. */}
+            {!loading && !error && hiddenCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowUnsupported((v) => !v)}
+                className="flex w-full items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-left text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/40"
+              >
+                <span
+                  className={cn(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+                    showUnsupported
+                      ? "border-blue-500/60 bg-blue-500/15 text-blue-500"
+                      : "border-border/60 bg-background",
+                  )}
+                >
+                  {showUnsupported && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                  )}
+                </span>
+                <span className="flex-1 leading-snug">
+                  {showUnsupported ? (
+                    <>
+                      Showing all repositories, including{" "}
+                      <span className="text-foreground font-medium">
+                        {hiddenCount}
+                      </span>{" "}
+                      that may not boot as a Next.js sandbox.
+                    </>
+                  ) : (
+                    <>
+                      Hiding{" "}
+                      <span className="text-foreground font-medium">
+                        {hiddenCount}
+                      </span>{" "}
+                      {hiddenCount === 1 ? "repo" : "repos"} we can&apos;t run as a
+                      Next.js sandbox. Tap to show anyway.
+                    </>
+                  )}
+                </span>
+              </button>
+            )}
+
+            <ScrollArea className="h-88 -mx-2 px-2">
               {loading ? (
                 <div className="space-y-1.5 py-0.5">
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -233,7 +292,7 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                   ))}
                 </div>
               ) : error ? (
-                <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center">
+                <div className="flex h-full min-h-72 flex-col items-center justify-center gap-3 px-6 text-center">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full border border-destructive/30 bg-destructive/5">
                     <AlertCircle className="h-4 w-4 text-destructive" />
                   </div>
@@ -247,7 +306,7 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                   </Button>
                 </div>
               ) : filtered.length === 0 ? (
-                <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-2.5 px-6 text-center">
+                <div className="flex h-full min-h-72 flex-col items-center justify-center gap-2.5 px-6 text-center">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-muted/30">
                     <Github className="h-4 w-4 text-muted-foreground" />
                   </div>
@@ -269,6 +328,7 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                   {filtered.map((repo) => {
                     const isImporting = importing === repo.fullName;
                     const isDimmed = !!importing && !isImporting;
+                    const isUnsupported = !repo.supported;
                     const languageColor = repo.language
                       ? LANGUAGE_COLORS[repo.language] ?? "bg-muted-foreground/50"
                       : null;
@@ -277,27 +337,37 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                         key={repo.fullName}
                         type="button"
                         onClick={() => handleSelect(repo)}
-                        disabled={!!importing}
+                        disabled={!!importing || isUnsupported}
+                        title={
+                          isUnsupported
+                            ? `We can't currently boot a ${repo.language ?? "non-Node"} project as a sandbox`
+                            : undefined
+                        }
                         className={cn(
                           "group/repo relative flex w-full items-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-left transition-all",
                           "hover:border-border/70 hover:bg-muted/40",
                           "focus-visible:outline-none focus-visible:border-blue-500/50 focus-visible:bg-muted/40",
                           "disabled:cursor-not-allowed",
                           isDimmed && "opacity-40",
+                          isUnsupported && "opacity-60 hover:border-transparent hover:bg-transparent",
                           isImporting &&
-                            "border-blue-500/40 bg-blue-500/[0.04] shadow-[0_0_0_1px_rgba(59,130,246,0.15)]",
+                            "border-blue-500/40 bg-blue-500/4 shadow-[0_0_0_1px_rgba(59,130,246,0.15)]",
                         )}
                       >
                         {/* Icon column keeps the row skimmable. Private repos
-                            get an amber lock so at-a-glance triage works. */}
+                            get an amber lock so at-a-glance triage works;
+                            unsupported repos wear a muted "ban" glyph. */}
                         <div
                           className={cn(
                             "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background transition-colors",
                             "group-hover/repo:border-border group-hover/repo:bg-muted",
                             isImporting && "border-blue-500/40 bg-blue-500/10",
+                            isUnsupported && "group-hover/repo:border-border/60 group-hover/repo:bg-background",
                           )}
                         >
-                          {repo.private ? (
+                          {isUnsupported ? (
+                            <Ban className="h-3.5 w-3.5 text-muted-foreground/60" />
+                          ) : repo.private ? (
                             <Lock className="h-3.5 w-3.5 text-amber-500" />
                           ) : (
                             <Github className="h-3.5 w-3.5 text-muted-foreground" />
@@ -312,6 +382,11 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                             {repo.private && (
                               <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400">
                                 Private
+                              </span>
+                            )}
+                            {isUnsupported && (
+                              <span className="shrink-0 rounded-full border border-border/60 bg-muted/40 px-1.5 py-px text-[10px] font-medium leading-none text-muted-foreground">
+                                Not supported
                               </span>
                             )}
                           </div>
@@ -345,7 +420,7 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                             )}
                             <span className="flex items-center gap-1">
                               <GitBranch className="h-3 w-3" />
-                              <span className="truncate max-w-[8rem]">
+                              <span className="truncate max-w-32">
                                 {repo.defaultBranch}
                               </span>
                             </span>
@@ -356,14 +431,15 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
                         </div>
 
                         {/* Trailing indicator — imported: spinner + label;
-                            hover: subtle arrow to invite click. */}
+                            hover: subtle arrow to invite click. Unsupported
+                            rows stay silent — no arrow to imply action. */}
                         <div className="flex shrink-0 items-center self-center pl-1">
                           {isImporting ? (
                             <span className="flex items-center gap-1.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               Opening
                             </span>
-                          ) : (
+                          ) : isUnsupported ? null : (
                             <ArrowRight className="h-4 w-4 text-muted-foreground/0 transition-all group-hover/repo:text-muted-foreground group-hover/repo:translate-x-0.5" />
                           )}
                         </div>
