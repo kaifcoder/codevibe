@@ -121,58 +121,52 @@
   }
 }
 
-/* Yjs Monaco Collaborative Cursor Styles */
-/* These styles are CRITICAL for cursor awareness to be visible */
+/* Yjs Monaco Collaborative Cursor Styles
+ *
+ * We use our own renderer (src/lib/collaboration/remoteCursorRenderer.ts)
+ * that draws remote carets with class prefix `cvRemote…`. y-monaco's
+ * built-in renderer ALSO creates decorations with `yRemote…` class names
+ * — those are wrong (mis-resolved columns from RelativePosition) and
+ * would stack on top of ours, so we hide them here.
+ */
 
-/* Remote user cursor selection highlight */
-.yRemoteSelection {
-  background-color: rgba(250, 129, 0, 0.3) !important;
+/* Hide y-monaco's built-in remote-cursor decorations — the custom
+ * renderer replaces them with pixel-accurate ones. */
+.monaco-editor .yRemoteSelection,
+.monaco-editor .yRemoteSelectionHead {
+  display: none !important;
+  visibility: hidden !important;
+  border: none !important;
+  background: none !important;
+}
+
+/* Custom remote-selection range highlight. Color is injected per-client
+ * via <style data-remote-cursor-styles> — the base rule only handles
+ * the fallback / structural bits. */
+.cvRemoteSelection {
+  background-color: rgba(250, 129, 0, 0.2);
   margin-right: -1px;
   pointer-events: none;
 }
 
-/* The caret line for a remote user's cursor.
- *
- * y-monaco attaches this class to either an `::after` (LTR selection head)
- * or `::before` (RTL selection head) pseudo-element on the character AT the
- * caret position. Monaco renders those pseudo-elements INSIDE the line's
- * `.view-line` container, so we style them as inline-height siblings of the
- * text they're anchored to — NOT as `position: absolute` boxes floating in
- * their own coordinate system.
- *
- * The old rules used `position: absolute; height: 100%; border-top/bottom`
- * which:
- *   1. Detached the caret from the line's own flow, so it landed at the
- *      parent container's origin — one visual line below the actual caret
- *      position (the symptom: caret always renders one line lower than the
- *      other peer's real cursor).
- *   2. Made it a rectangular box instead of a thin vertical line.
- *
- * Correct approach: inline-block, absolute width 0, borrow the line's own
- * line-height, and let Monaco's decoration flow put it exactly at the
- * caret's character position. The `content: ''` is required for
- * pseudo-element rendering; the border draws the vertical line.
- */
-.yRemoteSelectionHead {
+/* Remote caret vertical line — pseudo-element attached to the character
+ * at the caret position by Monaco's decoration engine. Kept simple:
+ * thin vertical line, `top: 0` so it's flush with the character's line
+ * (not one below). Color is injected per-client via the style tag. */
+.cvRemoteSelectionHead {
   position: absolute;
-  border-left: 2px solid !important;
-  border-color: inherit !important;
+  border-left: 2px solid;
+  border-color: currentColor;
   height: 100%;
   box-sizing: border-box;
   pointer-events: none;
-  /* Kill the previous top/bottom borders that made the caret a box. */
-  border-top: none !important;
-  border-bottom: none !important;
-  border-right: none !important;
-  width: 0;
-  /* No top offset — the pseudo-element already flows at the correct line. */
   top: 0;
-  opacity: 1 !important;
+  width: 0;
   z-index: 10;
 }
 
-/* Little dot/handle at the top of the caret so it's easier to spot. */
-.yRemoteSelectionHead::after {
+/* Little dot at the top of the caret — same color as the caret line. */
+.cvRemoteSelectionHead::after {
   content: '';
   position: absolute;
   left: -3px;
@@ -181,15 +175,13 @@
   height: 6px;
   border-radius: 50%;
   background-color: currentColor;
-  border-color: inherit !important;
   pointer-events: none;
-  opacity: 1 !important;
 }
 
-/* Fallback color when the per-clientID color class isn't matched. */
-.yRemoteSelectionHead:not([style*="border-color"]) {
-  border-color: #FF6B6B !important;
-  color: #FF6B6B !important;
+/* Fallback color when no per-client color rule is loaded yet
+ * (unlikely — the renderer injects it before rendering). */
+.cvRemoteSelectionHead {
+  color: #FF6B6B;
 }
 
 /* Custom cursor label styles (used by CodeEditor component) */
@@ -229,12 +221,9 @@
   position: relative;
 }
 
-/* Use y-monaco's built-in cursor decorations */
-.monaco-editor .yRemoteSelection,
-.monaco-editor .yRemoteSelectionHead {
-  visibility: visible !important;
-  display: block !important;
-}
+/* (Removed: previously "un-hid" y-monaco's built-in cursor decorations.
+ * We now use the custom renderer with `cvRemote…` class names, and the
+ * y-monaco defaults are hidden by the rules near the top of this file.) */
 
 /* Custom remote cursor line decoration */
 .monaco-editor .remote-cursor-line {

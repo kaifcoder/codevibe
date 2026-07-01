@@ -7,7 +7,7 @@ import { Card } from "./ui/card";
 import { useTheme } from "next-themes";
 import type * as Y from "yjs";
 import type { HocuspocusProvider } from "@hocuspocus/provider";
-import type { MonacoBinding } from "y-monaco";
+import type { BoundMonaco } from "@/lib/collaboration/bindMonaco";
 
 interface CodeEditorProps {
   yText: Y.Text | null;
@@ -24,7 +24,7 @@ export function CodeEditor({
   initialContent,
 }: Readonly<CodeEditorProps>) {
   const [editor, setEditor] = useState<MonacoTypes.editor.IStandaloneCodeEditor | null>(null);
-  const bindingRef = useRef<MonacoBinding | null>(null);
+  const bindingRef = useRef<BoundMonaco | null>(null);
   // Normalize CRLF → LF at every entry point. Files cloned from Windows-touched
   // repos ship `\r\n` line endings; Monaco silently rewrites them to `\n` when
   // it renders the model, but Y.Text still holds the `\r`s. That size mismatch

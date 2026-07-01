@@ -3,12 +3,23 @@
  *
  * Connects Monaco's text model to Yjs Y.Text for real-time sync.
  * Uses y-monaco library for bidirectional CRDT synchronization.
+ *
+ * We ALSO attach our own remote-cursor renderer on top of y-monaco. Reason:
+ * y-monaco's built-in `_rerenderDecorations` calls `editor.deltaDecorations`
+ * (deprecated) and its RelativePosition resolution occasionally snaps
+ * remote carets to column 1 of the correct line — we observed the caret
+ * following the line change but not the column. The custom renderer
+ * (remoteCursorRenderer.ts) uses `createDecorationsCollection` and computes
+ * positions directly from the Y.Text index, which gives us pixel-accurate
+ * tracking. y-monaco still handles text sync and *publishing* the local
+ * selection into awareness — we only replace the reading side.
  */
 
 import * as monaco from 'monaco-editor';
 import type { MonacoBinding } from 'y-monaco';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
+import { attachRemoteCursorRenderer } from './remoteCursorRenderer';
 
 export interface BindMonacoConfig {
   editor: monaco.editor.IStandaloneCodeEditor;
@@ -16,7 +27,12 @@ export interface BindMonacoConfig {
   awareness: Awareness | null;
 }
 
-export async function bindMonaco(config: BindMonacoConfig): Promise<MonacoBinding> {
+export interface BoundMonaco {
+  binding: MonacoBinding;
+  destroy: () => void;
+}
+
+export async function bindMonaco(config: BindMonacoConfig): Promise<BoundMonaco> {
   const { editor, yText, awareness } = config;
 
   const model = editor.getModel();
@@ -28,41 +44,19 @@ export async function bindMonaco(config: BindMonacoConfig): Promise<MonacoBindin
 
   const binding = new MonacoBindingClass(yText, model, new Set([editor]), awareness);
 
-  // y-monaco's internal `_rerenderDecorations` uses `editor.deltaDecorations`
-  // which, in newer Monaco, is deprecated and can silently no-op when
-  // called outside a Monaco microtask. That produced the "remote caret is
-  // on the correct line but doesn't follow peer's movement" symptom —
-  // publishing worked, but the receiving side never re-drew.
-  //
-  // Force a repaint on every awareness change by nudging the editor: any
-  // no-op layout call is enough to flush pending decoration deltas. We
-  // debounce with rAF so a burst of awareness updates (from a fast-moving
-  // caret) collapses into one paint per frame.
+  // Attach our custom renderer AFTER the binding is constructed. It reads
+  // `state.selection` published by y-monaco's own `onDidChangeCursorSelection`
+  // handler — so we get the publishing for free — and renders it ourselves.
+  let detachRenderer: (() => void) | null = null;
   if (awareness) {
-    let rafId: number | null = null;
-    const kick = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        // A null-effect layout — Monaco recomputes decoration positions
-        // on layout, so this is the cheapest way to force a re-render
-        // without touching the model.
-        editor.layout();
-      });
-    };
-    awareness.on('change', kick);
-    // Clean up when the binding is disposed. y-monaco doesn't expose a
-    // cleanup callback on the binding object, so we monkey-patch destroy.
-    const origDestroy = binding.destroy.bind(binding);
-    binding.destroy = () => {
-      awareness.off('change', kick);
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      origDestroy();
-    };
+    detachRenderer = attachRemoteCursorRenderer(editor, binding, awareness);
   }
 
-  return binding;
+  return {
+    binding,
+    destroy: () => {
+      if (detachRenderer) detachRenderer();
+      binding.destroy();
+    },
+  };
 }
