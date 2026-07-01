@@ -14,7 +14,6 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Switch } from "./ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { useChat } from "@/contexts/chat-context";
 
@@ -56,7 +55,6 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
   // Unlinked-mode state.
   const [tab, setTab] = useState<"create" | "import">("create");
   const [repoName, setRepoName] = useState("");
-  const [isPrivate, setIsPrivate] = useState(true);
   const [importInput, setImportInput] = useState("");
 
   const disabled =
@@ -133,7 +131,6 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
           mode: "create",
           sessionId,
           name: repoName.trim(),
-          isPrivate,
         }),
       });
       const data = (await res.json()) as PushResponse;
@@ -337,17 +334,6 @@ export function GithubButton({ sessionId }: Readonly<GithubButtonProps>) {
                       placeholder="my-codevibe-project"
                       value={repoName}
                       onChange={(e) => setRepoName(e.target.value)}
-                      disabled={busy}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between rounded-md border border-border/50 px-3 py-2">
-                    <Label htmlFor="repo-private" className="text-xs cursor-pointer">
-                      Private repository
-                    </Label>
-                    <Switch
-                      id="repo-private"
-                      checked={isPrivate}
-                      onCheckedChange={setIsPrivate}
                       disabled={busy}
                     />
                   </div>

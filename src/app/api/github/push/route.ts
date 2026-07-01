@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import { Sandbox } from '@e2b/code-interpreter';
 import { prisma } from "@/server/db";
-import { getSandbox } from '@/lib/sandbox-utils';
+import { getSandbox, runSandboxScript } from '@/lib/sandbox-utils';
 
 
 const REPO_PATH = '/home/user';
@@ -11,7 +11,6 @@ interface CreateBody {
   mode: 'create';
   sessionId: string;
   name: string;
-  isPrivate: boolean;
   description?: string;
   message?: string;
 }
@@ -100,15 +99,7 @@ async function runGit(
   // simple push case we use the URL form `https://x-access-token:TOKEN@…`
   // which is well-understood and gets discarded with the temp remote.
   const wrapped = `set -e\ncd ${REPO_PATH}\n${script}`;
-  const res = await sandbox.commands.run(`bash -lc ${JSON.stringify(wrapped)}`, {
-    timeoutMs: 120_000,
-    envs: env,
-  });
-  return {
-    stdout: res.stdout ?? '',
-    stderr: res.stderr ?? '',
-    exitCode: typeof res.exitCode === 'number' ? res.exitCode : 0,
-  };
+  return runSandboxScript(sandbox, wrapped, { timeoutMs: 120_000, envs: env });
 }
 
 function authedRemoteUrl(repoFullName: string, token: string): string {
@@ -227,7 +218,7 @@ export async function POST(request: NextRequest) {
         token,
         body: JSON.stringify({
           name: body.name,
-          private: body.isPrivate,
+          private: false,
           description: body.description ?? 'Built with CodeVibe',
           auto_init: false,
         }),

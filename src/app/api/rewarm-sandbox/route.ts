@@ -4,6 +4,7 @@ import { Sandbox } from '@e2b/code-interpreter';
 import { prisma } from "@/server/db";
 import { TEMPLATE_CONFIG, resolveTemplateType } from '@/lib/sandbox-registry';
 import { readFromYjsRoom } from '@/lib/server-yjs-writer';
+import { runSandboxScript } from '@/lib/sandbox-utils';
 
 
 interface StoredFileNode {
@@ -174,9 +175,7 @@ echo TIMEOUT
 exit 1
 `.trim();
   try {
-    const res = await sandbox.commands.run(`bash -lc ${JSON.stringify(script)}`, {
-      timeoutMs: 90_000,
-    });
+    const res = await runSandboxScript(sandbox, script, { timeoutMs: 90_000 });
     const out = (res.stdout ?? '').trim();
     if (out.endsWith('READY')) return 'ready';
     console.warn('[rewarm-sandbox] dev server not ready:', { stdout: out, stderr: res.stderr });

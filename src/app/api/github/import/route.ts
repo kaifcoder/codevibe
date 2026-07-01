@@ -3,6 +3,7 @@ import { auth, clerkClient } from '@clerk/nextjs/server';
 import { Sandbox } from '@e2b/code-interpreter';
 import { prisma } from "@/server/db";
 import { TEMPLATE_CONFIG, resolveTemplateType } from '@/lib/sandbox-registry';
+import { runSandboxScript } from '@/lib/sandbox-utils';
 
 
 const REPO_PATH = '/home/user';
@@ -71,9 +72,7 @@ echo TIMEOUT
 exit 1
 `.trim();
   try {
-    const res = await sandbox.commands.run(`bash -lc ${JSON.stringify(script)}`, {
-      timeoutMs: 120_000,
-    });
+    const res = await runSandboxScript(sandbox, script, { timeoutMs: 120_000 });
     const out = (res.stdout ?? '').trim();
     if (out.endsWith('READY')) return 'ready';
     console.warn('[github/import] dev server not ready:', { stdout: out, stderr: res.stderr });
@@ -147,7 +146,7 @@ cd ${REPO_PATH}
 git remote set-url origin ${JSON.stringify(`https://github.com/${repo}.git`)}
 echo CLONE_OK
 `.trim();
-      const cloneRes = await sandbox.commands.run(`bash -lc ${JSON.stringify(cloneScript)}`, {
+      const cloneRes = await runSandboxScript(sandbox, cloneScript, {
         timeoutMs: 90_000,
       });
       if (!(cloneRes.stdout ?? '').includes('CLONE_OK')) {
