@@ -12,6 +12,8 @@ import {
   GitBranch,
   AlertCircle,
   RefreshCw,
+  ArrowRight,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +43,29 @@ interface RepoSummary {
 interface ImportGithubDialogProps {
   className?: string;
 }
+
+// Tiny visual palette for the language dot. Anything not in the map falls
+// back to a neutral muted swatch so the row still reads.
+const LANGUAGE_COLORS: Record<string, string> = {
+  TypeScript: "bg-blue-500",
+  JavaScript: "bg-yellow-400",
+  Python: "bg-emerald-500",
+  Go: "bg-cyan-500",
+  Rust: "bg-orange-500",
+  Ruby: "bg-red-500",
+  Java: "bg-red-400",
+  Kotlin: "bg-purple-500",
+  Swift: "bg-orange-400",
+  "C++": "bg-pink-500",
+  C: "bg-slate-500",
+  "C#": "bg-violet-500",
+  HTML: "bg-orange-500",
+  CSS: "bg-blue-400",
+  Shell: "bg-lime-500",
+  PHP: "bg-indigo-400",
+  Vue: "bg-emerald-400",
+  Svelte: "bg-orange-500",
+};
 
 function formatRelative(iso: string): string {
   const then = new Date(iso).getTime();
@@ -141,122 +166,231 @@ export function ImportGithubDialog({ className }: Readonly<ImportGithubDialogPro
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => !importing && setOpen(v)}>
-        <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Github className="h-4 w-4" /> Import a GitHub repository
-          </DialogTitle>
-          <DialogDescription>
-            Pick one of your public repositories. We&apos;ll clone it into a fresh
-            sandbox, install dependencies, and start the dev server.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search repositories…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-            disabled={loading || !!error}
-          />
-        </div>
-
-        <ScrollArea className="h-80 -mx-1 px-1">
-          {loading ? (
-            <div className="space-y-2 py-1">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div
-                  key={`repo-skeleton-${i}`}
-                  className="flex flex-col gap-2 rounded-lg border border-border/50 p-3"
-                >
-                  <Skeleton className="h-4 w-40" />
-                  <Skeleton className="h-3 w-64" />
+        <DialogContent className="sm:max-w-xl p-0 gap-0 overflow-hidden">
+          {/* Header — subtle gradient wash + iconography set the tone before
+              the list even loads. */}
+          <div className="relative overflow-hidden border-b border-border/60 bg-gradient-to-br from-muted/40 via-background to-background px-6 pt-6 pb-5">
+            <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-blue-500/10 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-20 -left-10 h-40 w-40 rounded-full bg-emerald-500/5 blur-3xl" />
+            <DialogHeader className="space-y-2 relative">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 bg-background/80 shadow-sm">
+                  <Github className="h-4 w-4" />
                 </div>
-              ))}
+                <div className="flex-1 min-w-0">
+                  <DialogTitle className="text-base font-semibold leading-tight">
+                    Import from GitHub
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground leading-snug">
+                    Clone a repo into a fresh sandbox — deps installed, dev server booted.
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+          </div>
+
+          <div className="px-6 py-4 space-y-3">
+            {/* Search + count row. The count updates as the user types, so
+                filtering feels responsive without a spinner. */}
+            <div className="flex items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search your repositories"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9 h-9 bg-muted/30 border-border/60 focus-visible:ring-1 focus-visible:ring-blue-500/40 focus-visible:border-blue-500/40"
+                  disabled={loading || !!error}
+                  autoFocus
+                />
+              </div>
+              {!loading && !error && repos.length > 0 && (
+                <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground tabular-nums whitespace-nowrap">
+                  <span className="tabular-nums">{filtered.length}</span>
+                  <span className="text-muted-foreground/60">
+                    {filtered.length === 1 ? "repo" : "repos"}
+                  </span>
+                </div>
+              )}
             </div>
-          ) : error ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <AlertCircle className="h-8 w-8 text-destructive/80" />
-              <p className="text-sm text-muted-foreground">{error}</p>
-              <Button variant="outline" size="sm" onClick={loadRepos} className="gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5" />
-                Try again
-              </Button>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-              <Github className="h-8 w-8 text-muted-foreground/60" />
-              <p className="text-sm text-muted-foreground">
-                {repos.length === 0
-                  ? "No public repositories found on your account."
-                  : "No repositories match your search."}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-1.5 py-1">
-              {filtered.map((repo) => {
-                const isImporting = importing === repo.fullName;
-                return (
-                  <button
-                    key={repo.fullName}
-                    type="button"
-                    onClick={() => handleSelect(repo)}
-                    disabled={!!importing}
-                    className={cn(
-                      "group/repo flex w-full flex-col gap-1 rounded-lg border border-border/50 p-3 text-left transition-all",
-                      "hover:border-blue-500/50 hover:bg-muted/50",
-                      "disabled:pointer-events-none disabled:opacity-50",
-                      isImporting && "border-blue-500/60 bg-muted/50 opacity-100",
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      {repo.private ? (
-                        <Lock className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                      ) : (
-                        <Github className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      <span className="truncate text-sm font-medium">{repo.name}</span>
-                      {repo.language && (
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
-                          {repo.language}
-                        </span>
-                      )}
-                      {repo.stars > 0 && (
-                        <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
-                          <Star className="h-3 w-3" />
-                          {repo.stars}
-                        </span>
-                      )}
-                      <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-                        {isImporting ? (
-                          <>
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Opening…
-                          </>
-                        ) : (
-                          <>
-                            <GitBranch className="h-3 w-3" />
-                            {repo.defaultBranch}
-                          </>
-                        )}
-                      </span>
+
+            <ScrollArea className="h-[22rem] -mx-2 px-2">
+              {loading ? (
+                <div className="space-y-1.5 py-0.5">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div
+                      key={`repo-skeleton-${i}`}
+                      className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/10 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-3.5 w-3.5 rounded-full" />
+                        <Skeleton className="h-3.5 w-32" />
+                        <Skeleton className="ml-auto h-3 w-12" />
+                      </div>
+                      <Skeleton className="h-2.5 w-64" />
+                      <Skeleton className="h-2 w-20" />
                     </div>
-                    {repo.description && (
-                      <p className="line-clamp-1 text-xs text-muted-foreground">
-                        {repo.description}
-                      </p>
-                    )}
-                    <p className="text-[11px] text-muted-foreground/70">
-                      Updated {formatRelative(repo.updatedAt)}
+                  ))}
+                </div>
+              ) : error ? (
+                <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full border border-destructive/30 bg-destructive/5">
+                    <AlertCircle className="h-4 w-4 text-destructive" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Couldn&apos;t load repositories</p>
+                    <p className="text-xs text-muted-foreground max-w-xs">{error}</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={loadRepos} className="gap-1.5 h-8">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Try again
+                  </Button>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-2.5 px-6 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-muted/30">
+                    <Github className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">
+                      {repos.length === 0
+                        ? "No repositories yet"
+                        : "No matches"}
                     </p>
-                  </button>
-                );
-              })}
+                    <p className="text-xs text-muted-foreground max-w-xs">
+                      {repos.length === 0
+                        ? "We couldn't find any public repositories on your GitHub account."
+                        : `Nothing matches “${search}”. Try a shorter query.`}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1 py-0.5">
+                  {filtered.map((repo) => {
+                    const isImporting = importing === repo.fullName;
+                    const isDimmed = !!importing && !isImporting;
+                    const languageColor = repo.language
+                      ? LANGUAGE_COLORS[repo.language] ?? "bg-muted-foreground/50"
+                      : null;
+                    return (
+                      <button
+                        key={repo.fullName}
+                        type="button"
+                        onClick={() => handleSelect(repo)}
+                        disabled={!!importing}
+                        className={cn(
+                          "group/repo relative flex w-full items-start gap-3 rounded-lg border border-transparent px-3 py-2.5 text-left transition-all",
+                          "hover:border-border/70 hover:bg-muted/40",
+                          "focus-visible:outline-none focus-visible:border-blue-500/50 focus-visible:bg-muted/40",
+                          "disabled:cursor-not-allowed",
+                          isDimmed && "opacity-40",
+                          isImporting &&
+                            "border-blue-500/40 bg-blue-500/[0.04] shadow-[0_0_0_1px_rgba(59,130,246,0.15)]",
+                        )}
+                      >
+                        {/* Icon column keeps the row skimmable. Private repos
+                            get an amber lock so at-a-glance triage works. */}
+                        <div
+                          className={cn(
+                            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background transition-colors",
+                            "group-hover/repo:border-border group-hover/repo:bg-muted",
+                            isImporting && "border-blue-500/40 bg-blue-500/10",
+                          )}
+                        >
+                          {repo.private ? (
+                            <Lock className="h-3.5 w-3.5 text-amber-500" />
+                          ) : (
+                            <Github className="h-3.5 w-3.5 text-muted-foreground" />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium text-foreground">
+                              {repo.name}
+                            </span>
+                            {repo.private && (
+                              <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400">
+                                Private
+                              </span>
+                            )}
+                          </div>
+
+                          {repo.description ? (
+                            <p className="line-clamp-1 text-xs text-muted-foreground">
+                              {repo.description}
+                            </p>
+                          ) : (
+                            <p className="text-xs italic text-muted-foreground/60">
+                              No description
+                            </p>
+                          )}
+
+                          <div className="flex items-center gap-3 pt-0.5 text-[11px] text-muted-foreground/80">
+                            {repo.language && languageColor && (
+                              <span className="flex items-center gap-1.5">
+                                <span className={cn("h-2 w-2 rounded-full", languageColor)} />
+                                <span>{repo.language}</span>
+                              </span>
+                            )}
+                            {repo.stars > 0 && (
+                              <span className="flex items-center gap-1">
+                                <Star className="h-3 w-3" />
+                                <span className="tabular-nums">
+                                  {repo.stars >= 1000
+                                    ? `${(repo.stars / 1000).toFixed(1)}k`
+                                    : repo.stars}
+                                </span>
+                              </span>
+                            )}
+                            <span className="flex items-center gap-1">
+                              <GitBranch className="h-3 w-3" />
+                              <span className="truncate max-w-[8rem]">
+                                {repo.defaultBranch}
+                              </span>
+                            </span>
+                            <span className="ml-auto text-muted-foreground/60">
+                              {formatRelative(repo.updatedAt)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Trailing indicator — imported: spinner + label;
+                            hover: subtle arrow to invite click. */}
+                        <div className="flex shrink-0 items-center self-center pl-1">
+                          {isImporting ? (
+                            <span className="flex items-center gap-1.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Opening
+                            </span>
+                          ) : (
+                            <ArrowRight className="h-4 w-4 text-muted-foreground/0 transition-all group-hover/repo:text-muted-foreground group-hover/repo:translate-x-0.5" />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </ScrollArea>
+          </div>
+
+          {/* Footer keeps the dialog feeling finished — a hint about what
+              happens next removes the "will anything even happen?" pause. */}
+          <div className="border-t border-border/60 bg-muted/20 px-6 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Sparkles className="h-3 w-3 text-muted-foreground/70" />
+                <span>Sandbox spins up in a few seconds</span>
+              </div>
+              <div className="hidden sm:flex items-center gap-1 text-[11px] text-muted-foreground/70">
+                <kbd className="rounded border border-border/60 bg-background px-1.5 py-0.5 font-mono text-[10px] shadow-sm">
+                  Esc
+                </kbd>
+                <span>to close</span>
+              </div>
             </div>
-          )}
-        </ScrollArea>
+          </div>
         </DialogContent>
       </Dialog>
     </>
