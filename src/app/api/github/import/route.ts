@@ -55,6 +55,101 @@ async function detectDefaultBranch(repo: string, token: string): Promise<string 
   return data.default_branch ?? null;
 }
 
+// Detect what kind of JS project we cloned so we can run the right dev
+// command on the right port. The sandbox's public URL always points at the
+// template's exposed port (cfg.port — 3000 for the Next template), so we
+// have to *force* whatever dev server the project ships to bind there. Most
+// tools honor `PORT` env var; Vite additionally honors `--port`. We also
+// force `--host 0.0.0.0` where possible because E2B routes external traffic
+// through the sandbox's network interface, not localhost.
+//
+// We prefer `./node_modules/.bin/<binary>` over `npx` when the binary is
+// available — bypasses npx's registry lookup and any auto-install prompt.
+// Falls back to `npx <name>` if the local bin is missing (rare — usually
+// means the install silently failed). Ultimately falls back to
+// `npm run dev` → `npm start` if we can't statically identify the framework.
+function detectProjectKindShell(port: number): string {
+  return `
+# Read package.json once; jq isn't guaranteed to be installed, so we grep.
+PKG=/home/user/package.json
+if [ ! -f "$PKG" ]; then
+  # Not a Node project — nothing to boot. The user probably imported a
+  # static repo or a non-JS project; leave the tree in place so the code
+  # editor still shows the files.
+  echo "[import-boot] no package.json — skipping dev-server boot"
+  exit 0
+fi
+
+# Helper: run <name> either from ./node_modules/.bin (fast, no network) or
+# via \`npx <name>\` (slow, may hit registry). This makes the script survive
+# a partial npm install failure — a warning about peer deps often leaves
+# .bin populated even when npm's exit code was non-zero.
+run_bin() {
+  local bin="$1"; shift
+  if [ -x "./node_modules/.bin/\$bin" ]; then
+    exec "./node_modules/.bin/\$bin" "\$@"
+  else
+    echo "[import-boot] ./node_modules/.bin/\$bin missing — falling back to npx"
+    exec npx --yes "\$bin" "\$@"
+  fi
+}
+
+# Framework fingerprints. Order matters: check the more specific ones first
+# so a project that has both (e.g. next + vite dep) picks the right one.
+HAS_NEXT=$(grep -Eq '"next"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+HAS_VITE=$(grep -Eq '"vite"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+HAS_REACT_SCRIPTS=$(grep -Eq '"react-scripts"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+HAS_ASTRO=$(grep -Eq '"astro"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+HAS_NUXT=$(grep -Eq '"nuxt"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+HAS_REMIX=$(grep -Eq '"@remix-run/' "$PKG" && echo 1 || echo 0)
+HAS_SVELTEKIT=$(grep -Eq '"@sveltejs/kit"' "$PKG" && echo 1 || echo 0)
+HAS_DEV_SCRIPT=$(grep -Eq '"dev"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+HAS_START_SCRIPT=$(grep -Eq '"start"[[:space:]]*:' "$PKG" && echo 1 || echo 0)
+
+# Every dev server we spawn gets PORT + HOST env so they bind where E2B
+# forwards traffic. Not every tool respects PORT (Vite ignores it in some
+# versions) so per-framework we also pass the CLI flag when possible.
+export PORT=${port}
+export HOST=0.0.0.0
+export HOSTNAME=0.0.0.0        # some tools read HOSTNAME instead of HOST
+export BROWSER=none            # CRA otherwise tries to open a browser
+
+echo "[import-boot] fingerprint: next=$HAS_NEXT vite=$HAS_VITE cra=$HAS_REACT_SCRIPTS astro=$HAS_ASTRO nuxt=$HAS_NUXT remix=$HAS_REMIX sveltekit=$HAS_SVELTEKIT dev=$HAS_DEV_SCRIPT start=$HAS_START_SCRIPT"
+
+if [ "$HAS_NEXT" = "1" ]; then
+  echo "[import-boot] detected: Next.js — binding :$PORT"
+  run_bin next dev -p "$PORT" --hostname 0.0.0.0
+elif [ "$HAS_NUXT" = "1" ]; then
+  echo "[import-boot] detected: Nuxt — binding :$PORT"
+  run_bin nuxt dev --port "$PORT" --host 0.0.0.0
+elif [ "$HAS_REMIX" = "1" ]; then
+  echo "[import-boot] detected: Remix — honors PORT env"
+  run_bin remix dev
+elif [ "$HAS_SVELTEKIT" = "1" ]; then
+  echo "[import-boot] detected: SvelteKit — binding :$PORT via vite"
+  run_bin vite dev --port "$PORT" --host 0.0.0.0
+elif [ "$HAS_ASTRO" = "1" ]; then
+  echo "[import-boot] detected: Astro — binding :$PORT"
+  run_bin astro dev --port "$PORT" --host 0.0.0.0
+elif [ "$HAS_VITE" = "1" ]; then
+  echo "[import-boot] detected: Vite — binding :$PORT"
+  run_bin vite --port "$PORT" --host 0.0.0.0
+elif [ "$HAS_REACT_SCRIPTS" = "1" ]; then
+  echo "[import-boot] detected: CRA — honors PORT=$PORT"
+  run_bin react-scripts start
+elif [ "$HAS_DEV_SCRIPT" = "1" ]; then
+  echo "[import-boot] detected: generic 'dev' script — PORT=$PORT HOST=$HOST"
+  exec npm run dev
+elif [ "$HAS_START_SCRIPT" = "1" ]; then
+  echo "[import-boot] detected: generic 'start' script — PORT=$PORT HOST=$HOST"
+  exec npm start
+else
+  echo "[import-boot] no dev/start script — nothing to run" >&2
+  exit 1
+fi
+`.trim();
+}
+
 // Fire-and-forget install + dev-server boot. We don't block the HTTP response
 // on this — the frontend already shows a preview shimmer and the iframe
 // polls the sandbox URL until Next answers. Blocking here just makes the
@@ -67,11 +162,18 @@ async function detectDefaultBranch(repo: string, token: string): Promise<string 
 //     `setsid` errors out with "cannot set process group" in that case).
 //   - All FDs are redirected to files so envd doesn't wait on inherited
 //     pipes, which is what caused the earlier `deadline_exceeded`.
-async function startDevServerInBackground(sandbox: Sandbox): Promise<void> {
+async function startDevServerInBackground(sandbox: Sandbox, port: number): Promise<void> {
+  const detectAndRun = detectProjectKindShell(port);
   const script = `
 set -u
 cd ${REPO_PATH}
+# Kill any dev server left over from the template (next dev is baked in) or
+# from an earlier failed import attempt — matching on likely command names
+# so we don't have to know which framework was previously running.
 pkill -f "next dev" >/dev/null 2>&1 || true
+pkill -f "vite" >/dev/null 2>&1 || true
+pkill -f "react-scripts" >/dev/null 2>&1 || true
+pkill -f "astro dev" >/dev/null 2>&1 || true
 
 # Write the actual work script — dodges nested-quote hell and gives us a
 # clean file to \`tail -f\` for debugging.
@@ -80,9 +182,13 @@ cat > /tmp/import-boot.sh <<'BOOT_EOF'
 cd ${REPO_PATH}
 {
   echo "[import-boot] starting at $(date -u +%FT%TZ)"
-  npm install --prefer-offline --no-audit --no-fund --loglevel=error
-  echo "[import-boot] install exit=$? at $(date -u +%FT%TZ), launching next dev"
-  exec node ./node_modules/.bin/next dev --turbopack -p 3000
+  if [ -f package.json ]; then
+    npm install --prefer-offline --no-audit --no-fund --loglevel=error
+    echo "[import-boot] install exit=$? at $(date -u +%FT%TZ), detecting framework"
+  else
+    echo "[import-boot] no package.json, skipping install"
+  fi
+${detectAndRun}
 } > /tmp/import-boot.log 2>&1
 BOOT_EOF
 chmod +x /tmp/import-boot.sh
@@ -236,8 +342,10 @@ echo CLONE_OK
       // Kick off install + dev server without blocking the response — the
       // frontend iframe / shimmer already handles the "server not up yet"
       // window. This is what makes the import dialog return in seconds
-      // instead of a minute+.
-      void startDevServerInBackground(sandbox);
+      // instead of a minute+. We pass `cfg.port` so whatever dev server
+      // the imported project ships (Next, Vite, CRA, …) is forced to bind
+      // where E2B's public URL forwards traffic.
+      void startDevServerInBackground(sandbox, cfg.port);
       const host = sandbox.getHost(cfg.port);
       const sandboxUrl = `https://${host}`;
 

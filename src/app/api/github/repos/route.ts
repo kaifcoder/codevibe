@@ -6,23 +6,47 @@ import { auth, clerkClient } from '@clerk/nextjs/server';
 // Uses the GitHub OAuth token Clerk stores for the user — the same source the
 // push/import routes read from.
 
-// The import flow creates a Next.js sandbox and runs `npm install && next dev`
-// on the cloned tree — so a Python or Go repo would just crash on boot. Filter
-// server-side to languages that plausibly ship a package.json-based web app,
-// and let the client surface an explicit toggle if the user wants to see
-// everything anyway.
-const SUPPORTED_LANGUAGES = new Set<string>([
-  'TypeScript',
-  'JavaScript',
-  'TSX',
-  'JSX',
-  'Vue',
-  'Svelte',
-  'Astro',
-  'HTML',
-  'CSS',
-  'SCSS',
-  'MDX',
+// The import flow creates a sandbox and runs `npm install && <detected dev
+// server>` on the cloned tree. We can boot Next, Nuxt, Remix, SvelteKit,
+// Astro, Vite, CRA, or any project with a `dev` / `start` script — so the
+// language filter is really about "definitely not a Node project". We
+// blocklist languages that never ship a package.json rather than trying to
+// enumerate the allowlist (which was too narrow — a Vite repo whose primary
+// language GitHub tagged as `Python` got hidden even though it's boot-able).
+//
+// The presence of package.json is what actually matters, and we can't check
+// that without cloning. So we approximate: block obvious non-JS languages,
+// accept everything else. Users can always try — the import will fail
+// gracefully with a clear message if there's no package.json.
+const UNSUPPORTED_LANGUAGES = new Set<string>([
+  'Python',
+  'Go',
+  'Rust',
+  'Java',
+  'Kotlin',
+  'Swift',
+  'C',
+  'C++',
+  'C#',
+  'Objective-C',
+  'Objective-C++',
+  'Ruby',
+  'PHP',
+  'Elixir',
+  'Erlang',
+  'Haskell',
+  'Scala',
+  'Clojure',
+  'R',
+  'Lua',
+  'Perl',
+  'Dart',
+  'Zig',
+  'Nim',
+  'OCaml',
+  'F#',
+  'Julia',
+  'Assembly',
 ]);
 
 interface GithubRepo {
@@ -131,7 +155,10 @@ export async function GET() {
         // Repos with no detected language usually mean docs / config / empty
         // — cheap to try, so we keep them supported. Otherwise gate on the
         // Node/web-app allowlist.
-        supported: r.language == null || SUPPORTED_LANGUAGES.has(r.language),
+        // Null language = docs / config / empty repo — cheap to try, keep
+        // it supported. Otherwise: if the primary language is in the
+        // "definitely not a Node project" blocklist, mark unsupported.
+        supported: r.language == null || !UNSUPPORTED_LANGUAGES.has(r.language),
       }));
 
     return NextResponse.json({ ok: true, repos });
