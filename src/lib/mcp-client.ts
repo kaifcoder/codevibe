@@ -16,12 +16,6 @@ const client = new MultiServerMCPClient({
   prefixToolNameWithServerName: false,
   useStandardContentBlocks: true,
   mcpServers: {
-    'nextjs-docs-mcp': {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['--no-install', '@taiyokimura/nextjs-docs-mcp'],
-    },
-
     // JSON-only mode — exposes the 7 core tools (search_nodes, get_node,
     // validate_node, validate_workflow, search_templates, get_template,
     // tools_documentation). In-sandbox n8n deploys go through e2b_run_command.
@@ -49,10 +43,6 @@ export async function getMCPTools(...serverNames: string[]) {
     console.error('Failed to load MCP tools:', error);
     return [];
   }
-}
-
-export async function createNextJsDocsMCPTools() {
-  return getMCPTools('nextjs-docs-mcp');
 }
 
 export async function createN8nMCPTools() {
