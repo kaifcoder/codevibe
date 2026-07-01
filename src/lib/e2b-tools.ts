@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { getSandbox } from '@/lib/sandbox-utils';
+import { getSandbox, runSandboxScript } from '@/lib/sandbox-utils';
 import { tool } from '@langchain/core/tools';
 import { Sandbox } from '@e2b/code-interpreter';
 import { z } from 'zod';
@@ -159,10 +159,10 @@ function matchBlockedCommand(raw: string): string | null {
     }
     // Starting another dev / start server — the existing one is on port 3000.
     if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start)\b/.test(seg)) {
-      return 'never run `npm run dev` / `npm run start` — the dev server is already running on port 3000';
+      return 'never run `npm run dev` / `npm run start` — the dev server is already running on port 3000. If the preview is stuck, use the e2b_restart_dev_server tool instead';
     }
     if (/^(?:npx\s+)?next\s+(?:dev|start)\b/.test(seg)) {
-      return 'never run `next dev` / `next start` — already running on port 3000';
+      return 'never run `next dev` / `next start` — already running on port 3000. If the preview is stuck, use the e2b_restart_dev_server tool instead';
     }
     // curl/wget against the running dev server: races hot-reload and
     // hangs the dev server when many fire in parallel from a single turn.
@@ -395,7 +395,10 @@ const deleteFile = tool(
       // Fire-and-forget — the agent's next tool call shouldn't pay for the
       // ~3-5s respawn, and the iframe will surface its own "Restarting…"
       // state via the brief 502 → 200 transition.
-      void restartNextDevServer(sbx, config, path).catch((err) => {
+      void restartNextDevServer(sbx, config, {
+        tool: 'e2b_delete_file',
+        message: 'Flushing Turbopack module graph (dev server restart)...',
+      }).catch((err) => {
         console.warn('[e2b_delete_file] dev server restart failed:', (err as Error).message);
       });
     }
@@ -439,33 +442,103 @@ function isNextjsModuleGraphPath(p: string): boolean {
 // is enough.
 const restartingSandboxes = new WeakSet<Sandbox>();
 
-async function restartNextDevServer(sbx: Sandbox, config: LangGraphRunnableConfig, triggerPath: string) {
-  if (restartingSandboxes.has(sbx)) return;
+// Kill the running `next dev`, flush the Turbopack cache, respawn it detached,
+// then poll until it answers on :3000. Surfacing the readiness result (and the
+// dev log on failure) is what keeps a bad restart from looking like a silently
+// "hung" container — the old fire-and-forget version returned in ~10ms and
+// never noticed if the server failed to come back up.
+async function restartNextDevServer(
+  sbx: Sandbox,
+  config: LangGraphRunnableConfig,
+  opts: { tool: string; message: string },
+): Promise<{ ok: boolean; log: string }> {
+  if (restartingSandboxes.has(sbx)) {
+    return { ok: true, log: 'restart already in progress' };
+  }
   restartingSandboxes.add(sbx);
   try {
     config.writer?.({
       type: 'tool_progress',
-      tool: 'e2b_delete_file',
-      args: { path: triggerPath },
-      message: 'Flushing Turbopack module graph (dev server restart)...',
+      tool: opts.tool,
+      args: {},
+      message: opts.message,
       status: 'running',
     });
-    // Kill the running next dev, drop the .next cache so Turbopack can't
-    // reload the stale resolved-modules snapshot, then respawn detached so
-    // the command returns immediately. nohup + & + redirected stdio is the
-    // standard pattern for surviving the parent shell exiting.
-    const script = [
-      'pkill -f "next dev" || true',
-      'rm -rf /home/user/.next',
-      'cd /home/user',
-      'nohup node ./node_modules/.bin/next dev --turbopack -p 3000 > /tmp/nextdev.log 2>&1 &',
-      'disown || true',
-    ].join(' && ');
-    await sbx.commands.run(`bash -c '${script}'`, { timeoutMs: 10_000 });
+    // Respawn detached (nohup + & + disown survives the parent shell exiting),
+    // dropping .next so Turbopack can't reload a stale resolved-modules
+    // snapshot, then poll readiness with a single sequential curl loop (safe
+    // here — it's not racing the parallel writes RULE 0 warns about). A
+    // multi-line script is transported via runSandboxScript so nested shell
+    // quoting can't mangle the newlines.
+    const script = `
+pkill -f "next dev" || true
+rm -rf /home/user/.next
+cd /home/user
+nohup node ./node_modules/.bin/next dev --turbopack -p 3000 > /tmp/nextdev.log 2>&1 &
+disown || true
+for i in $(seq 1 45); do
+  if curl -sf -o /dev/null http://localhost:3000; then echo DEV_READY; exit 0; fi
+  sleep 1
+done
+echo DEV_FAILED
+tail -n 40 /tmp/nextdev.log 2>/dev/null || true
+`.trim();
+    const res = await runSandboxScript(sbx, script, { timeoutMs: 60_000 });
+    const out = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
+    if (/DEV_READY/.test(out)) {
+      config.writer?.({
+        type: 'tool_result',
+        tool: opts.tool,
+        args: {},
+        result: 'Dev server restarted and responding on port 3000.',
+      });
+      return { ok: true, log: '' };
+    }
+    const log = out.replace(/^[\s\S]*DEV_FAILED\s*/, '').trim().slice(-1000);
+    console.warn('[restartNextDevServer] server did not come back up:', log.slice(-400));
+    config.writer?.({
+      type: 'tool_result',
+      tool: opts.tool,
+      args: {},
+      result: `Dev server did NOT respond within 45s — likely a compile/runtime error. Log tail:\n${log}`,
+    });
+    return { ok: false, log };
   } finally {
     restartingSandboxes.delete(sbx);
   }
 }
+
+// ─── e2b_restart_dev_server ─────────────────────────────────────────────────
+//
+// The only agent-facing way to recover a wedged preview. `next dev` /
+// `next start` are hard-blocked in matchBlockedCommand (they'd spawn a second
+// server), so when Turbopack hangs after an edit there was previously no
+// recovery short of the 25-min expiry rewarm. This tool runs the same hardened
+// restart the delete path uses and waits for the server to answer.
+const restartDevServer = tool(
+  async (_input: Record<string, never>, config: LangGraphRunnableConfig) => {
+    const sbx = await resolveSandbox(config);
+    const { ok, log } = await restartNextDevServer(sbx, config, {
+      tool: 'e2b_restart_dev_server',
+      message: 'Restarting the Next.js dev server...',
+    });
+    if (ok) {
+      return 'Dev server restarted and is responding on port 3000. If the preview did not auto-reload, tell the user to refresh it.';
+    }
+    return (
+      'Dev server was respawned but is NOT responding on port 3000 within 45s. ' +
+      'This almost always means a compile or runtime error in the app. Dev log tail:\n' +
+      `${log || '(no log captured)'}\n` +
+      'Read the offending file, fix the error, then restart again.'
+    );
+  },
+  {
+    name: 'e2b_restart_dev_server',
+    description:
+      'Restart the Next.js dev server when the live preview is stuck / not responding (e.g. Turbopack wedged after an edit, or a blank/hanging page). Kills next dev, clears the .next cache, respawns it, and waits until it answers on port 3000 — returning the dev log if it fails to come back. Use this instead of running `next dev` (which is blocked).',
+    schema: z.object({}),
+  }
+);
 
 // ─── e2b_patch_file ────────────────────────────────────────────────────────
 //
@@ -743,4 +816,4 @@ const listFilesRecursive = tool(
   }
 );
 
-export const e2bTools = [runCommand, writeFile, patchFile, readFile, listFiles, deleteFile, listFilesRecursive];
+export const e2bTools = [runCommand, writeFile, patchFile, readFile, listFiles, deleteFile, listFilesRecursive, restartDevServer];
