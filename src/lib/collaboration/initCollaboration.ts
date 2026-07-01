@@ -104,16 +104,25 @@ export function initCollaboration(config: CollaborationConfig): CollaborationSes
     const provider = providers.get(roomId)!;
     const ydoc = documents.get(roomId)!;
     const yText = ydoc.getText('monaco');
-    
+
     console.log('[Collaboration] Reusing existing session for room:', roomId);
-    
-    // Update awareness state
-    const color = generateUserColor();
-    provider.awareness?.setLocalStateField('user', {
-      name: username,
-      color: color,
-    });
-    
+
+    // Update awareness state — but only if the user info actually changed.
+    // Blindly re-setting on every join clobbers y-monaco's `cursor` /
+    // `selection` state on the same awareness map, which the binding uses
+    // internally to render remote carets. Overwriting them makes remote
+    // cursors visually freeze until the next selection event.
+    const existingUser = provider.awareness?.getLocalState()?.user as
+      | { name?: string; color?: string }
+      | undefined;
+    if (!existingUser || existingUser.name !== username) {
+      const color = existingUser?.color ?? generateUserColor();
+      provider.awareness?.setLocalStateField('user', {
+        name: username,
+        color,
+      });
+    }
+
     return {
       ydoc,
       yText,
@@ -125,9 +134,14 @@ export function initCollaboration(config: CollaborationConfig): CollaborationSes
   // Create new Y.Doc
   const ydoc = new Y.Doc();
   documents.set(roomId, ydoc);
-  
+
   // Get Y.Text instance for Monaco binding
   const yText = ydoc.getText('monaco');
+
+  // Pick a color once — stable across reconnects. Reused inside onConnect
+  // when awareness state was lost so we don't visually flicker to a
+  // different color on every disconnect.
+  const initialColor = generateUserColor();
 
   // Create Hocuspocus provider
   const provider = new HocuspocusProvider({
@@ -137,34 +151,35 @@ export function initCollaboration(config: CollaborationConfig): CollaborationSes
     
     onConnect: () => {
       console.log(`[Collaboration] ✅ Connected to room: ${roomId}`);
-      // Reapply awareness state on connect
-      const color = generateUserColor();
-      provider.awareness?.setLocalStateField('user', {
-        name: username,
-        color,
-      });
+      // Reapply awareness state on connect ONLY if it's missing — otherwise
+      // we clobber the y-monaco selection state that lives on the same
+      // awareness map and remote cursors visually freeze.
+      const state = provider.awareness?.getLocalState()?.user;
+      if (!state) {
+        provider.awareness?.setLocalStateField('user', {
+          name: username,
+          color: initialColor,
+        });
+      }
     },
-    
+
     onDisconnect: (data) => {
       console.log(`[Collaboration] ⚠️ Disconnected from room: ${roomId}`, data);
     },
-    
+
     onSynced: () => {
       console.log(`[Collaboration] 🔄 Room ${roomId} synced`);
     },
-    
+
     onStatus: (event) => {
       if (event.status === 'connected' || event.status === 'disconnected') {
         console.log(`[Collaboration] 📡 Status: ${event.status}`);
       }
-      // Reapply awareness on reconnect
-      if (event.status === 'connected') {
-        const color = generateUserColor();
-        provider.awareness?.setLocalStateField('user', {
-          name: username,
-          color,
-        });
-      }
+      // Do NOT re-set awareness here — status flips fire often and each
+      // rewrite of `user` in the awareness map cancels out the local
+      // `cursor` / `selection` updates y-monaco is trying to publish. Set
+      // once at construction (below) and again only if we detect state
+      // loss in onConnect.
     },
     
     onAuthenticationFailed: (error) => {
@@ -172,14 +187,16 @@ export function initCollaboration(config: CollaborationConfig): CollaborationSes
     },
   });
 
-  // Set initial awareness state
-  const color = generateUserColor();
+  // Set initial awareness state once. Both onConnect (if state was lost)
+  // and the reuse-existing-session path reference `initialColor` above so
+  // the color is stable across reconnects — no more color flicker for
+  // other peers' presence chips.
   provider.awareness?.setLocalStateField('user', {
     name: username,
-    color: color,
+    color: initialColor,
   });
-  
-  console.log('[Collaboration] Set awareness for user:', username, 'with color:', color);
+
+  console.log('[Collaboration] Set awareness for user:', username, 'with color:', initialColor);
 
   // Store provider
   providers.set(roomId, provider);

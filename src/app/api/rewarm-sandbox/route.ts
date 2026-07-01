@@ -149,19 +149,12 @@ async function seedDeltaToSandbox(
 // hot-reload (package.json bump, next/postcss/tailwind config, env vars) was
 // actually written — otherwise the running dev server keeps serving and HMR
 // picks up source edits for free.
-async function restartDevServer(
-  sandbox: Sandbox,
-  runInstall: boolean,
-): Promise<'ready' | 'timeout' | 'fail'> {
-  const installStep = runInstall
-    ? `npm install --prefer-offline --no-audit --no-fund > /tmp/rewarm-install.log 2>&1 || true`
-    : `:`;
+async function restartDevServer(sandbox: Sandbox): Promise<'ready' | 'timeout' | 'fail'> {
   const script = `
 set -u
 cd /home/user
 pkill -f "next dev" >/dev/null 2>&1 || true
 sleep 1
-${installStep}
 nohup npx next dev --turbopack > /tmp/next.log 2>&1 &
 disown || true
 for i in $(seq 1 60); do
@@ -182,6 +175,42 @@ exit 1
     return 'timeout';
   } catch (err) {
     console.warn('[rewarm-sandbox] restartDevServer threw:', (err as Error).message);
+    return 'fail';
+  }
+}
+
+// Run `npm install --prefer-offline` inside the sandbox. Cheap when the
+// template's ~/.npm cache covers the deps (which it does for the entire
+// create-next-app + shadcn baseline), and mandatory when the seeded
+// package.json declares deps that aren't in the baked node_modules.
+//
+// We always run this on rewarm because the fresh sandbox image only has the
+// baseline install — anything the agent added since the last rewarm needs
+// to be reinstalled. Skipping it left the dev server 500'ing on imports of
+// user-added packages until the next agent turn happened to trigger a
+// restart. --prefer-offline keeps this at ~2-4s when everything's cached.
+async function runNpmInstall(sandbox: Sandbox): Promise<'ok' | 'fail'> {
+  const script = `
+set -u
+cd /home/user
+npm install --prefer-offline --no-audit --no-fund --loglevel=error > /tmp/rewarm-install.log 2>&1
+echo "INSTALL_EXIT=$?"
+`.trim();
+  try {
+    const res = await runSandboxScript(sandbox, script, { timeoutMs: 120_000 });
+    const match = res.stdout.match(/INSTALL_EXIT=(\d+)/);
+    const exitCode = match ? parseInt(match[1], 10) : 1;
+    if (exitCode === 0) return 'ok';
+    console.warn('[rewarm-sandbox] npm install non-zero exit:', {
+      exitCode,
+      stdout: res.stdout.slice(-500),
+      stderr: res.stderr.slice(-500),
+    });
+    // Non-zero is often peer-dep warnings — node_modules is usually still
+    // usable. Return 'ok' so we don't fail the whole rewarm on npm noise.
+    return 'ok';
+  } catch (err) {
+    console.warn('[rewarm-sandbox] runNpmInstall threw:', (err as Error).message);
     return 'fail';
   }
 }
@@ -271,11 +300,30 @@ export async function POST(request: NextRequest) {
             failedSamples,
           );
         }
-        // Restart only when we wrote something turbopack can't hot-reload.
-        // Source-file edits are picked up by HMR against the running server,
-        // so the typical no-config-change path skips ~30–60s of pkill+install.
-        if (result.configChanged) {
-          devReady = await restartDevServer(sandbox, result.packageJsonChanged);
+
+        // Always run npm install after seeding. The fresh sandbox image
+        // carries only the create-next-app + shadcn baseline `node_modules`
+        // — anything the agent added later needs to be reinstalled or the
+        // dev server 500s on the missing import at request time. With the
+        // template's warmed `~/.npm` cache, this is ~2-4s for a no-op
+        // install and only pays real network cost when a new dep is
+        // actually missing. Runs even when the current seed didn't touch
+        // package.json, because a *previous* rewarm may have failed halfway
+        // and left node_modules out of sync.
+        const installResult = await runNpmInstall(sandbox);
+        console.log('[rewarm-sandbox] npm install:', installResult);
+
+        // Restart the dev server only when we wrote something turbopack
+        // can't hot-reload. Source-file edits are picked up by HMR against
+        // the running server, so the typical no-config-change path skips
+        // the ~30-60s pkill+boot cycle.
+        //
+        // NOTE: on a freshly-provisioned sandbox from `Sandbox.create`, the
+        // template's baked `next dev` is already running with the baseline
+        // tree — after seeding user files on top, we still need to restart
+        // once so it picks up the seeded config / new node_modules.
+        if (result.configChanged || result.packageJsonChanged) {
+          devReady = await restartDevServer(sandbox);
         } else {
           devReady = 'skipped';
         }
