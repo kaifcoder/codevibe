@@ -51,7 +51,10 @@ async function getGithubToken(userId: string): Promise<string | null> {
 async function ghFetch<T>(
   path: string,
   init: RequestInit & { token: string },
-): Promise<{ ok: true; data: T } | { ok: false; status: number; message: string }> {
+): Promise<
+  | { ok: true; data: T; scopes: string[] | null }
+  | { ok: false; status: number; message: string }
+> {
   const res = await fetch(`https://api.github.com${path}`, {
     ...init,
     headers: {
@@ -70,7 +73,15 @@ async function ghFetch<T>(
     } catch {}
     return { ok: false, status: res.status, message };
   }
-  return { ok: true, data: (await res.json()) as T };
+  // `x-oauth-scopes` is present for OAuth tokens (what Clerk issues). It's
+  // absent (null) for GitHub App user tokens — in that case we can't infer the
+  // granted scopes, so we skip the up-front scope check.
+  const scopesHeader = res.headers.get('x-oauth-scopes');
+  const scopes =
+    scopesHeader === null
+      ? null
+      : scopesHeader.split(',').map((s) => s.trim()).filter(Boolean);
+  return { ok: true, data: (await res.json()) as T, scopes };
 }
 
 // Inject the access token into the remote URL right before push so it never
@@ -103,6 +114,21 @@ async function runGit(
 function authedRemoteUrl(repoFullName: string, token: string): string {
   // x-access-token is GitHub's documented user for token-based HTTPS auth.
   return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repoFullName}.git`;
+}
+
+// A missing `repo` OAuth scope makes GitHub answer repo create/push with a
+// bare "Not Found" (404) or 403 instead of a helpful permission error — which
+// this route was surfacing as a confusing 502. Turn those into an actionable
+// message so the user knows to reconnect GitHub with repository access.
+const SCOPE_HINT =
+  'Your GitHub connection is missing repository write access. Reconnect GitHub and grant the "repo" scope, then try again.';
+
+function gitAuthHint(output: string): string | null {
+  return /repository not found|remote: not found|remote: permission|permission to .* denied|could not read username|authentication failed|the requested url returned error: 403|error: 404/i.test(
+    output,
+  )
+    ? SCOPE_HINT
+    : null;
 }
 
 export async function POST(request: NextRequest) {
@@ -152,10 +178,28 @@ export async function POST(request: NextRequest) {
     const userRes = await ghFetch<GithubUserResponse>('/user', { method: 'GET', token });
     if (!userRes.ok) {
       return NextResponse.json(
-        { error: `GitHub auth failed: ${userRes.message}` },
+        {
+          error:
+            userRes.status === 401
+              ? 'GitHub token is invalid or expired. Reconnect your GitHub account and try again.'
+              : `GitHub auth failed: ${userRes.message}`,
+        },
         { status: userRes.status === 401 ? 401 : 502 },
       );
     }
+
+    // Clerk's GitHub OAuth connection must request the `repo` scope. Without it
+    // GitHub silently answers repo create/push with 404 "Not Found" (which the
+    // route otherwise reports as a confusing 502). Catch the missing scope here
+    // with a clear, actionable message.
+    if (
+      userRes.scopes !== null &&
+      !userRes.scopes.includes('repo') &&
+      !userRes.scopes.includes('public_repo')
+    ) {
+      return NextResponse.json({ error: SCOPE_HINT }, { status: 403 });
+    }
+
     const ghUser = userRes.data;
     const committerName = ghUser.name || ghUser.login;
     const committerEmail = ghUser.email || `${ghUser.login}@users.noreply.github.com`;
@@ -189,9 +233,19 @@ export async function POST(request: NextRequest) {
         }),
       });
       if (!createRes.ok) {
+        const { status } = createRes;
+        const friendly =
+          status === 422
+            ? `A repo named "${body.name}" already exists on your account.`
+            : status === 403 || status === 404
+              ? SCOPE_HINT
+              : `GitHub create failed: ${createRes.message}`;
         return NextResponse.json(
-          { error: `GitHub create failed: ${createRes.message}` },
-          { status: createRes.status === 422 ? 409 : 502 },
+          { error: friendly },
+          {
+            status:
+              status === 422 ? 409 : status === 403 || status === 404 ? 403 : 502,
+          },
         );
       }
       const repo = createRes.data;
@@ -213,8 +267,9 @@ git push -u origin ${branch}
 `.trim();
       const initRes = await runGit(sandbox, initScript);
       if (initRes.exitCode !== 0) {
+        const out = initRes.stderr || initRes.stdout;
         return NextResponse.json(
-          { error: `git push failed: ${initRes.stderr || initRes.stdout}` },
+          { error: gitAuthHint(out) || `git push failed: ${out}` },
           { status: 500 },
         );
       }
@@ -274,8 +329,9 @@ git push -u origin ${branch}
       );
     }
     if (pushRes.exitCode !== 0) {
+      const out = pushRes.stderr || pushRes.stdout;
       return NextResponse.json(
-        { error: `git push failed: ${pushRes.stderr || pushRes.stdout}` },
+        { error: gitAuthHint(out) || `git push failed: ${out}` },
         { status: 500 },
       );
     }
