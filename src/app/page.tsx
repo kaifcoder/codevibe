@@ -19,6 +19,7 @@ import { useAuth, SignInButton, useClerk } from "@clerk/nextjs"
 import { useAgentReady } from "@/hooks/use-agent-ready"
 import { BackendWarmingBanner } from "@/components/BackendWarmingBanner"
 import LandingSections from "@/components/landing/LandingSections"
+import { ImportGithubDialog } from "@/components/ImportGithubDialog"
 
 
 
@@ -346,6 +347,18 @@ export default function HomePage() {
               <p className="text-xs text-muted-foreground mt-3 text-center">
                 Press <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> to send · <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Shift</kbd> + <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> for new line
               </p>
+            </motion.div>
+
+            {/* Import an existing project from GitHub */}
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.5, duration: 0.6 }}
+              className="mb-6 lg:mb-8 flex items-center justify-center gap-3"
+            >
+              <span className="h-px w-8 bg-border/60" />
+              <ImportGithubDialog />
+              <span className="h-px w-8 bg-border/60" />
             </motion.div>
 
             {/* Suggestions */}

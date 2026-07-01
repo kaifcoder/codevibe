@@ -284,6 +284,7 @@ function ChatPage() {
   const searchParams = useSearchParams();
   const shareToken = searchParams.get("token");
   const promptParam = searchParams.get("prompt");
+  const importRepoParam = searchParams.get("importRepo");
   const isSharedAccess = !!shareToken;
 
   const ctx = useChat();
@@ -296,6 +297,10 @@ function ChatPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [message, setMessage] = useState("");
   const [isCheckingExpiration, setIsCheckingExpiration] = useState(false);
+  // Holds the repo full-name (owner/name) while a GitHub repo handed off from
+  // the home screen (?importRepo=) is being cloned into a fresh sandbox. Non-null
+  // drives the "Importing…" preview panel; cleared once the sandbox is ready.
+  const [importingRepoName, setImportingRepoName] = useState<string | null>(null);
   // For n8n sandboxes: URL of the codevibe-side reverse proxy. Iframes load
   // from here instead of the e2b URL so the n8n auth cookie lands first-party
   // (browsers block third-party cookies in iframes even with SameSite=None).
@@ -306,6 +311,7 @@ function ChatPage() {
   const sessionExistsRef = useRef(false);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const hasAutoSentRef = useRef(false);
+  const didImportRepoRef = useRef(false);
   const switchedThreadRef = useRef(false);
   const titleSetRef = useRef(false);
   // Auto-save guard: only PATCH session data after the user has actually
@@ -680,6 +686,103 @@ function ChatPage() {
     setTimeout(() => attemptSend(), 300);
   }, [message, messages.length, promptParam]);
 
+  // --- Import a GitHub repo handed off from the home screen (?importRepo=) ---
+  // Mirrors GithubButton's "Import existing" flow: provision a fresh sandbox,
+  // clone the repo, npm install, boot the dev server, then adopt the sandbox.
+  useEffect(() => {
+    if (didImportRepoRef.current) return;
+    if (!importRepoParam) return;
+    // Collaborators (share-link visitors) can't provision sandboxes.
+    if (isSharedAccess) return;
+    didImportRepoRef.current = true;
+
+    const repo = importRepoParam;
+    // Strip the param immediately so a refresh doesn't re-clone the repo.
+    router.replace(`/chat/${sessionId}`, { scroll: false });
+
+    // Reveal the preview panel so the "Importing…" state is visible right away.
+    setImportingRepoName(repo);
+    ctx.setShowSecondPanel(true);
+    ctx.setActiveTab("live preview");
+    ctx.setMobileActivePanel("preview");
+    ctx.setIframeLoading(true);
+
+    let cancelled = false;
+    const runImport = async () => {
+      // The import API is owner-gated and 404s without the session row (created
+      // by the init effect above). Wait for it to land before cloning.
+      const deadline = Date.now() + 20_000;
+      while (!sessionExistsRef.current && Date.now() < deadline && !cancelled) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      if (cancelled) return;
+
+      const t = toast.loading(`Importing ${repo} into a fresh sandbox…`);
+      try {
+        const res = await fetch("/api/github/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId, repo }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data?.error || `Import failed (${res.status})`);
+        }
+        if (cancelled) return;
+
+        // Adopt the new sandbox — the next agent run forwards this id via
+        // configurable.sandboxId so resolveSandbox reuses it.
+        ctx.setSandboxId(data.sandboxId);
+        ctx.setSandboxUrl(data.sandboxUrl);
+        ctx.setSandboxCreatedAt(Date.now());
+        ctx.setIsSandboxExpired(false);
+        ctx.setIframeLoading(true);
+        ctx.setGithubRepo(data.repo);
+        ctx.setGithubBranch(data.branch);
+
+        // Name the session after the repo so the sidebar isn't a bare "Chat …".
+        titleSetRef.current = true;
+        fetch(`/api/session/${sessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: repo }),
+        })
+          .then(() => globalThis.dispatchEvent(new CustomEvent("chatUpdated")))
+          .catch(() => {});
+
+        // Populate the file tree from the freshly cloned sandbox.
+        fetch("/api/sync-filesystem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sandboxId: data.sandboxId, sessionId }),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d?.fileTree && !cancelled) ctx.setFileTree(d.fileTree);
+          })
+          .catch(() => {});
+
+        toast.success(
+          data.devReady === "ready"
+            ? `Imported ${data.repo}`
+            : `Imported ${data.repo} — dev server slow to boot`,
+          { id: t, duration: 8_000 },
+        );
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : "Import failed", { id: t });
+        }
+      } finally {
+        if (!cancelled) setImportingRepoName(null);
+      }
+    };
+    void runImport();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importRepoParam]);
+
   // --- Code editor changes are handled inside useCollaboration via yText.observe ---
 
   // --- Sandbox expiration check ---
@@ -848,6 +951,23 @@ function ChatPage() {
 
   // --- Render preview ---
   const renderPreview = () => {
+    if (importingRepoName && !ctx.sandboxUrl) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">
+          <div className="animate-spin rounded-full border-4 border-gray-300 border-t-primary h-16 w-16" />
+          <div className="space-y-1.5 max-w-sm">
+            <p className="text-sm font-medium">
+              Importing <span className="font-mono">{importingRepoName}</span>…
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Cloning the repo into a fresh sandbox, installing dependencies, and
+              starting the dev server. This can take a minute.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     if (isCheckingExpiration) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center gap-4 p-8 text-center">

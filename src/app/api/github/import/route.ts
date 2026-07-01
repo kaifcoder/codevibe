@@ -163,6 +163,8 @@ echo CLONE_OK
         where: { id: body.sessionId },
         data: {
           sandboxId: sandbox.sandboxId,
+          sandboxUrl,
+          sandboxCreatedAt: new Date(),
           githubRepo: repo,
           githubBranch: branch,
         } as never,
