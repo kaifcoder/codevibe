@@ -8,12 +8,18 @@ WORKDIR /app
 # Only the deps Hocuspocus needs at runtime — pulling the full project
 # `package.json` would drag in next, react, prisma, etc., so we install a
 # minimal set explicitly. Pin to the ranges already in package.json.
+#
+# Added when the Yjs server started enforcing auth (see yjs-server.js
+# onAuthenticate): @clerk/backend for JWT verification and pg for the
+# session-ownership lookup against the app DB.
 RUN apk add --no-cache --virtual .build-deps tini \
     && npm init -y >/dev/null \
     && npm pkg set type=module \
     && npm install --omit=dev --no-audit --no-fund \
        @hocuspocus/server@^3.4.3 \
-       yjs@^13.6.27
+       yjs@^13.6.27 \
+       @clerk/backend@^2.33.5 \
+       pg@^8.21.0
 
 COPY yjs-server.js ./yjs-server.js
 
