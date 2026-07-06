@@ -23,6 +23,7 @@
 import { Auth, HTTPException } from '@langchain/langgraph-sdk/auth';
 import { verifyToken } from '@clerk/backend';
 import Redis from 'ioredis';
+import { signIngestRequest } from './ingest-signing';
 
 // ─── Redis (lazy, single connection per process) ────────────────────────────
 
@@ -68,16 +69,21 @@ async function postAbuseSignal(
     process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? null;
   const secret = process.env.INTERNAL_AGENT_SECRET;
   if (!appUrl || !secret) return;
+  const path = '/api/ingest/abuse';
+  const signed = signIngestRequest({
+    secret,
+    method: 'POST',
+    path,
+    userId,
+    body: { userId, kind, message, metadata },
+  });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ABUSE_INGEST_TIMEOUT_MS);
   try {
-    await fetch(`${appUrl}/api/ingest/abuse`, {
+    await fetch(`${appUrl}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify({ userId, kind, message, metadata }),
+      headers: signed.headers,
+      body: signed.body,
       signal: ctrl.signal,
     });
   } catch (err) {

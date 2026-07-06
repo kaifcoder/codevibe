@@ -21,6 +21,16 @@ const WS_URL = process.env.YJS_WS_URL || 'ws://localhost:1234';
 const SYNC_TIMEOUT_MS = 5000;
 const ACK_TIMEOUT_MS = 3000;
 
+// The Yjs server accepts an `internal:<INTERNAL_AGENT_SECRET>` token as a
+// trusted-writer bypass so the agent can push codePatch results into rooms
+// it doesn't own a Clerk JWT for. Falls back to empty string when the
+// secret isn't set — the server will reject unauthed connections, which
+// is the right failure mode for a misconfigured deploy.
+function internalYjsToken(): string {
+  const secret = process.env.INTERNAL_AGENT_SECRET;
+  return secret ? `internal:${secret}` : '';
+}
+
 const roomQueues = new Map<string, Promise<void>>();
 
 export async function writeToYjsRoom(roomId: string, content: string): Promise<void> {
@@ -51,6 +61,7 @@ async function doWrite(roomId: string, content: string): Promise<void> {
     url: WS_URL,
     name: roomId,
     document: doc,
+    token: internalYjsToken(),
   });
 
   try {
@@ -79,6 +90,7 @@ export async function readFromYjsRoom(roomId: string): Promise<string | null> {
     url: WS_URL,
     name: roomId,
     document: doc,
+    token: internalYjsToken(),
   });
 
   try {

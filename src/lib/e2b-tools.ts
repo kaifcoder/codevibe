@@ -15,6 +15,7 @@ import {
 } from './sandbox-registry';
 import { writeToYjsRoom } from './server-yjs-writer';
 import { scanSandboxToTree } from './sandbox-scan';
+import { getMaintenanceStatus } from './maintenance';
 
 async function resolveSandbox(config: LangGraphRunnableConfig): Promise<Sandbox> {
   // De-dupe concurrent provisioning per thread. With the parallel-component
@@ -92,6 +93,16 @@ async function resolveSandboxInner(config: LangGraphRunnableConfig): Promise<San
     throw new Error('Sandbox tools cannot be used in chat mode.');
   }
   const cfg = TEMPLATE_CONFIG[templateType];
+  // Kill-switch: an ops flip of MAINTENANCE_MODE / DISABLE_NEW_SANDBOXES
+  // stops the agent from auto-provisioning fresh sandboxes mid-incident.
+  // Existing sandboxes (returned above from the registry re-attach path)
+  // stay usable — only *new* provisions are blocked here.
+  const gate = getMaintenanceStatus('sandbox');
+  if (gate.blocked) {
+    throw new Error(
+      `Sandbox provisioning is paused (${gate.reason ?? 'maintenance'}). ${gate.message ?? ''}`.trim(),
+    );
+  }
   const sbx = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });
   const host = sbx.getHost(cfg.port);
   const sandboxUrl = `https://${host}`;

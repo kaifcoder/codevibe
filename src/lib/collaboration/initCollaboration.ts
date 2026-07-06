@@ -1,6 +1,6 @@
 /**
  * Initialize Yjs collaboration infrastructure
- * 
+ *
  * Single source of truth for Y.Doc and HocuspocusProvider instances.
  * No Monaco-specific code - just CRDT and WebSocket setup.
  */
@@ -12,11 +12,21 @@ import { HocuspocusProvider } from '@hocuspocus/provider';
 const providers = new Map<string, HocuspocusProvider>();
 const documents = new Map<string, Y.Doc>();
 
+/** How to authenticate this Yjs connection with the server.
+ *  - `clerk`: use the Clerk session JWT (call getToken()). Signed-in owners.
+ *  - `share`: user isn't signed in but has a valid ?token= share link.
+ *    We stuff both sessionId and shareToken into a `share:<sid>:<tok>`
+ *    token, which the server matches against Postgres. */
+export type CollaborationAuth =
+  | { kind: 'clerk'; getToken: () => Promise<string | null> }
+  | { kind: 'share'; sessionId: string; shareToken: string };
+
 export interface CollaborationConfig {
   roomId: string;
   username?: string;
   userId?: string;
   wsUrl?: string;
+  auth?: CollaborationAuth;
 }
 
 export interface CollaborationSession {
@@ -94,7 +104,7 @@ function generateUserColor(): string {
  * Returns: Y.Doc, Y.Text, HocuspocusProvider with awareness
  */
 export function initCollaboration(config: CollaborationConfig): CollaborationSession {
-  const { roomId, username = 'Anonymous', wsUrl } = config;
+  const { roomId, username = 'Anonymous', wsUrl, auth } = config;
   const finalWsUrl = wsUrl || getWebSocketUrl();
   
   console.log('[Collaboration] Initializing room:', roomId);
@@ -148,7 +158,27 @@ export function initCollaboration(config: CollaborationConfig): CollaborationSes
     url: finalWsUrl,
     name: roomId,
     document: ydoc,
-    
+
+    // The Yjs server verifies this token in onAuthenticate. It's either
+    // a Clerk JWT (owner path), a `share:<sid>:<tok>` string (public
+    // session collaborator), or nothing (rejected). We evaluate it lazily
+    // per (re)connect so a Clerk token refresh mid-session is picked up
+    // without tearing down the provider.
+    token: auth
+      ? async () => {
+          if (auth.kind === 'clerk') {
+            try {
+              const t = await auth.getToken();
+              return t ?? '';
+            } catch (err) {
+              console.warn('[Collaboration] getToken() failed:', err);
+              return '';
+            }
+          }
+          return `share:${auth.sessionId}:${auth.shareToken}`;
+        }
+      : undefined,
+
     onConnect: () => {
       console.log(`[Collaboration] ✅ Connected to room: ${roomId}`);
       // Reapply awareness state on connect ONLY if it's missing — otherwise

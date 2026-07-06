@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/server/db";
+import { verifyIngestRequest } from "@/lib/ingest-signing";
 import { checkInternalAuth } from "@/lib/internal-auth";
 import { checkCostSpike, checkTokenSpike } from "@/lib/alerts";
 
 // Internal-only ingest endpoint. The Render-deployed agent posts one row
 // per LLM call here so we can track per-user spend, build quotas, and
-// detect cost anomalies. Authenticated via shared INTERNAL_AGENT_SECRET —
-// see src/lib/internal-auth.ts.
+// detect cost anomalies.
+//
+// Auth: HMAC-signed envelope + shared secret (see src/lib/ingest-signing.ts).
+// The signed X-Cv-User header is bound to the request signature — we trust
+// THAT over any userId in the body. The `userId` in the payload schema is
+// kept for backwards compatibility, but we assert it matches the signed
+// header before writing, so a caller with a leaked secret can no longer
+// attribute another user's spend by lying in the body.
 
 const UsagePayload = z.object({
   userId: z.string().min(1).max(128),
@@ -22,14 +29,38 @@ const UsagePayload = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = checkInternalAuth(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  // Bearer-token gate stays as a first line of defense — same header as
+  // before. Legacy callers without the signature headers would fail below.
+  const legacyAuth = checkInternalAuth(req);
+  if (!legacyAuth.ok) {
+    return NextResponse.json({ error: legacyAuth.error }, { status: legacyAuth.status });
+  }
+
+  const secret = process.env.INTERNAL_AGENT_SECRET;
+  if (!secret) {
+    return NextResponse.json({ error: "Ingest signing not configured" }, { status: 500 });
+  }
+
+  // Read raw body ONCE — the signature was computed over these exact bytes.
+  // Re-serializing after JSON.parse would produce different bytes and break
+  // verification. Parse the same string separately for schema validation.
+  const rawBody = await req.text();
+
+  const url = new URL(req.url);
+  const verify = verifyIngestRequest({
+    secret,
+    method: req.method,
+    path: url.pathname,
+    headers: req.headers,
+    rawBody,
+  });
+  if (!verify.ok) {
+    return NextResponse.json({ error: verify.error }, { status: verify.status });
   }
 
   let body: unknown;
   try {
-    body = await req.json();
+    body = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -43,10 +74,24 @@ export async function POST(req: NextRequest) {
   }
   const data = parsed.data;
 
+  // Cross-check: reject payloads whose body userId disagrees with the
+  // signed header userId. A well-behaved sender always sends the two
+  // matching; a spoofer with a leaked secret would have to break HMAC
+  // to reach this branch.
+  if (data.userId !== verify.userId) {
+    return NextResponse.json(
+      { error: "Signed userId does not match body userId" },
+      { status: 401 },
+    );
+  }
+
   try {
     await prisma.usage.create({
       data: {
-        userId: data.userId,
+        // Use the *verified* userId in case the check above is ever
+        // loosened — keeps the invariant "Usage rows are authenticated"
+        // local to this write, not spread across the request lifecycle.
+        userId: verify.userId,
         threadId: data.threadId,
         sessionId: data.sessionId ?? null,
         modelId: data.modelId ?? null,
@@ -65,10 +110,10 @@ export async function POST(req: NextRequest) {
   // Fire-and-forget anomaly checks — never block the agent on these. Each
   // check writes its own AbuseEvent + Slack alert (with cooldown) when it
   // trips its threshold; failures are swallowed and logged.
-  void checkCostSpike(data.userId).catch((e) =>
+  void checkCostSpike(verify.userId).catch((e) =>
     console.error("[ingest/usage] cost spike check failed:", e),
   );
-  void checkTokenSpike(data.userId, data.threadId).catch((e) =>
+  void checkTokenSpike(verify.userId, data.threadId).catch((e) =>
     console.error("[ingest/usage] token spike check failed:", e),
   );
 

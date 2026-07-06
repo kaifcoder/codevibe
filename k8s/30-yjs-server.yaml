@@ -64,6 +64,17 @@ spec:
               value: "1234"
             - name: NODE_ENV
               value: production
+          # Ownership lookups + Clerk JWT verification need these — see
+          # yjs-server.js. DATABASE_URL is the same Prisma app DB the Next.js
+          # app uses (short SELECT-only queries, pooler-friendly).
+          # CLERK_SECRET_KEY verifies session JWTs.
+          # INTERNAL_AGENT_SECRET is the trusted-writer bypass used by the
+          # agent's server-side Yjs writer.
+          envFrom:
+            - secretRef:
+                name: codevibe-app-secrets
+            - secretRef:
+                name: codevibe-app-database
           # Hocuspocus speaks plain WS — no /health endpoint, so probe TCP.
           readinessProbe:
             tcpSocket:

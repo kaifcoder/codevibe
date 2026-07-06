@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createMiddleware } from 'langchain';
+import { signIngestRequest } from './ingest-signing';
 
 // ─── Pricing ────────────────────────────────────────────────────────────────
 //
@@ -19,13 +20,6 @@ interface PricePerMillion {
 const PRICING: Record<string, PricePerMillion> = {
   // Kimi K2.5 on Bedrock (rough — verify on the AWS pricing page).
   'moonshotai.kimi-k2.5': { input: 0.25, output: 2.25 },
-  // Anthropic on Bedrock — for if/when the AWS Marketplace subscription clears.
-  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': {
-    input: 3.0,
-    output: 15.0,
-    cacheRead: 0.3,
-    cacheCreate: 3.75,
-  },
   // Nova families — for fallback testing.
   'global.amazon.nova-2-lite-v1:0': { input: 0.06, output: 0.24 },
 };
@@ -109,16 +103,21 @@ async function postUsageIngest(payload: UsageIngestPayload): Promise<void> {
     // above is still grep-able, so we lose nothing critical.
     return;
   }
+  const path = '/api/ingest/usage';
+  const signed = signIngestRequest({
+    secret,
+    method: 'POST',
+    path,
+    userId: payload.userId,
+    body: payload,
+  });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), INGEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${appUrl}/api/ingest/usage`, {
+    const res = await fetch(`${appUrl}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify(payload),
+      headers: signed.headers,
+      body: signed.body,
       signal: ctrl.signal,
     });
     if (!res.ok) {

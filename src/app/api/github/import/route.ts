@@ -4,6 +4,7 @@ import { Sandbox } from '@e2b/code-interpreter';
 import { prisma } from "@/server/db";
 import { TEMPLATE_CONFIG, resolveTemplateType } from '@/lib/sandbox-registry';
 import { runSandboxScript } from '@/lib/sandbox-utils';
+import { checkMaintenanceMode } from '@/lib/maintenance';
 
 
 const REPO_PATH = '/home/user';
@@ -266,6 +267,11 @@ exit 0
 
 export async function POST(request: NextRequest) {
   try {
+    // Kill-switch parity with /api/rewarm-sandbox: same env flags block
+    // this route because it also provisions a fresh E2B sandbox.
+    const maintenance = checkMaintenanceMode('sandbox');
+    if (maintenance) return maintenance;
+
     const body = (await request.json()) as ImportBody;
     if (!body?.sessionId || !body?.repo) {
       return NextResponse.json({ error: 'sessionId and repo required' }, { status: 400 });

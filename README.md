@@ -9,7 +9,7 @@ An open-source AI-powered collaborative code editor that turns natural language 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://typescriptlang.org)
-[![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-orange?logo=anthropic)](https://anthropic.com)
+[![Kimi K2.5](https://img.shields.io/badge/Kimi_K2.5-on_Bedrock-8A2BE2?logo=amazonaws)](https://aws.amazon.com/bedrock/)
 
 **[Live Demo →](https://codevibe.mohdkaif.me)**
 
@@ -64,7 +64,7 @@ graph TB
     end
 
     UI -->|useStream| Agent
-    Agent -->|Claude Sonnet 4| Sandbox
+    Agent -->|Kimi K2.5| Sandbox
     Agent -->|codePatch events| Monaco
     Agent -->|fileTreeSync| UI
     Monaco <-->|y-monaco binding| Yjs
@@ -83,7 +83,7 @@ sequenceDiagram
     participant U as User
     participant F as Frontend
     participant A as LangGraph Agent
-    participant C as Claude Sonnet 4.5
+    participant C as Kimi K2.5
     participant S as E2B Sandbox
     participant Y as Yjs Server
 
@@ -147,7 +147,7 @@ graph LR
 
 | Feature | Description |
 |---------|-------------|
-| **AI Code Generation** | Claude Sonnet 4.5 with extended thinking builds full Next.js apps from prompts |
+| **AI Code Generation** | Kimi K2.5 on AWS Bedrock builds full Next.js apps from prompts |
 | **Dual Templates** | Pick between Next.js web apps or n8n workflow automations — agent classifies and asks for approval |
 | **Live Preview** | Sandboxed app running in E2B with hot reload as code is written |
 | **Real-Time Collab** | Yjs CRDTs + Hocuspocus — cursor presence, conflict-free merging |
@@ -180,7 +180,7 @@ graph LR
     end
 
     subgraph AI
-        K[LangGraph] --> L[Claude Sonnet 4.5]
+        K[LangGraph] --> L[Kimi K2.5]
         K --> M[MCP Tools]
         K --> N[E2B Sandbox]
     end
@@ -203,7 +203,7 @@ graph LR
 
 - Node.js 21+
 - PostgreSQL
-- API keys: `E2B_API_KEY`, `CLERK_SECRET_KEY`, Anthropic (via LangGraph)
+- API keys: `E2B_API_KEY`, `CLERK_SECRET_KEY`, AWS credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`) for Bedrock
 
 ### Setup
 

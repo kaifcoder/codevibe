@@ -205,10 +205,10 @@ function deriveChatMessages(
       currentAiTurn.lastIndex = i;
 
       // Per-message ordered emission: reasoning → text → tools. This
-      // matches Anthropic's canonical block order within a single turn,
-      // and across multi-turn agent runs it produces a properly
-      // interleaved sequence (commentary BEFORE the tool calls it
-      // describes, not all bunched at the end).
+      // matches the canonical block order within a single AI turn, and
+      // across multi-turn agent runs it produces a properly interleaved
+      // sequence (commentary BEFORE the tool calls it describes, not all
+      // bunched at the end).
       if (typeof msg.content === "string") {
         if (msg.content) {
           currentAiTurn.content += (currentAiTurn.content ? "\n\n" : "") + msg.content;

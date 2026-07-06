@@ -74,7 +74,7 @@ redis:
 
 # --- Env passed into the langgraph-api pods ----------------------------
 # `config.envFrom` mounts our Kubernetes Secret (10-secrets.example.yaml)
-# so the agent picks up ANTHROPIC_API_KEY, E2B_API_KEY, the optional
+# so the agent picks up AWS_* creds for Bedrock, E2B_API_KEY, the optional
 # LangSmith keys, and DATABASE_URL (Prisma's app DB — used by the agent's
 # direct DB writes in tools, *not* the langgraph checkpointer DB).
 config:

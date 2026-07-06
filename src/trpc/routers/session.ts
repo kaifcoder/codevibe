@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, protectedProcedure } from "../init";
+import { getMaintenanceStatus } from "@/lib/maintenance";
 
 // Per-user cap on chats. Bumped deliberately low during the public demo — a
-// single user spinning up N sandboxes burns E2B + Anthropic credits fast, and
+// single user spinning up N sandboxes burns E2B + model credits fast, and
 // there's no billing plumbing yet. Raise this once quotas are metered.
 export const MAX_SESSIONS_PER_USER = 3;
 
@@ -34,6 +35,17 @@ export const sessionRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Kill-switch: block chat creation while ops has provisioning off.
+      // Every new chat leads to a sandbox provision within seconds, so the
+      // right place to back-pressure is here.
+      const gate = getMaintenanceStatus('sandbox');
+      if (gate.blocked) {
+        throw new TRPCError({
+          code: "SERVICE_UNAVAILABLE",
+          message: gate.message ?? "CodeVibe is temporarily paused. Try again shortly.",
+        });
+      }
+
       // Enforce the per-user chat quota. Counted under the covered
       // @@index([userId]) — cheap. Race note: two concurrent creates can
       // both pass this check and land at limit+1; that's acceptable slack

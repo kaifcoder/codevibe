@@ -5,6 +5,17 @@ import { prisma } from "@/server/db";
 import { TEMPLATE_CONFIG, resolveTemplateType } from '@/lib/sandbox-registry';
 import { readFromYjsRoom } from '@/lib/server-yjs-writer';
 import { runSandboxScript } from '@/lib/sandbox-utils';
+import { checkMaintenanceMode } from '@/lib/maintenance';
+
+// Per-session rewarm cap. Every successful rewarm burns a fresh 25-minute
+// E2B sandbox and the seed/install cost — hard-cap at 3 so a signed-in user
+// (or a share-link holder) can't loop this endpoint to hold N sandboxes
+// alive indefinitely. Same override knob shape as MAX_SESSIONS_PER_USER.
+const MAX_REWARMS_PER_SESSION = Number(process.env.MAX_REWARMS_PER_SESSION ?? '3');
+// Minimum gap between rewarm attempts on the same session. Cheap thundering-
+// herd guard so a double-click or a retry loop can't burn two sandbox
+// provisions back-to-back.
+const REWARM_COOLDOWN_MS = Number(process.env.REWARM_COOLDOWN_MS ?? '20000');
 
 
 interface StoredFileNode {
@@ -217,6 +228,12 @@ echo "INSTALL_EXIT=$?"
 
 export async function POST(request: NextRequest) {
   try {
+    // Kill-switch: allow ops to shut off all sandbox provisioning in a
+    // hurry via env var, without a redeploy. Do this before any DB reads
+    // so an incident can back-pressure at the edge.
+    const maintenance = checkMaintenanceMode('sandbox');
+    if (maintenance) return maintenance;
+
     const { sessionId, shareToken }: { sessionId?: string; shareToken?: string } =
       await request.json();
 
@@ -232,6 +249,8 @@ export async function POST(request: NextRequest) {
         shareToken: true,
         templateType: true,
         fileTree: true,
+        rewarmCount: true,
+        lastRewarmAt: true,
       },
     });
     if (!session) {
@@ -250,11 +269,80 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
+    // Per-session rewarm cap. Enforced *before* provisioning so an at-cap
+    // client just gets a 429 instead of burning another sandbox. The cap
+    // is deliberately session-scoped rather than user-scoped: a user with
+    // three chats gets 3 × MAX_REWARMS_PER_SESSION rewarms total, which
+    // composes cleanly with the per-user chat quota.
+    if (session.rewarmCount >= MAX_REWARMS_PER_SESSION) {
+      return NextResponse.json(
+        {
+          error: 'rewarm_limit_reached',
+          message: `This chat has been rewarmed ${session.rewarmCount} times (max ${MAX_REWARMS_PER_SESSION}). Start a new chat to continue.`,
+          rewarmCount: session.rewarmCount,
+          rewarmLimit: MAX_REWARMS_PER_SESSION,
+        },
+        { status: 429 },
+      );
+    }
+
+    // Cooldown: reject requests that arrive faster than one per
+    // REWARM_COOLDOWN_MS window. Cheap way to swat double-clicks and
+    // client retry loops without needing Redis-backed rate limiting on
+    // the Next.js side.
+    if (session.lastRewarmAt) {
+      const elapsed = Date.now() - session.lastRewarmAt.getTime();
+      if (elapsed < REWARM_COOLDOWN_MS) {
+        const retryAfter = Math.ceil((REWARM_COOLDOWN_MS - elapsed) / 1000);
+        return NextResponse.json(
+          {
+            error: 'rewarm_cooldown',
+            message: `Rewarm cooldown active. Try again in ${retryAfter}s.`,
+            retryAfterSec: retryAfter,
+          },
+          { status: 429, headers: { 'Retry-After': String(retryAfter) } },
+        );
+      }
+    }
+
     const templateType = resolveTemplateType(session.templateType);
     if (templateType === 'chat') {
       return NextResponse.json({ error: 'Chat mode has no sandbox to rewarm.' }, { status: 400 });
     }
     const cfg = TEMPLATE_CONFIG[templateType];
+
+    // Atomically reserve a rewarm slot before we spend money on
+    // Sandbox.create. Uses a conditional update keyed on the previously-
+    // observed rewarmCount so a concurrent second call will find the row
+    // has moved on and treat it as "someone else grabbed the slot" —
+    // race-safer than the pre-provision read alone.
+    const reservation = await prisma.session.updateMany({
+      where: {
+        id: sessionId,
+        rewarmCount: { lt: MAX_REWARMS_PER_SESSION },
+        OR: [
+          { lastRewarmAt: null },
+          { lastRewarmAt: { lt: new Date(Date.now() - REWARM_COOLDOWN_MS) } },
+        ],
+      },
+      data: {
+        rewarmCount: { increment: 1 },
+        lastRewarmAt: new Date(),
+      },
+    });
+    if (reservation.count === 0) {
+      // Lost the race with a concurrent rewarm — one of the two guards
+      // (cap or cooldown) tripped between the read above and this write.
+      // Return 429 so the client backs off; the winner's response will
+      // provision the sandbox they both wanted.
+      return NextResponse.json(
+        {
+          error: 'rewarm_race',
+          message: 'Another rewarm is already in flight for this chat. Try again in a moment.',
+        },
+        { status: 429, headers: { 'Retry-After': '5' } },
+      );
+    }
 
     // Provision a fresh sandbox of the same template the session was using.
     // 25-minute TTL matches the agent's auto-create path.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { useChat } from "@/contexts/chat-context";
 import type { CollaborationSession } from "@/lib/collaboration";
 import type * as Y from "yjs";
@@ -28,6 +29,14 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
     shareToken,
     getFileContent,
   } = useChat();
+
+  // Clerk token accessor — the Yjs server verifies this JWT to decide
+  // whether the connecting client owns the room's session. Signed-out
+  // share-link visitors don't have a JWT; they fall through to the
+  // share-token auth path below.
+  const { getToken, isSignedIn } = useAuth();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
 
   // Stable refs for the E2B-sync side effect — we don't want to rebind the
   // observer just because these change.
@@ -72,7 +81,34 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       const { initCollaboration } = await import("@/lib/collaboration");
       if (cancelled) return;
 
-      const session = initCollaboration({ roomId, username: displayName ?? "Anonymous" });
+      // Pick the Yjs auth mode based on Clerk state: signed-in users
+      // present their JWT (server verifies + checks ownership); signed-out
+      // visitors on a shared link fall back to the shareToken flow. If
+      // neither applies, we don't even try to connect — the server would
+      // just reject.
+      const yjsAuth = isSignedIn
+        ? ({
+            kind: "clerk" as const,
+            getToken: async () => (await getTokenRef.current?.()) ?? null,
+          })
+        : shareTokenRef.current
+        ? ({
+            kind: "share" as const,
+            sessionId,
+            shareToken: shareTokenRef.current,
+          })
+        : undefined;
+
+      if (!yjsAuth) {
+        console.warn("[useCollaboration] No auth available — skipping Yjs connect for", roomId);
+        return;
+      }
+
+      const session = initCollaboration({
+        roomId,
+        username: displayName ?? "Anonymous",
+        auth: yjsAuth,
+      });
       if (cancelled) {
         session.disconnect();
         return;
@@ -265,7 +301,7 @@ export function useCollaboration(sessionId: string, selectedFile: string): UseCo
       setConnectionStatus("disconnected");
       setConnectedUsers([]);
     };
-  }, [sessionId, selectedFile, displayName, setConnectionStatus, setConnectedUsers]);
+  }, [sessionId, selectedFile, displayName, isSignedIn, setConnectionStatus, setConnectedUsers]);
 
   return { yText, provider };
 }

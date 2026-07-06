@@ -15,6 +15,12 @@ interface RewarmResponse {
   seeded?: { totalFiles: number; written: number; skipped: number };
   devReady?: "ready" | "timeout" | "fail" | "skipped";
   error?: string;
+  // Populated on quota / cooldown / maintenance responses so we can show
+  // a friendlier message than "Restore failed (429)".
+  message?: string;
+  rewarmCount?: number;
+  rewarmLimit?: number;
+  retryAfterSec?: number;
 }
 
 export function SandboxExpiredPanel() {
@@ -40,7 +46,9 @@ export function SandboxExpiredPanel() {
       });
       const data: RewarmResponse = await res.json();
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || `Restore failed (${res.status})`);
+        // Prefer the server's `message` over `error` — quota, cooldown,
+        // and maintenance responses all set a human-readable message.
+        throw new Error(data.message || data.error || `Restore failed (${res.status})`);
       }
 
       // Adopt the new sandbox: clear expiry, restart the 25-min timer, and

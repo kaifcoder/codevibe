@@ -33,11 +33,10 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 // ─── Model ───────────────────────────────────────────────────────────────────
 
 // Kimi K2.5 (Moonshot) via AWS Bedrock. Strong tool-use training makes it the
-// best price/quality point on Bedrock for codevibe's agent workload — ~6×
-// cheaper than Claude Sonnet 4.5 with quality that's close enough for the
-// launch phase. Indian payment-instrument restrictions on AWS Marketplace
-// don't affect Moonshot models, so this works on the existing $179 of credits
-// where Anthropic models don't.
+// best price/quality point on Bedrock for codevibe's agent workload — cheap
+// input/output rates plus quality that's close enough for the launch phase.
+// Indian payment-instrument restrictions on AWS Marketplace don't affect
+// Moonshot models, so this works on the existing $179 of AWS credits.
 //
 // Cost-tuned defaults:
 //   - maxTokens: 4000 — typical agent turns generate 200–2000 output tokens.

@@ -24,6 +24,12 @@ model Session {
   githubRepo       String?   // "owner/name"
   githubBranch     String?   // default branch we commit to (usually "main")
   userId           String?   // Clerk user ID
+  // Per-session rewarm accounting. Every /api/rewarm-sandbox POST that
+  // actually provisions increments rewarmCount; requests past a cap are
+  // 429'd. lastRewarmAt drives a short cooldown so a client can't burst
+  // the counter to the cap in one script.
+  rewarmCount      Int       @default(0)
+  lastRewarmAt     DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
