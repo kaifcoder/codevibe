@@ -69,13 +69,27 @@ async function loadSession(sessionId) {
 }
 
 // Parse a Yjs room name into (sessionId, subKey). Rooms are
-// "${sessionId}-${filePath}" or "${sessionId}-__session". sessionId is a
-// UUID (cuid or crypto.randomUUID). We split on the FIRST hyphen after a
-// plausible sessionId — greedy split fails on file paths that contain
-// hyphens.
+// "${sessionId}-${filePath}" or "${sessionId}-__session".
+//
+// sessionId is either:
+//   - a UUIDv4 (36 chars, hyphens at 8/13/18/23) — crypto.randomUUID()
+//   - a cuid (25+ chars, no hyphens) — legacy Prisma @default(cuid())
+//
+// Because UUIDs contain hyphens, a naive split on the first hyphen gives
+// only the leading 8-char chunk. We match a UUID prefix explicitly, then
+// fall back to "prefix before the first hyphen" for cuid-shaped ids.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
 function parseRoom(name) {
-  // Accept anything up to the first '-' that follows a 20+ char prefix
-  // (UUIDs are 36 chars; cuids are 25+). Below that we bail out.
+  const uuidMatch = name.match(UUID_RE);
+  if (uuidMatch) {
+    const sessionId = uuidMatch[0];
+    // room shape is `${sessionId}-${subKey}`; the char after the match must
+    // be the separating hyphen for it to be a valid room name.
+    if (name[sessionId.length] !== '-') return { sessionId: null, subKey: null };
+    return { sessionId, subKey: name.slice(sessionId.length + 1) };
+  }
+  // cuid path: no hyphens in the id itself, so split on the first hyphen.
   const idx = name.indexOf('-');
   if (idx < 20) return { sessionId: null, subKey: null };
   return { sessionId: name.slice(0, idx), subKey: name.slice(idx + 1) };
@@ -132,6 +146,7 @@ const server = new Server({
 
   async onAuthenticate({ documentName, token }) {
     if (!token) {
+      console.warn(`[Hocuspocus] auth denied: missing_token (doc=${documentName})`);
       throw new Error('missing_token');
     }
 
@@ -144,6 +159,7 @@ const server = new Server({
 
     const { sessionId } = parseRoom(documentName);
     if (!sessionId) {
+      console.warn(`[Hocuspocus] auth denied: bad_room_name (doc=${documentName})`);
       throw new Error('bad_room_name');
     }
 
@@ -152,11 +168,23 @@ const server = new Server({
     //    against Postgres AND requires isPublic.
     if (token.startsWith('share:')) {
       const [, tokSessionId, tokShareToken] = token.split(':');
-      if (tokSessionId !== sessionId) throw new Error('room_session_mismatch');
+      if (tokSessionId !== sessionId) {
+        console.warn(`[Hocuspocus] auth denied: room_session_mismatch (doc=${documentName})`);
+        throw new Error('room_session_mismatch');
+      }
       const session = await loadSession(sessionId);
-      if (!session) throw new Error('session_not_found');
-      if (!session.isPublic) throw new Error('session_private');
-      if (session.shareToken !== tokShareToken) throw new Error('bad_share_token');
+      if (!session) {
+        console.warn(`[Hocuspocus] auth denied: session_not_found (sessionId=${sessionId})`);
+        throw new Error('session_not_found');
+      }
+      if (!session.isPublic) {
+        console.warn(`[Hocuspocus] auth denied: session_private (sessionId=${sessionId})`);
+        throw new Error('session_private');
+      }
+      if (session.shareToken !== tokShareToken) {
+        console.warn(`[Hocuspocus] auth denied: bad_share_token (sessionId=${sessionId})`);
+        throw new Error('bad_share_token');
+      }
       return { user: { id: `share:${tokShareToken.slice(0, 8)}`, name: 'Collaborator' } };
     }
 
@@ -167,13 +195,18 @@ const server = new Server({
     try {
       userId = await verifyClerkJwt(token);
     } catch (err) {
+      console.warn(`[Hocuspocus] auth denied: bad_jwt (doc=${documentName}) ${err.message}`);
       throw new Error(`bad_jwt: ${err.message}`);
     }
     const session = await loadSession(sessionId);
-    if (!session) throw new Error('session_not_found');
+    if (!session) {
+      console.warn(`[Hocuspocus] auth denied: session_not_found (sessionId=${sessionId} userId=${userId})`);
+      throw new Error('session_not_found');
+    }
     if (session.userId !== userId) {
       // Not the owner — fall back to public + share-token would have been
       // caught above. Deny.
+      console.warn(`[Hocuspocus] auth denied: not_session_owner (sessionId=${sessionId} userId=${userId} ownerId=${session.userId})`);
       throw new Error('not_session_owner');
     }
     return { user: { id: userId, name: 'Owner' } };
