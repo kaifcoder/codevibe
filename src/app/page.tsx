@@ -20,6 +20,9 @@ import { useAgentReady } from "@/hooks/use-agent-ready"
 import { BackendWarmingBanner } from "@/components/BackendWarmingBanner"
 import LandingSections from "@/components/landing/LandingSections"
 import { ImportGithubDialog } from "@/components/ImportGithubDialog"
+import { useTRPC } from "@/trpc/client"
+import { useQuery } from "@tanstack/react-query"
+import { toast } from "sonner"
 
 
 
@@ -31,6 +34,16 @@ export default function HomePage() {
   const { openSignIn } = useClerk()
 
   const router = useRouter()
+
+  // Preflight the per-user chat quota so we can block the "start" button and
+  // toast the user before we navigate them into a chat page that would fail
+  // on createSession anyway.
+  const trpc = useTRPC()
+  const quotaQuery = useQuery({
+    ...trpc.session.getQuota.queryOptions(),
+    enabled: !!isSignedIn,
+  })
+  const atQuota = !!quotaQuery.data && quotaQuery.data.remaining <= 0
 
   // Persist the in-flight prompt across the Clerk sign-up flow. Email
   // verification can redirect away and back, which wipes useState. We stash
@@ -67,6 +80,14 @@ export default function HomePage() {
         sessionStorage.removeItem(PENDING_PROMPT_KEY)
         sessionStorage.removeItem(PENDING_FLAG_KEY)
       } catch {}
+      // Quota may be loading right after sign-in; if we already know the
+      // user is at cap, refill the textarea instead of navigating into a
+      // chat page that'll bounce them right back.
+      if (atQuota) {
+        setPrompt(pending)
+        toast.error(`You've reached the ${quotaQuery.data?.limit ?? 3}-chat limit. Delete an existing chat to start a new one.`)
+        return
+      }
       const chatId = crypto.randomUUID()
       router.replace(`/chat/${chatId}?prompt=${encodeURIComponent(pending)}`)
       return
@@ -131,6 +152,10 @@ export default function HomePage() {
   const handleStartChat = () => {
     if (!prompt.trim()) return
     if (!isSignedIn) return // Don't proceed if not signed in
+    if (atQuota) {
+      toast.error(`You've reached the ${quotaQuery.data?.limit ?? 3}-chat limit. Delete an existing chat to start a new one.`)
+      return
+    }
 
     const chatId = generateChatId()
 
@@ -336,7 +361,8 @@ export default function HomePage() {
                     <Button
                       type="submit"
                       size="icon"
-                      disabled={!prompt.trim()}
+                      disabled={!prompt.trim() || atQuota}
+                      title={atQuota ? `Chat limit reached (${quotaQuery.data?.used}/${quotaQuery.data?.limit})` : undefined}
                       className="h-11 w-11 rounded-xl shrink-0 bg-linear-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:shadow-none transition-all"
                     >
                       <ArrowRight className="w-5 h-5" />
@@ -347,6 +373,13 @@ export default function HomePage() {
               <p className="text-xs text-muted-foreground mt-3 text-center">
                 Press <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> to send · <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Shift</kbd> + <kbd className="px-1.5 py-0.5 bg-muted border border-border rounded text-[10px] font-mono">Enter</kbd> for new line
               </p>
+              {isSignedIn && quotaQuery.data && (
+                <p className={`text-xs mt-1 text-center ${atQuota ? "text-destructive" : "text-muted-foreground"}`}>
+                  {atQuota
+                    ? `Chat limit reached (${quotaQuery.data.used}/${quotaQuery.data.limit}) — delete an existing chat to start a new one.`
+                    : `${quotaQuery.data.used}/${quotaQuery.data.limit} chats used`}
+                </p>
+              )}
             </motion.div>
 
             {/* Import an existing project from GitHub */}

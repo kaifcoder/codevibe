@@ -518,6 +518,14 @@ function ChatPage() {
       },
       onError: (error) => {
         console.error("[DB] Failed to create session:", error);
+        // Quota trips are terminal — don't retry, boot the user home with a
+        // toast so they can delete a chat and try again.
+        const msg = error?.message ?? "";
+        if (msg.startsWith("QUOTA_EXCEEDED")) {
+          toast.error(msg.replace(/^QUOTA_EXCEEDED:\s*/, ""));
+          router.replace("/");
+          return;
+        }
         setTimeout(() => {
           createDbSessionRef.current.mutate({ id: sessionId, title: `Chat ${new Date().toLocaleString()}` });
         }, 2000);
