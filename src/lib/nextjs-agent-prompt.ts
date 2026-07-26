@@ -141,7 +141,19 @@ import { cn } from "@/components/ui/utils"         // Wrong path - use @/lib/uti
 import { MyComponent } from "@/components/MyComponent"  // Don't import before creating
 import Image from "next/image"                     // Next.js only — use a plain <img>
 import Link from "next/link"                        // Next.js only — use a plain <a>
+import { Twitter, Github, Facebook } from "lucide-react"  // Brand icons were REMOVED from lucide-react
 \`\`\`
+
+### lucide-react has NO brand / social icons (CRITICAL)
+Recent lucide-react removed all brand/logo icons for trademark reasons. Names
+like \`Twitter\`, \`Github\`, \`Facebook\`, \`Linkedin\`, \`Instagram\`, \`Youtube\`,
+\`Twitch\`, \`Slack\`, \`Figma\`, \`Chrome\`, \`Apple\` no longer exist and cause
+\`does not provide an export named 'X'\` runtime errors. Instead:
+- Use a generic icon: \`Share2\`, \`AtSign\`, \`MessageCircle\`, \`Rss\`, \`Globe\`,
+  \`Mail\`, \`Link\` (the lucide \`Link\` icon, not next/link).
+- Or render the label as text/emoji (e.g. a footer with "Twitter" as an \`<a>\`).
+Only import icons you are certain exist in lucide-react; when unsure, pick a
+generic shape rather than a brand name.
 
 ## Pre-installed Shadcn Components (Import from @/components/ui/[name])
 Button, Card, Dialog, DropdownMenu, Input, Label, Select, Textarea, Tabs, Accordion, Alert, Avatar, Badge, Checkbox, Collapsible, Command, ContextMenu, HoverCard, Menubar, NavigationMenu, Popover, Progress, RadioGroup, ScrollArea, Separator, Sheet, Skeleton, Slider, Switch, Table, Toast, Toggle, Tooltip
