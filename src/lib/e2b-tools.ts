@@ -103,7 +103,7 @@ async function resolveSandboxInner(config: LangGraphRunnableConfig): Promise<San
       `Sandbox provisioning is paused (${gate.reason ?? 'maintenance'}). ${gate.message ?? ''}`.trim(),
     );
   }
-  const sbx = await Sandbox.create(cfg.alias, { timeoutMs: 25 * 60 * 1000 });
+  const sbx = await Sandbox.create(cfg.alias, { timeoutMs: 18 * 60 * 1000 });
   const host = sbx.getHost(cfg.port);
   const sandboxUrl = `https://${host}`;
   registerSandbox(threadId, sbx.sandboxId, sandboxUrl, templateType);
@@ -162,18 +162,18 @@ function matchBlockedCommand(raw: string): string | null {
     if (/^(?:npm|pnpm|yarn|bun)\s+run\s+build\b/.test(seg)) {
       return 'never run `npm run build` (or pnpm/yarn/bun equivalent)';
     }
-    if (/^(?:npx\s+)?next\s+build\b/.test(seg)) {
-      return 'never run `next build`';
+    if (/^(?:npx\s+)?vite\s+build\b/.test(seg)) {
+      return 'never run `vite build`';
     }
     if (/^(?:npx\s+)?tsc(?:\s|$)/.test(seg)) {
-      return 'never run `tsc` — the dev server already type-checks via Next.js compiler';
+      return 'never run `tsc` — the dev server already type-checks via the Vite bundler';
     }
     // Starting another dev / start server — the existing one is on port 3000.
-    if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start)\b/.test(seg)) {
-      return 'never run `npm run dev` / `npm run start` — the dev server is already running on port 3000. If the preview is stuck, use the e2b_restart_dev_server tool instead';
+    if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|preview)\b/.test(seg)) {
+      return 'never run `npm run dev` / `npm run preview` — the dev server is already running on port 3000. If the preview is stuck, use the e2b_restart_dev_server tool instead';
     }
-    if (/^(?:npx\s+)?next\s+(?:dev|start)\b/.test(seg)) {
-      return 'never run `next dev` / `next start` — already running on port 3000. If the preview is stuck, use the e2b_restart_dev_server tool instead';
+    if (/^(?:npx\s+)?vite\b/.test(seg)) {
+      return 'never run `vite` / `vite preview` — already running on port 3000. If the preview is stuck, use the e2b_restart_dev_server tool instead';
     }
     // curl/wget against the running dev server: races hot-reload and
     // hangs the dev server when many fire in parallel from a single turn.
@@ -193,7 +193,7 @@ function matchBlockedCommand(raw: string): string | null {
 const runCommand = tool(
   async ({ command }: { command: string }, config: LangGraphRunnableConfig) => {
     // Hard-block commands that always waste time / break the running dev
-    // server. The dev server (next dev, port 3000) is already running and
+    // server. The dev server (vite, port 3000) is already running and
     // hot-reloads on every e2b_write_file; running build / tsc / install
     // here only burns the recursion budget without surfacing anything new.
     // See RULE 0 in nextjs-agent-prompt.ts.
