@@ -17,6 +17,28 @@ import { writeToYjsRoom } from './server-yjs-writer';
 import { scanSandboxToTree } from './sandbox-scan';
 import { getMaintenanceStatus } from './maintenance';
 
+// Serialize filesystem writes per sandbox. The parallel-component workflow
+// fires many e2b_write_file / e2b_patch_file tool calls in a single assistant
+// turn; the LangGraph runtime runs them concurrently, so 8+ sbx.files.write
+// round-trips hit the same microVM at once. Combined with Vite's polling file
+// watcher re-triggering HMR on every change, the concurrent load spikes CPU
+// and the dev server (and the whole sandbox) hangs. Chaining the actual
+// sandbox writes so at most one is in flight per sandbox removes the
+// contention while the Yjs mirror and frontend events still run in parallel.
+const sandboxWriteChains = new Map<string, Promise<unknown>>();
+
+function enqueueSandboxWrite<T>(sandboxId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = sandboxWriteChains.get(sandboxId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // run fn regardless of a prior write's outcome
+  // Track the tail so writes queue behind each other; drop it once drained to
+  // keep the map from growing without bound across a long session.
+  sandboxWriteChains.set(sandboxId, next);
+  void next.catch(() => {}).finally(() => {
+    if (sandboxWriteChains.get(sandboxId) === next) sandboxWriteChains.delete(sandboxId);
+  });
+  return next;
+}
+
 async function resolveSandbox(config: LangGraphRunnableConfig): Promise<Sandbox> {
   // De-dupe concurrent provisioning per thread. With the parallel-component
   // workflow (multiple e2b_write_file tool calls in one assistant turn), N
@@ -292,7 +314,7 @@ const writeFile = tool(
     //   - Monaco never races a click against an empty Yjs doc
     //   - the next tool call sees the file on disk
     const sessionId = config.configurable?.sessionId as string | undefined;
-    const sandboxWrite = sbx.files.write(path, content);
+    const sandboxWrite = enqueueSandboxWrite(sbx.sandboxId, () => sbx.files.write(path, content));
     const yjsMirror: Promise<void> = (async () => {
       if (!sessionId) {
         console.warn('[e2b_write_file] No sessionId in config.configurable — skipping Yjs mirror for', path);
@@ -638,7 +660,7 @@ const patchFile = tool(
       return `No-op: ${path} unchanged after applying edits.`;
     }
 
-    await sbx.files.write(path, outcome.result);
+    await enqueueSandboxWrite(sbx.sandboxId, () => sbx.files.write(path, outcome.result));
     config.writer?.({ type: 'fileCreated', filePath: path });
     // Direct codePatch fallback — see the matching comment in e2b_write_file.
     config.writer?.({ type: 'codePatch', filePath: path, content: outcome.result, action: 'write' });
