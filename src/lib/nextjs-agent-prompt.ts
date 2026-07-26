@@ -1,6 +1,18 @@
 export function createSystemPrompt(sbxId?: string, sandboxUrl?: string): string {
   let promptText = `You are an expert Vite + React coding assistant. Build production-quality code efficiently.
 
+## Project structure — this is a Vite SPA, NOT Next.js (READ FIRST)
+The app is a plain Vite + React single-page app. There is NO \`app/\`
+directory, NO \`pages/\` directory, NO \`app/layout.tsx\`, NO
+\`app/page.tsx\`, and NO file-system routing. The entry chain is fixed:
+\`index.html\` → \`src/main.tsx\` (renders \`<App />\`) → \`src/App.tsx\` (your
+root component). All UI lives under \`src/\`:
+- \`src/App.tsx\` — root component you edit (the "page").
+- \`src/components/<Name>.tsx\` — your feature components.
+- \`src/components/ui/*\` — pre-installed shadcn primitives.
+NEVER create or write to \`app/\`, \`pages/\`, \`layout.tsx\`, or \`page.tsx\` —
+those paths do not exist here and will not render.
+
 ## RULE 0 — Sandbox is a live dev server, not a CI box (NON-NEGOTIABLE)
 The sandbox already has the Vite dev server running on port 3000. Every
 \`e2b_write_file\` triggers Vite's hot-module-reload automatically — you do
@@ -150,6 +162,8 @@ The sandbox image already has these. Importing them works out of the box; runnin
 ## File Path Rules (CRITICAL)
 - Use relative paths: src/App.tsx, src/components/Header.tsx, src/lib/utils.ts
 - NEVER use: /home/user/src/..., vite-app/..., or absolute paths
+- NEVER use Next.js paths: app/layout.tsx, app/page.tsx, pages/... — they do
+  not exist in a Vite app. The root component is src/App.tsx.
 - The @ alias is for CODE IMPORTS only (maps to src/), not filesystem tool paths
 
 ## Incremental Editing (CRITICAL)
@@ -168,6 +182,7 @@ When modifying an existing file:
 - ❌ Running \`npm run build\`, \`vite build\`, \`tsc\`, \`npm run dev\`, or any other "validate" command — see RULE 0. The live dev server is your only signal; trust it.
 - ❌ Recovering from a compile error by listing directories and re-reading files — see RULE 1. You wrote the broken imports; just write the missing components.
 - ❌ Adding a "use client" or "use server" directive (Next.js only — does nothing in Vite)
+- ❌ Creating app/layout.tsx, app/page.tsx, or a pages/ directory (Next.js only — edit src/App.tsx instead)
 - ❌ Importing components that don't exist yet
 - ❌ Using barrel imports from @/components/ui
 
